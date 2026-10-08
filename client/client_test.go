@@ -5,6 +5,7 @@ package client_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"os"
@@ -163,6 +164,83 @@ func TestSessionIsInteractive(t *testing.T) {
 		case <-deadline:
 			t.Fatalf("timed out; output=%q server log=%s", col.String(), srvLog.String())
 		case <-time.After(200 * time.Millisecond):
+		}
+	}
+}
+
+// A page keeps delivering keystrokes after the far side has gone, so writing to
+// a finished session has to be an ordinary error. It must not panic: in
+// WebAssembly an unrecovered panic takes the whole runtime down and the user
+// is left with a dead page until they reload.
+func TestWriteAfterSessionEndsDoesNotPanic(t *testing.T) {
+	url, _ := startServer(t)
+	col := newCollector()
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	sess, err := client.Dial(ctx, client.Options{
+		URL:    url,
+		User:   "tester",
+		OnData: col.onData,
+	})
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+
+	// End the session, then keep typing at it.
+	sess.CloseStdin()
+	sess.CloseStdin() // idempotent
+
+	if err := sess.Write([]byte("x")); !errors.Is(err, client.ErrSessionClosed) {
+		t.Fatalf("Write after CloseStdin: got %v, want ErrSessionClosed", err)
+	}
+	if err := sess.WriteContext(ctx, []byte("x")); !errors.Is(err, client.ErrSessionClosed) {
+		t.Fatalf("WriteContext after CloseStdin: got %v, want ErrSessionClosed", err)
+	}
+	if err := sess.Close(); err != nil {
+		t.Fatalf("Close after CloseStdin: %v", err)
+	}
+	if err := sess.Write([]byte("y")); !errors.Is(err, client.ErrSessionClosed) {
+		t.Fatalf("Write after Close: got %v, want ErrSessionClosed", err)
+	}
+	if err := sess.Resize(80, 24); err == nil {
+		t.Fatal("Resize after Close should report an error")
+	}
+}
+
+// The same, but ending the session the way the browser does when the remote
+// shell exits on its own.
+func TestWriteAfterRemoteExitDoesNotPanic(t *testing.T) {
+	url, _ := startServer(t)
+	col := newCollector()
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	sess, err := client.Dial(ctx, client.Options{
+		URL:     url,
+		User:    "tester",
+		Command: "true", // exits at once, closing the session underneath us
+		OnData:  col.onData,
+		OnClose: col.onClose,
+	})
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer sess.Close() //nolint:errcheck
+
+	select {
+	case <-col.done:
+	case <-ctx.Done():
+		t.Fatal("session never ended")
+	}
+
+	// Whatever the page does next, this must not panic.
+	for range 3 {
+		if err := sess.Write([]byte("x")); err != nil &&
+			!errors.Is(err, client.ErrSessionClosed) && !errors.Is(err, client.ErrInputFull) {
+			t.Fatalf("unexpected error after exit: %v", err)
 		}
 	}
 }

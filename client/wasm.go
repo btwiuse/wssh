@@ -15,8 +15,11 @@ package client
 
 import (
 	"context"
+	"errors"
 	"syscall/js"
 	"time"
+
+	gossh "golang.org/x/crypto/ssh"
 )
 
 // ExportResolver is the global the host page installs, called once the
@@ -70,7 +73,15 @@ func jsConnect(_ js.Value, args []js.Value) any {
 			Rows:   rows,
 			OnData: postData,
 			OnClose: func(err error) {
-				if err != nil {
+				// Forget the session first. The page keeps delivering keystrokes
+				// after the far side has gone, and reporting each one as an
+				// error would fill the screen with noise about something the
+				// user already did on purpose.
+				current.s = nil
+				// A shell that exits because someone typed "exit" is not a
+				// failure; the SSH session simply ends without an exit status.
+				var missing *gossh.ExitMissingError
+				if err != nil && !errors.As(err, &missing) {
 					post(map[string]any{"type": "error", "message": err.Error()})
 				}
 				post(map[string]any{"type": "closed"})

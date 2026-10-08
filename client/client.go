@@ -12,6 +12,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -19,6 +20,16 @@ import (
 	"github.com/coder/websocket"
 	"golang.org/x/crypto/ssh"
 )
+
+// ErrSessionClosed is returned when input is offered to a session that has
+// already finished. It is a normal outcome, not a failure: a browser keeps
+// delivering keystrokes until the page is reloaded, and the server may have
+// gone away at any moment.
+var ErrSessionClosed = errors.New("session closed")
+
+// ErrInputFull is returned when the remote side is not draining fast enough.
+// Only the non-blocking Write gives up like this; WriteContext waits instead.
+var ErrInputFull = errors.New("input buffer full")
 
 // Options configures a session.
 type Options struct {
@@ -62,6 +73,7 @@ type Session struct {
 	// their order, and a write to the SSH channel can block, which must never
 	// happen on the thread that is driving the JavaScript event loop.
 	stdin chan []byte
+	done  chan struct{}
 
 	closeOnce sync.Once
 	stdinOnce sync.Once
@@ -162,6 +174,7 @@ func Dial(ctx context.Context, opts Options) (*Session, error) {
 		conn:    wsConn,
 		cancel:  cancel,
 		stdin:   make(chan []byte, 64),
+		done:    make(chan struct{}),
 	}
 
 	go s.pump(stdin, stdout, stderr, opts)
@@ -171,13 +184,26 @@ func Dial(ctx context.Context, opts Options) (*Session, error) {
 
 // pump moves data in both directions until the remote side hangs up.
 func (s *Session) pump(stdin io.WriteCloser, stdout, stderr io.Reader, opts Options) {
+	// Input is queued on a channel that is never closed. Closing it would be
+	// the obvious way to end the writer, but any later Write would then panic
+	// on a send to a closed channel -- and in WebAssembly an unrecovered panic
+	// takes the whole runtime down, so the page would need reloading to get a
+	// terminal back. Closure travels on s.done instead, and only this
+	// goroutine ever listens on both.
 	go func() {
-		for data := range s.stdin {
-			if _, err := stdin.Write(data); err != nil {
-				break
+		for {
+			select {
+			case data := <-s.stdin:
+				if _, err := stdin.Write(data); err != nil {
+					return
+				}
+			case <-s.done:
+				// End of input: tell the remote, but leave the connection
+				// open so it can finish and report.
+				_ = stdin.Close()
+				return
 			}
 		}
-		_ = stdin.Close()
 	}()
 
 	var wg sync.WaitGroup
@@ -216,20 +242,41 @@ func (s *Session) pump(stdin io.WriteCloser, stdout, stderr io.Reader, opts Opti
 // That suits a browser, where stalling the callback would stall the whole
 // event loop. A terminal wants the opposite; see WriteContext.
 func (s *Session) Write(p []byte) error {
+	// Check first: with buffer room available, the select below would pick
+	// between accepting the keystroke and reporting the session as over at
+	// random, and a caller asking whether its input landed deserves a real
+	// answer rather than a coin toss.
+	select {
+	case <-s.done:
+		return ErrSessionClosed
+	default:
+	}
 	select {
 	case s.stdin <- p:
 		return nil
+	case <-s.done:
+		return ErrSessionClosed
 	default:
-		return fmt.Errorf("input buffer full")
+		return ErrInputFull
 	}
 }
 
 // WriteContext queues keystrokes, waiting for room rather than dropping them.
 // A terminal should never silently lose what someone typed.
 func (s *Session) WriteContext(ctx context.Context, p []byte) error {
+	// Prefer saying the session is over over accepting input that nobody is
+	// left to read: with buffer room available, the select below would pick
+	// either case at random.
+	select {
+	case <-s.done:
+		return ErrSessionClosed
+	default:
+	}
 	select {
 	case s.stdin <- p:
 		return nil
+	case <-s.done:
+		return ErrSessionClosed
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -263,6 +310,9 @@ func (s *Session) close(cause error) {
 // ends means the far side never gets to read what is already buffered and
 // never gets to report anything; sending EOF instead lets a shell finish its
 // last command and exit on its own terms.
+//
+// Calling it more than once is fine, and writing to a session afterwards is
+// safe: it reports ErrSessionClosed rather than falling over.
 func (s *Session) CloseStdin() {
-	s.stdinOnce.Do(func() { close(s.stdin) })
+	s.stdinOnce.Do(func() { close(s.done) })
 }
