@@ -3,7 +3,7 @@
 // No bundler: React and htm come from esm.sh via the import map in
 // index.html, and xterm.js is a plain global from jsDelivr.
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import htm from 'htm';
 
@@ -34,7 +34,47 @@ const store = {
       /* remembered for this page only */
     }
   },
+  getList(key) {
+    const raw = store.get(key);
+    if (raw === undefined) return [];
+    try {
+      const list = JSON.parse(raw);
+      return Array.isArray(list) ? list.filter((s) => typeof s === 'string' && s) : [];
+    } catch {
+      return [];
+    }
+  },
+  setList(key, list) {
+    store.set(key, JSON.stringify(list));
+  },
 };
+
+// Endpoints the user has actually connected to, most recent first. Loaded
+// once: it is a list, not a single value, so keeping it in a module variable
+// also means it survives storage being unavailable.
+const ENDPOINTS_KEY = 'wssh.endpoints';
+let savedEndpoints = store.getList(ENDPOINTS_KEY);
+
+function rememberEndpoint(url) {
+  const value = url.trim();
+  if (!value) return;
+  // Move to the front rather than adding a duplicate: the list is a recency
+  // order, and a second copy of the same address helps nobody.
+  savedEndpoints = [value, ...savedEndpoints.filter((e) => e !== value)].slice(0, 25);
+  store.setList(ENDPOINTS_KEY, savedEndpoints);
+}
+
+function forgetEndpoint(value) {
+  savedEndpoints = savedEndpoints.filter((e) => e !== value);
+  store.setList(ENDPOINTS_KEY, savedEndpoints);
+}
+
+function renameEndpoint(from, to) {
+  const value = to.trim();
+  if (!value || value === from) return;
+  savedEndpoints = savedEndpoints.map((e) => (e === from ? value : e));
+  store.setList(ENDPOINTS_KEY, savedEndpoints);
+}
 
 // The session path the server was started with. It is relative on purpose:
 // resolved against the page's own URL, the same build works on localhost, on
@@ -107,8 +147,13 @@ function App() {
     return store.get('wssh.endpoint') || endpointFor(location);
   });
 
+  // The worker effect is registered once, so it cannot close over the current
+  // endpoint; it reads it from here when a session comes up.
+  const currentEndpoint = useRef(endpoint);
+
   const onEndpointChange = useCallback((value) => {
     setEndpoint(value);
+    currentEndpoint.current = value;
     store.set('wssh.endpoint', value);
   }, []);
 
@@ -116,6 +161,75 @@ function App() {
     onEndpointChange(endpointFor(location));
     syncQuery(endpointFor(location));
   }, [onEndpointChange]);
+
+  // --- the endpoint combobox -----------------------------------------------
+  //
+  // A plain text field forgets where you have been. This is a real list of
+  // addresses that worked, kept in recency order, and it stays editable so a
+  // typo can be corrected in place instead of retyped.
+
+  // connect is defined further down; the key handler above needs it first.
+  const connectRef = useRef(() => {});
+
+  const [listOpen, setListOpen] = useState(false);
+  const [saved, setSaved] = useState(savedEndpoints);
+  const [editing, setEditing] = useState(null); // the entry being renamed
+  const [editValue, setEditValue] = useState('');
+
+  const refresh = useCallback((next) => {
+    savedEndpoints = next;
+    setSaved(next);
+  }, []);
+
+  // Filtering is driven by what has been typed into the field since it was
+  // focused, not by whatever the field happens to hold. Otherwise focusing a
+  // prefilled field would hide every entry that is not already in it, and the
+  // list would look empty when there is history to show.
+  const [filter, setFilter] = useState('');
+
+  const visible = useMemo(() => {
+    const needle = filter.trim().toLowerCase();
+    if (!needle) return saved;
+    return saved.filter((e) => e.toLowerCase().includes(needle));
+  }, [filter, saved]);
+
+  const chooseEndpoint = useCallback((value) => {
+    onEndpointChange(value);
+    setFilter('');
+    setListOpen(false);
+  }, [onEndpointChange]);
+
+  const commitRename = useCallback(() => {
+    renameEndpoint(editing, editValue);
+    refresh(store.getList(ENDPOINTS_KEY));
+    setEditing(null);
+  }, [editing, editValue, refresh]);
+
+  const cancelRename = useCallback(() => {
+    setEditing(null);
+    setEditValue('');
+  }, []);
+
+  const onKeyDown = useCallback((e) => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      setListOpen(true);
+      return;
+    }
+    if (e.key === 'Escape') {
+      setListOpen(false);
+      return;
+    }
+    if (e.key === 'Enter') {
+      // Enter connects, but only after letting the list get out of the way.
+      if (listOpen && visible.length > 0 && visible[0] !== endpoint) {
+        chooseEndpoint(visible[0]);
+        return;
+      }
+      connectRef.current();
+    }
+  }, [endpoint, listOpen, visible, chooseEndpoint]);
+
 
   // --- terminal lifecycle -------------------------------------------------
 
@@ -198,6 +312,11 @@ function App() {
         case 'connected':
           setStatus('connected');
           setConnected(true);
+          // Only an address that actually worked is worth remembering.
+          if (currentEndpoint.current) {
+            rememberEndpoint(currentEndpoint.current);
+            refresh(store.getList(ENDPOINTS_KEY));
+          }
           termRef.current?.focus();
           break;
         case 'closed':
@@ -266,6 +385,10 @@ function App() {
     });
   }, [endpoint, user]);
 
+  // The address key handler runs before connect is declared, so it calls
+  // through this.
+  connectRef.current = connect;
+
   const disconnect = useCallback(() => {
     workerRef.current?.postMessage({ type: 'disconnect' });
     setStatus('idle');
@@ -279,19 +402,92 @@ function App() {
       <header class="flex items-center gap-2 px-4 py-2 bg-slate-900 border-b border-slate-800">
         <span class="font-semibold tracking-tight shrink-0">webssh</span>
         <label class="sr-only" for="endpoint">WebSocket address</label>
-        <input
-          id="endpoint"
-          class="flex-1 min-w-0 bg-slate-800 border border-slate-700 rounded px-2 py-1
-                 font-mono text-xs focus:outline-none focus:border-emerald-500
-                 disabled:opacity-50"
-          value=${endpoint}
-          spellcheck="false"
-          autocomplete="off"
-          title="WebSocket address of the wssh server to connect to"
-          disabled=${connected || status === 'connecting'}
-          onInput=${(e) => onEndpointChange(e.target.value)}
-          onKeyDown=${(e) => { if (e.key === 'Enter' && !connected) connect(); }}
-        />
+        <div
+          class="relative flex-1 min-w-0"
+          onBlur=${(e) => {
+            // Close only when focus leaves the whole control, not just the
+            // text field. Renaming swaps a row for an input and focuses it,
+            // which blurs the field and would otherwise slam the list shut
+            // mid-edit.
+            if (!e.currentTarget.contains(e.relatedTarget)) setListOpen(false);
+          }}
+        >
+          <div class="flex">
+            <input
+              id="endpoint"
+              class="flex-1 min-w-0 bg-slate-800 border border-slate-700 rounded-l px-2 py-1
+                     font-mono text-xs focus:outline-none focus:border-emerald-500
+                     disabled:opacity-50"
+              value=${endpoint}
+              spellcheck="false"
+              autocomplete="off"
+              title="WebSocket address of the wssh server to connect to"
+              disabled=${connected || status === 'connecting'}
+              onInput=${(e) => { onEndpointChange(e.target.value); setFilter(e.target.value); setListOpen(true); }}
+              onFocus=${() => { setFilter(''); setListOpen(true); }}
+              onKeyDown=${onKeyDown}
+            />
+            <button
+              class="px-2 bg-slate-800 border border-l-0 border-slate-700 rounded-r text-slate-400
+                     hover:text-slate-200 hover:bg-slate-700 disabled:opacity-50"
+              title="Remembered addresses"
+              disabled=${connected || status === 'connecting'}
+              onMouseDown=${(e) => e.preventDefault()}
+              onClick=${() => { setFilter(''); setListOpen((open) => !open); }}
+            >▾</button>
+          </div>
+
+          ${listOpen && saved.length > 0 && html`
+            <div
+              class="absolute z-20 mt-1 w-full max-h-72 overflow-y-auto rounded
+                     border border-slate-700 bg-slate-900 shadow-xl"
+              onMouseDown=${(e) => e.preventDefault()}
+            >
+              ${visible.length === 0 && html`
+                <div class="px-3 py-2 text-xs text-slate-500">nothing remembered yet</div>`}
+              ${visible.map((entry) => html`
+                <div
+                  key=${entry}
+                  class="group flex items-center gap-1 px-1 hover:bg-slate-800"
+                >
+                  ${editing === entry
+                    ? html`<input
+                        class="flex-1 min-w-0 bg-slate-950 border border-emerald-600 rounded
+                               px-2 py-1 font-mono text-xs focus:outline-none"
+                        value=${editValue}
+                        autoFocus
+                        onFocus=${(e) => e.target.select()}
+                        onInput=${(e) => setEditValue(e.target.value)}
+                        onKeyDown=${(e) => {
+                          if (e.key === 'Enter') commitRename();
+                          if (e.key === 'Escape') cancelRename();
+                        }}
+                        onBlur=${commitRename}
+                      />`
+                    : html`<button
+                        class="flex-1 min-w-0 text-left px-2 py-1 font-mono text-xs
+                               truncate text-slate-300 hover:text-emerald-300"
+                        title=${entry}
+                        onClick=${() => chooseEndpoint(entry)}
+                      >${entry}</button>
+                      <button
+                        class="px-1.5 py-1 text-xs text-slate-500 hover:text-slate-200
+                               opacity-0 group-hover:opacity-100"
+                        title="Rename"
+                        onClick=${() => { setEditing(entry); setEditValue(entry); }}
+                      >✎</button>
+                      <button
+                        class="px-1.5 py-1 text-xs text-slate-500 hover:text-red-400
+                               opacity-0 group-hover:opacity-100"
+                        title="Forget"
+                        onClick=${() => {
+                          forgetEndpoint(entry);
+                          refresh(store.getList(ENDPOINTS_KEY));
+                        }}
+                      >✕</button>`}
+                </div>`)}
+            </div>`}
+        </div>
         <button
           class="px-2 py-1 text-xs rounded bg-slate-800 hover:bg-slate-700 text-slate-300
                  disabled:opacity-50"
