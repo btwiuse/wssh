@@ -1,0 +1,16 @@
+# Build output. The binary is built from ./cmd/wsshd, so it lands here only if
+# someone runs `go build ./cmd/wsshd` from the root.
+/wsshd
+/bin/
+
+# Host key generated on first run. Never commit it: it is the server identity,
+# and a leaked key lets anyone impersonate the host.
+/host_ed25519
+/host_ed25519.pub
+
+# Dependency checksums are not tracked; go regenerates them on demand.
+/go.sum
+
+# Optional client wrapper around websocat. Useful locally, but plain
+# `websocat -b wss://host` covers the common case, so it stays untracked.
+/wssh-proxy
