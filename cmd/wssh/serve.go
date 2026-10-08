@@ -8,7 +8,9 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
+	"runtime"
 	"slices"
 	"strings"
 	"syscall"
@@ -64,6 +66,10 @@ type serveOptions struct {
 	// Auth decides who may connect. The zero value authenticates nobody,
 	// which means it accepts everybody, so the startup log says so loudly.
 	Auth auth.Config
+
+	// OpenBrowser points the user's browser at the front end once it is up.
+	// Only meaningful for the web command, which is the one with a page.
+	OpenBrowser bool
 
 	// SessionPath is the URL path the session endpoint lives on. Empty, the
 	// default, serves sessions on any path, which suits a server that has
@@ -193,6 +199,12 @@ func serve(opts serveOptions) error {
 		serveErr <- server.Serve(listener)
 	}()
 
+	if opts.OpenBrowser {
+		// The listener is already bound, so connections queue in the backlog
+		// until Serve picks them up; the browser will not arrive first.
+		openBrowser(browserURL(listener.Addr()))
+	}
+
 	// Buffered so a second interrupt is not lost while the first is being
 	// handled: it is what lets someone abandon a session that will not end.
 	signals := make(chan os.Signal, 2)
@@ -261,6 +273,39 @@ func addAuthFlags(cmd *cobra.Command, cfg *auth.Config) {
 		"file of accepted passwords, one per line, plaintext or bcrypt")
 	cmd.Flags().StringSliceVar(&cfg.Passwords, "password", nil,
 		"an accepted password given inline (visible in ps; prefer --password-file)")
+}
+
+// browserURL turns a listen address into something worth pasting into a bar.
+// A wildcard bind has no host to show, so localhost stands in for it.
+func browserURL(addr net.Addr) string {
+	host, port, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		return "http://" + addr.String() + "/"
+	}
+	switch host {
+	case "", "0.0.0.0", "::", "[::]":
+		host = "localhost"
+	}
+	return "http://" + net.JoinHostPort(host, port) + "/"
+}
+
+// openBrowser opens a URL in the user's default browser. Not being able to is
+// not a reason to take the server down, so failures are only logged.
+func openBrowser(url string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	default:
+		cmd = exec.Command("xdg-open", url)
+	}
+	if err := cmd.Start(); err != nil {
+		log.Debug("could not open a browser", "error", err, "url", url)
+		return
+	}
+	go func() { _ = cmd.Wait() }()
 }
 
 // frontEnd serves the embedded assets, telling the page where its session

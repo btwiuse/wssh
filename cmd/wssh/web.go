@@ -79,6 +79,8 @@ the toolbar is editable.`,
 		"serve only the front end: no /ws and no sessions behind this port")
 	cmd.Flags().DurationVar(&opts.ShutdownTimeout, "shutdown-timeout", 5*time.Second,
 		"how long live sessions get to finish after an interrupt; 0 waits forever")
+	cmd.Flags().BoolVar(&opts.OpenBrowser, "open", false,
+		"open the served page in the default browser once it is up")
 	cmd.Flags().StringVar(&opts.SessionPath, "path", DefaultSessionPath,
 		"URL path sessions are served on; the page is told where to find them")
 	cmd.Flags().StringVar(&opts.Addr, "addr", "", "address to listen on (default $PORT or :8080)")
