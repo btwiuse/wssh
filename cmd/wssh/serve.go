@@ -22,9 +22,6 @@ import (
 	"github.com/webteleport/wtf"
 )
 
-// shutdownTimeout bounds how long live sessions get to finish.
-const shutdownTimeout = 30 * time.Second
-
 // AnyOrigin is the --origins value that turns the browser origin check off.
 //
 // It exists because "let any page connect" is a real need -- a front end
@@ -58,6 +55,12 @@ type serveOptions struct {
 	// Auth decides who may connect. The zero value authenticates nobody,
 	// which means it accepts everybody, so the startup log says so loudly.
 	Auth auth.Config
+
+	// ShutdownTimeout is how long live sessions get to finish after an
+	// interrupt. Zero waits as long as it takes. A shell waits for input, so
+	// an interactive session will never end by itself: without a bound, every
+	// ^C would sit here until the deadline. A second interrupt gives up.
+	ShutdownTimeout time.Duration
 
 	// Relays expose the same handler through remote relays, for reaching a
 	// server from a network it cannot be listened on from directly. A relay
@@ -167,14 +170,15 @@ func serve(opts serveOptions) error {
 		serveErr <- server.Serve(listener)
 	}()
 
-	// fang already intercepts signals for its own error reporting, so the
-	// second listener here only exists to drive shutdown.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+	// Buffered so a second interrupt is not lost while the first is being
+	// handled: it is what lets someone abandon a session that will not end.
+	signals := make(chan os.Signal, 2)
+	signal.Notify(signals, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(signals)
 
 	select {
-	case <-ctx.Done():
-		log.Info("shutting down")
+	case sig := <-signals:
+		log.Info("shutting down", "signal", sig.String(), "grace", opts.ShutdownTimeout)
 	case err := <-serveErr:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return err //nolint:wrapcheck
@@ -186,14 +190,38 @@ func serve(opts serveOptions) error {
 		log.Debug("could not close listener", "error", err)
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer cancel()
-	if sessions != nil {
-		if err := sessions.Shutdown(shutdownCtx); err != nil {
-			return err //nolint:wrapcheck
-		}
+	if sessions == nil {
+		return nil
 	}
-	return nil
+	return drain(sessions, signals, opts.ShutdownTimeout)
+}
+
+// drain waits for live sessions to finish, but not indefinitely.
+//
+// This is why there has to be a bound: a shell waits for input, so an
+// interactive session never ends by itself, and a drain with no deadline would
+// make every interrupt look like a hang. A second signal abandons the rest.
+func drain(sessions *wssh.Server, signals <-chan os.Signal, grace time.Duration) error {
+	done := make(chan error, 1)
+	go func() {
+		if grace <= 0 {
+			// Zero means "wait as long as it takes", for anyone running this
+			// as a service rather than as a tool.
+			done <- sessions.Shutdown(context.Background())
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), grace)
+		defer cancel()
+		done <- sessions.Shutdown(ctx)
+	}()
+
+	select {
+	case err := <-done:
+		return err //nolint:wrapcheck
+	case sig := <-signals:
+		log.Warn("second signal, dropping live sessions", "signal", sig.String())
+		return nil
+	}
 }
 
 // addAuthFlags registers the authentication flags shared by the subcommands.

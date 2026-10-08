@@ -1,6 +1,8 @@
 package main
 
 import (
+	"time"
+
 	"embed"
 	"io/fs"
 
@@ -70,6 +72,8 @@ the toolbar is editable.`,
 
 	cmd.Flags().BoolVar(&uiOnly, "ui-only", false,
 		"serve only the front end: no /ws and no sessions behind this port")
+	cmd.Flags().DurationVar(&opts.ShutdownTimeout, "shutdown-timeout", 5*time.Second,
+		"how long live sessions get to finish after an interrupt; 0 waits forever")
 	cmd.Flags().StringVar(&opts.Addr, "addr", "", "address to listen on (default $PORT or :8080)")
 	cmd.Flags().StringVar(&opts.HostKeyPath, "hostkey", defaultHostKey(), "path to the ed25519 host key")
 	cmd.Flags().BoolVar(&opts.AllowTcpForwarding, "allow-tcp-forwarding", false,
