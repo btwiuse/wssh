@@ -75,7 +75,8 @@ the toolbar is editable.`,
 	cmd.Flags().BoolVar(&opts.AllowTcpForwarding, "allow-tcp-forwarding", false,
 		"allow ssh -L/-D port forwarding (an open proxy unless restricted)")
 	cmd.Flags().StringSliceVar(&opts.Origins, "origins", nil,
-		"browser origins allowed to open a session (default any, or $ALLOWED_ORIGINS)")
+		"browser origins allowed to open a session; same origin always works, "+
+			"$ALLOWED_ORIGINS sets this too, and '*' allows any origin")
 
 	addAuthFlags(cmd, &opts.Auth)
 

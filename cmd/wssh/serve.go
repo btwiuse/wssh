@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -22,6 +23,15 @@ import (
 
 // shutdownTimeout bounds how long live sessions get to finish.
 const shutdownTimeout = 30 * time.Second
+
+// AnyOrigin is the --origins value that turns the browser origin check off.
+//
+// It exists because "let any page connect" is a real need -- a front end
+// served from somewhere else, or a dev machine whose hostname keeps changing
+// -- but it should never be reached for by accident. A browser always sends an
+// Origin and ssh never does, so this is exactly the switch that lets any page
+// a user visits open a session here. Pair it with authentication.
+const AnyOrigin = "*"
 
 // serveOptions is everything the server and web subcommands have in common.
 // They differ only in whether they also hand out a front end.
@@ -74,6 +84,12 @@ func serve(opts serveOptions) error {
 			opts.Origins = strings.Split(raw, ",")
 		}
 	}
+	if slices.Contains(opts.Origins, AnyOrigin) {
+		log.Warn("allowing ANY browser origin: every website the user visits can open a session against this port")
+		if !opts.Auth.Enabled() && !opts.UIOnly {
+			log.Warn("and there is no authentication, so that session is a shell for whoever asks")
+		}
+	}
 
 	mux := http.NewServeMux()
 
@@ -105,7 +121,9 @@ func serve(opts serveOptions) error {
 		if opts.AllowTcpForwarding {
 			log.Warn("TCP forwarding enabled: clients can relay to any host this server can reach")
 		}
-		if len(opts.Origins) > 0 {
+		if len(opts.Origins) > 0 && !slices.Contains(opts.Origins, AnyOrigin) {
+			// "*" is not a restriction, and saying it was would be the one
+			// time this log line really mattered.
 			log.Info("restricting origins", "patterns", opts.Origins)
 		}
 		mux.Handle("/ws", sessions)
