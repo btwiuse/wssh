@@ -400,22 +400,22 @@ function App() {
   return html`
     <div class="h-full flex flex-col">
       <header class="flex items-center gap-2 px-4 py-2 bg-slate-900 border-b border-slate-800">
-        <span class="font-semibold tracking-tight shrink-0">webssh</span>
+        <span class="font-semibold tracking-tight shrink-0">wssh</span>
         <label class="sr-only" for="endpoint">WebSocket address</label>
-        <div
-          class="relative flex-1 min-w-0"
-          onBlur=${(e) => {
-            // Close only when focus leaves the whole control, not just the
-            // text field. Renaming swaps a row for an input and focuses it,
-            // which blurs the field and would otherwise slam the list shut
-            // mid-edit.
-            if (!e.currentTarget.contains(e.relatedTarget)) setListOpen(false);
-          }}
-        >
-          <div class="flex">
+        <div class="flex-1 min-w-0 flex">
+          <div
+            class="relative flex-1 min-w-0"
+            onBlur=${(e) => {
+              // Close only when focus leaves the whole control, not just the
+              // text field. Renaming swaps a row for an input and focuses it,
+              // which blurs the field and would otherwise slam the list shut
+              // mid-edit.
+              if (!e.currentTarget.contains(e.relatedTarget)) setListOpen(false);
+            }}
+          >
             <input
               id="endpoint"
-              class="flex-1 min-w-0 bg-slate-800 border border-slate-700 rounded-l px-2 py-1
+              class="w-full min-w-0 bg-slate-800 border border-slate-700 rounded-l px-2 py-1
                      font-mono text-xs focus:outline-none focus:border-emerald-500
                      disabled:opacity-50"
               value=${endpoint}
@@ -427,66 +427,63 @@ function App() {
               onFocus=${() => { setFilter(''); setListOpen(true); }}
               onKeyDown=${onKeyDown}
             />
-            <button
-              class="px-2 bg-slate-800 border border-l-0 border-slate-700 rounded-r text-slate-400
-                     hover:text-slate-200 hover:bg-slate-700 disabled:opacity-50"
-              title="Remembered addresses"
-              disabled=${connected || status === 'connecting'}
-              onMouseDown=${(e) => e.preventDefault()}
-              onClick=${() => { setFilter(''); setListOpen((open) => !open); }}
-            >▾</button>
+        ${listOpen && saved.length > 0 && html`
+          <div
+            class="absolute z-20 mt-1 w-full max-h-72 overflow-y-auto rounded
+                   border border-slate-700 bg-slate-900 shadow-xl"
+          >
+            ${visible.length === 0 && html`
+              <div class="px-3 py-2 text-xs text-slate-500">nothing remembered yet</div>`}
+            ${visible.map((entry) => html`
+              <div
+                key=${entry}
+                class="group flex items-center gap-1 px-1 hover:bg-slate-800"
+              >
+                ${editing === entry
+                  ? html`<input
+                      class="flex-1 min-w-0 bg-slate-950 border border-emerald-600 rounded
+                             px-2 py-1 font-mono text-xs focus:outline-none"
+                      value=${editValue}
+                      autoFocus
+                      onFocus=${(e) => e.target.select()}
+                      onInput=${(e) => setEditValue(e.target.value)}
+                      onKeyDown=${(e) => {
+                        if (e.key === 'Enter') commitRename();
+                        if (e.key === 'Escape') cancelRename();
+                      }}
+                      onBlur=${commitRename}
+                    />`
+                  : html`<button
+                      class="flex-1 min-w-0 text-left px-2 py-1 font-mono text-xs
+                             truncate text-slate-300 hover:text-emerald-300"
+                      title=${entry}
+                      onClick=${() => chooseEndpoint(entry)}
+                    >${entry}</button>
+                    <button
+                      class="px-1.5 py-1 text-xs text-slate-500 hover:text-emerald-300"
+                      title="Rename"
+                      onClick=${() => { setEditing(entry); setEditValue(entry); }}
+                    >✎</button>
+                    <button
+                      class="px-1.5 py-1 text-xs text-slate-500 hover:text-red-400"
+                      title="Forget"
+                      onClick=${() => {
+                        forgetEndpoint(entry);
+                        refresh(store.getList(ENDPOINTS_KEY));
+                      }}
+                    >✕</button>`}
+              </div>`)}
+          </div>`}
           </div>
+          <button
+            class="shrink-0 px-2 bg-slate-800 border border-l-0 border-slate-700 rounded-r
+                   text-slate-400 hover:text-slate-200 hover:bg-slate-700 disabled:opacity-50"
+            title="Remembered addresses"
+            disabled=${connected || status === 'connecting'}
+            onMouseDown=${(e) => e.preventDefault()}
+            onClick=${() => { setFilter(''); setListOpen((open) => !open); }}
+          >▾</button>
 
-          ${listOpen && saved.length > 0 && html`
-            <div
-              class="absolute z-20 mt-1 w-full max-h-72 overflow-y-auto rounded
-                     border border-slate-700 bg-slate-900 shadow-xl"
-              onMouseDown=${(e) => e.preventDefault()}
-            >
-              ${visible.length === 0 && html`
-                <div class="px-3 py-2 text-xs text-slate-500">nothing remembered yet</div>`}
-              ${visible.map((entry) => html`
-                <div
-                  key=${entry}
-                  class="group flex items-center gap-1 px-1 hover:bg-slate-800"
-                >
-                  ${editing === entry
-                    ? html`<input
-                        class="flex-1 min-w-0 bg-slate-950 border border-emerald-600 rounded
-                               px-2 py-1 font-mono text-xs focus:outline-none"
-                        value=${editValue}
-                        autoFocus
-                        onFocus=${(e) => e.target.select()}
-                        onInput=${(e) => setEditValue(e.target.value)}
-                        onKeyDown=${(e) => {
-                          if (e.key === 'Enter') commitRename();
-                          if (e.key === 'Escape') cancelRename();
-                        }}
-                        onBlur=${commitRename}
-                      />`
-                    : html`<button
-                        class="flex-1 min-w-0 text-left px-2 py-1 font-mono text-xs
-                               truncate text-slate-300 hover:text-emerald-300"
-                        title=${entry}
-                        onClick=${() => chooseEndpoint(entry)}
-                      >${entry}</button>
-                      <button
-                        class="px-1.5 py-1 text-xs text-slate-500 hover:text-slate-200
-                               opacity-0 group-hover:opacity-100"
-                        title="Rename"
-                        onClick=${() => { setEditing(entry); setEditValue(entry); }}
-                      >✎</button>
-                      <button
-                        class="px-1.5 py-1 text-xs text-slate-500 hover:text-red-400
-                               opacity-0 group-hover:opacity-100"
-                        title="Forget"
-                        onClick=${() => {
-                          forgetEndpoint(entry);
-                          refresh(store.getList(ENDPOINTS_KEY));
-                        }}
-                      >✕</button>`}
-                </div>`)}
-            </div>`}
         </div>
         <button
           class="px-2 py-1 text-xs rounded bg-slate-800 hover:bg-slate-700 text-slate-300
