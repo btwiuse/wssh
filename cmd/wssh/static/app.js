@@ -9,6 +9,33 @@ import htm from 'htm';
 
 const html = htm.bind(React.createElement);
 
+// localStorage throws in more situations than people expect: Safari private
+// browsing, blocked site data, some third-party storage policies. A terminal
+// that refuses to render because it could not remember a text field is a bad
+// trade, so every access goes through here and quietly falls back to memory
+// for the life of the page.
+const memoryStore = new Map();
+
+const store = {
+  get(key) {
+    try {
+      const value = localStorage.getItem(key);
+      if (value !== null) return value;
+    } catch {
+      /* storage unavailable; fall through to memory */
+    }
+    return memoryStore.get(key);
+  },
+  set(key, value) {
+    memoryStore.set(key, value);
+    try {
+      localStorage.setItem(key, value);
+    } catch {
+      /* remembered for this page only */
+    }
+  },
+};
+
 const STATUS = {
   idle: { label: 'Disconnected', color: 'text-slate-400' },
   connecting: { label: 'Connecting…', color: 'text-amber-300' },
@@ -28,7 +55,7 @@ function App() {
 
   const [status, setStatus] = useState('idle');
   const [error, setError] = useState('');
-  const [user, setUser] = useState(() => localStorage.getItem('wssh.user') || 'root');
+  const [user, setUser] = useState(() => store.get('wssh.user') || 'root');
   const [connected, setConnected] = useState(false);
 
   // The address is editable because the page does not have to be talking to
@@ -37,12 +64,12 @@ function App() {
   // always starts out pointing at the origin the page came from.
   const [endpoint, setEndpoint] = useState(() => {
     const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-    return localStorage.getItem('wssh.endpoint') || `${scheme}://${location.host}/ws`;
+    return store.get('wssh.endpoint') || `${scheme}://${location.host}/ws`;
   });
 
   const onEndpointChange = useCallback((value) => {
     setEndpoint(value);
-    localStorage.setItem('wssh.endpoint', value);
+    store.set('wssh.endpoint', value);
   }, []);
 
   const resetEndpoint = useCallback(() => {
@@ -229,7 +256,7 @@ function App() {
                  focus:outline-none focus:border-emerald-500 disabled:opacity-50"
           value=${user}
           disabled=${connected || status === 'connecting'}
-          onInput=${(e) => { setUser(e.target.value); localStorage.setItem('wssh.user', e.target.value); }}
+          onInput=${(e) => { setUser(e.target.value); store.set('wssh.user', e.target.value); }}
           onKeyDown=${(e) => { if (e.key === 'Enter' && !connected) connect(); }}
         />
         ${connected || status === 'connecting'
