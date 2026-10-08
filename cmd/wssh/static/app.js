@@ -36,10 +36,18 @@ const store = {
   },
 };
 
-// The WebSocket endpoint this page serves by default: its own origin.
+// The session path the server was started with. It is relative on purpose:
+// resolved against the page's own URL, the same build works on localhost, on
+// a domain, and behind a relay, with nothing hardcoded anywhere.
+const SESSION_PATH = (window.__WSSH__ && window.__WSSH__.sessionPath) || '/ws';
+
+// endpointFor resolves the session address from wherever this page came from.
+// A page served over https must reach a wss:// endpoint, and a relay puts the
+// page on a host we could not have known at build time, so both are derived.
 function endpointFor(loc) {
-  const scheme = loc.protocol === 'https:' ? 'wss' : 'ws';
-  return `${scheme}://${loc.host}/ws`;
+  const url = new URL(SESSION_PATH, loc.href);
+  url.protocol = loc.protocol === 'https:' ? 'wss:' : 'ws:';
+  return url.toString();
 }
 
 // addrFromQuery reads ?addr=, so a session can be handed around as a link:
@@ -96,8 +104,7 @@ function App() {
   const [endpoint, setEndpoint] = useState(() => {
     const fromQuery = addrFromQuery();
     if (fromQuery) return fromQuery;
-    const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-    return store.get('wssh.endpoint') || `${scheme}://${location.host}/ws`;
+    return store.get('wssh.endpoint') || endpointFor(location);
   });
 
   const onEndpointChange = useCallback((value) => {
@@ -106,8 +113,7 @@ function App() {
   }, []);
 
   const resetEndpoint = useCallback(() => {
-    const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-    onEndpointChange(`${scheme}://${location.host}/ws`);
+    onEndpointChange(endpointFor(location));
     syncQuery(endpointFor(location));
   }, [onEndpointChange]);
 

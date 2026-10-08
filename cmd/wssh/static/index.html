@@ -38,6 +38,12 @@
   </style>
 </head>
 <body>
+  <script>
+    // Where the session endpoint lives, filled in by the server. The page
+    // resolves it against its own URL, so it works wherever this is served
+    // from -- localhost, a domain, or a relay -- with nothing hardcoded.
+    window.__WSSH__ = { sessionPath: "__WSSH_SESSION_PATH__" };
+  </script>
   <div id="root"></div>
   <script type="module" src="./app.js"></script>
 </body>

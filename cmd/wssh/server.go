@@ -55,9 +55,9 @@ for a directly reachable server.`,
 	cmd.Flags().StringVar(&opts.HostKeyPath, "hostkey", defaultHostKey(), "path to the ed25519 host key")
 	cmd.Flags().BoolVar(&opts.AllowTcpForwarding, "allow-tcp-forwarding", false,
 		"allow ssh -L/-D port forwarding (an open proxy unless restricted)")
-	cmd.Flags().StringSliceVar(&opts.Origins, "origins", nil,
-		"browser origins allowed to open a session; same origin always works, "+
-			"$ALLOWED_ORIGINS sets this too, and '*' allows any origin")
+	cmd.Flags().StringSliceVar(&opts.Origins, "origins", []string{AnyOrigin},
+		"browser origins allowed to open a session; '*' allows any, "+
+			"$ALLOWED_ORIGINS sets this too")
 
 	cmd.Flags().StringArrayVar(&opts.Relays, "relay", nil,
 		"expose this server through a relay, repeatable; a bare :port "+

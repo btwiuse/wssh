@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -21,6 +22,14 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/webteleport/wtf"
 )
+
+// DefaultSessionPath is where the browser front end keeps its session
+// endpoint. It is a convention rather than a requirement: the page resolves it
+// relative to wherever it was loaded from.
+const DefaultSessionPath = "/ws"
+
+// sessionPathPlaceholder is replaced in index.html with the configured path.
+const sessionPathPlaceholder = "__WSSH_SESSION_PATH__"
 
 // AnyOrigin is the --origins value that turns the browser origin check off.
 //
@@ -93,19 +102,15 @@ func serve(opts serveOptions) error {
 	if opts.Description == "" {
 		opts.Description = "websocket"
 	}
-	if opts.Origins == nil {
-		// A single comma separated value, which is how it is configured in
-		// practice; an unset variable must not become a pattern matching "".
+	// The flag defaults to any origin, but a container is far more likely to
+	// set this through the environment than through a command line, so an
+	// explicit ALLOWED_ORIGINS still wins over that default.
+	if len(opts.Origins) == 1 && opts.Origins[0] == AnyOrigin {
 		if raw := os.Getenv("ALLOWED_ORIGINS"); raw != "" {
 			opts.Origins = strings.Split(raw, ",")
 		}
 	}
-	if slices.Contains(opts.Origins, AnyOrigin) {
-		log.Warn("allowing ANY browser origin: every website the user visits can open a session against this port")
-		if !opts.Auth.Enabled() && !opts.UIOnly {
-			log.Warn("and there is no authentication, so that session is a shell for whoever asks")
-		}
-	}
+	anyOrigin := slices.Contains(opts.Origins, AnyOrigin)
 
 	mux := http.NewServeMux()
 
@@ -132,15 +137,19 @@ func serve(opts serveOptions) error {
 		if err != nil {
 			return err //nolint:wrapcheck
 		}
-		if !opts.Auth.Enabled() {
+		switch {
+		case !opts.Auth.Enabled() && anyOrigin:
+			// Worth saying out loud, and this is the default configuration:
+			// a page the user visits can open a session here, and there is
+			// nothing to authenticate it.
+			log.Warn("any origin allowed and no authentication: any website the user visits can open a shell on this port")
+		case !opts.Auth.Enabled():
 			log.Warn("no authentication configured: every connection that reaches this port gets a shell")
 		}
 		if opts.AllowTcpForwarding {
 			log.Warn("TCP forwarding enabled: clients can relay to any host this server can reach")
 		}
-		if len(opts.Origins) > 0 && !slices.Contains(opts.Origins, AnyOrigin) {
-			// "*" is not a restriction, and saying it was would be the one
-			// time this log line really mattered.
+		if len(opts.Origins) > 0 && !anyOrigin {
 			log.Info("restricting origins", "patterns", opts.Origins)
 		}
 		// An empty path mounts on "/", which in Go's mux is the catch-all:
@@ -154,7 +163,7 @@ func serve(opts serveOptions) error {
 	}
 
 	if opts.Assets != nil {
-		mux.Handle("/", noCache(http.FileServer(http.FS(opts.Assets))))
+		mux.Handle("/", noCache(frontEnd(opts.Assets, opts.SessionPath)))
 	}
 
 	startRelays(opts.Relays, mux)
@@ -252,6 +261,34 @@ func addAuthFlags(cmd *cobra.Command, cfg *auth.Config) {
 		"file of accepted passwords, one per line, plaintext or bcrypt")
 	cmd.Flags().StringSliceVar(&cfg.Passwords, "password", nil,
 		"an accepted password given inline (visible in ps; prefer --password-file)")
+}
+
+// frontEnd serves the embedded assets, telling the page where its session
+// endpoint is.
+//
+// The page resolves that relative to wherever it was loaded from rather than
+// being handed an absolute address, so the same build is correct on
+// localhost, behind a relay, or on a domain, with nothing reconfigured.
+func frontEnd(assets fs.FS, sessionPath string) http.Handler {
+	files := http.FileServer(http.FS(assets))
+	if sessionPath == "" {
+		sessionPath = DefaultSessionPath
+	}
+	page, err := fs.ReadFile(assets, "index.html")
+	if err != nil {
+		log.Debug("could not read index.html to template it", "error", err)
+		return files
+	}
+	templated := strings.ReplaceAll(string(page), sessionPathPlaceholder, sessionPath)
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" && r.URL.Path != "/index.html" {
+			files.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = io.WriteString(w, templated)
+	})
 }
 
 // startRelays exposes the handler through remote relays, which is how a

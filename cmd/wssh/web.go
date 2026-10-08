@@ -61,9 +61,11 @@ the toolbar is editable.`,
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			opts.UIOnly = uiOnly
-			// The page and its assets need the paths, so sessions get a
-			// fixed one to live under.
-			opts.SessionPath = "/ws"
+			if opts.SessionPath == "" {
+				// The page and its assets share this port, so sessions need
+				// a path of their own.
+				opts.SessionPath = DefaultSessionPath
+			}
 			opts.Description = "web only"
 			if !uiOnly {
 				opts.Description = "websocket + web"
@@ -77,13 +79,15 @@ the toolbar is editable.`,
 		"serve only the front end: no /ws and no sessions behind this port")
 	cmd.Flags().DurationVar(&opts.ShutdownTimeout, "shutdown-timeout", 5*time.Second,
 		"how long live sessions get to finish after an interrupt; 0 waits forever")
+	cmd.Flags().StringVar(&opts.SessionPath, "path", DefaultSessionPath,
+		"URL path sessions are served on; the page is told where to find them")
 	cmd.Flags().StringVar(&opts.Addr, "addr", "", "address to listen on (default $PORT or :8080)")
 	cmd.Flags().StringVar(&opts.HostKeyPath, "hostkey", defaultHostKey(), "path to the ed25519 host key")
 	cmd.Flags().BoolVar(&opts.AllowTcpForwarding, "allow-tcp-forwarding", false,
 		"allow ssh -L/-D port forwarding (an open proxy unless restricted)")
-	cmd.Flags().StringSliceVar(&opts.Origins, "origins", nil,
-		"browser origins allowed to open a session; same origin always works, "+
-			"$ALLOWED_ORIGINS sets this too, and '*' allows any origin")
+	cmd.Flags().StringSliceVar(&opts.Origins, "origins", []string{AnyOrigin},
+		"browser origins allowed to open a session; '*' allows any, "+
+			"$ALLOWED_ORIGINS sets this too")
 
 	cmd.Flags().StringArrayVar(&opts.Relays, "relay", nil,
 		"expose this server through a relay, repeatable; a bare :port "+
