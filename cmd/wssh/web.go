@@ -78,6 +78,10 @@ the toolbar is editable.`,
 		"browser origins allowed to open a session; same origin always works, "+
 			"$ALLOWED_ORIGINS sets this too, and '*' allows any origin")
 
+	cmd.Flags().StringArrayVar(&opts.Relays, "relay", nil,
+		"expose this server through a relay, repeatable; a bare :port "+
+			"listens locally, anything else dials a remote relay")
+
 	addAuthFlags(cmd, &opts.Auth)
 
 	return cmd

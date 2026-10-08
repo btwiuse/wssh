@@ -18,7 +18,13 @@ transport, for clients that bring their own terminal.
 
 A stock ssh client reaches it through any WebSocket proxy:
 
-    ssh -o 'ProxyCommand=websocat -b wss://host:port/ws' user@host`,
+    ssh -o 'ProxyCommand=websocat -b wss://host:port/ws' user@host
+
+With --relay the same server is also published through a relay, so it stays
+reachable from networks it cannot be listened on from directly. Which
+transport that uses is the relay's choice, not ours: a relay that advertises
+WebTransport needs a browser, while one that does not is plain WebSocket and
+works with the ssh client above.`,
 		Example: `  # Serve on :8080
   wssh server
 
@@ -27,6 +33,9 @@ A stock ssh client reaches it through any WebSocket proxy:
 
   # Also allow ssh -L and -D
   wssh server --allow-tcp-forwarding
+
+  # Publish through a relay as well as listening locally
+  wssh server --relay https://relay.example.com
 
   # Let only your own front end open sessions
   wssh server --origins https://ssh.example.com`,
@@ -44,6 +53,10 @@ A stock ssh client reaches it through any WebSocket proxy:
 	cmd.Flags().StringSliceVar(&opts.Origins, "origins", nil,
 		"browser origins allowed to open a session; same origin always works, "+
 			"$ALLOWED_ORIGINS sets this too, and '*' allows any origin")
+
+	cmd.Flags().StringArrayVar(&opts.Relays, "relay", nil,
+		"expose this server through a relay, repeatable; a bare :port "+
+			"listens locally, anything else dials a remote relay")
 
 	addAuthFlags(cmd, &opts.Auth)
 

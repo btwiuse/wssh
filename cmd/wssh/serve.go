@@ -19,6 +19,7 @@ import (
 	"github.com/btwiuse/wssh/auth"
 	"github.com/btwiuse/wssh/shell"
 	"github.com/spf13/cobra"
+	"github.com/webteleport/wtf"
 )
 
 // shutdownTimeout bounds how long live sessions get to finish.
@@ -57,6 +58,12 @@ type serveOptions struct {
 	// Auth decides who may connect. The zero value authenticates nobody,
 	// which means it accepts everybody, so the startup log says so loudly.
 	Auth auth.Config
+
+	// Relays expose the same handler through remote relays, for reaching a
+	// server from a network it cannot be listened on from directly. A relay
+	// given as ":8080" is a local listener instead, which is handy for
+	// testing and for chaining.
+	Relays []string
 
 	// UIOnly serves the front end alone: no /ws and no session server, so the
 	// page is a client for a server elsewhere. Authentication, host key and
@@ -133,6 +140,8 @@ func serve(opts serveOptions) error {
 		mux.Handle("/", noCache(http.FileServer(http.FS(opts.Assets))))
 	}
 
+	startRelays(opts.Relays, mux)
+
 	addr := opts.Addr
 	if addr == "" {
 		addr = defaultAddr()
@@ -201,6 +210,24 @@ func addAuthFlags(cmd *cobra.Command, cfg *auth.Config) {
 		"file of accepted passwords, one per line, plaintext or bcrypt")
 	cmd.Flags().StringSliceVar(&cfg.Passwords, "password", nil,
 		"an accepted password given inline (visible in ps; prefer --password-file)")
+}
+
+// startRelays exposes the handler through remote relays, which is how a
+// server stays reachable from a network it cannot be listened on from
+// directly. It is additive: the local listener is unaffected, so the same
+// server answers on both.
+//
+// A relay that fails is logged rather than fatal. A relay going away should
+// not take the server with it.
+func startRelays(relays []string, handler http.Handler) {
+	for _, relay := range relays {
+		go func() {
+			log.Info("relaying", "relay", relay)
+			if err := wtf.Serve(relay, handler); err != nil {
+				log.Error("relay stopped", "relay", relay, "error", err)
+			}
+		}()
+	}
 }
 
 // noCache keeps the browser from holding on to a stale wasm binary after a
