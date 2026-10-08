@@ -21,10 +21,9 @@ A stock ssh client reaches it through any WebSocket proxy:
     ssh -o 'ProxyCommand=websocat -b wss://host:port/ws' user@host
 
 With --relay the same server is also published through a relay, so it stays
-reachable from networks it cannot be listened on from directly. Which
-transport that uses is the relay's choice, not ours: a relay that advertises
-WebTransport needs a browser, while one that does not is plain WebSocket and
-works with the ssh client above.`,
+reachable from networks it cannot be listened on from directly. The relay
+prints a public address; append /ws to reach sessions, exactly as you would
+for a directly reachable server.`,
 		Example: `  # Serve on :8080
   wssh server
 
@@ -35,7 +34,7 @@ works with the ssh client above.`,
   wssh server --allow-tcp-forwarding
 
   # Publish through a relay as well as listening locally
-  wssh server --relay https://relay.example.com
+  wssh server --relay https://pub.webtransport.fun
 
   # Let only your own front end open sessions
   wssh server --origins https://ssh.example.com`,
