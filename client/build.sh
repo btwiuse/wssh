@@ -9,7 +9,7 @@
 set -euo pipefail
 
 readonly HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-readonly OUT="$HERE/../cmd/webssh/static"
+readonly OUT="$HERE/../cmd/wssh/static"
 
 mkdir -p "$OUT"
 

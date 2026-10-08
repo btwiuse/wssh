@@ -1,6 +1,6 @@
-# Build output. The binary is built from ./cmd/wsshd, so it lands here only if
-# someone runs `go build ./cmd/wsshd` from the root.
-/wsshd
+# Build output. The binary is built from ./cmd/wssh, so it lands here only if
+# someone runs `go build ./cmd/wssh` from the root.
+/wssh
 /bin/
 
 # Host key generated on first run. Never commit it: it is the server identity,
@@ -16,5 +16,5 @@
 /wssh-proxy
 
 # WASM build output: rebuild with client/build.sh
-/cmd/webssh/static/ssh.wasm
-/cmd/webssh/static/wasm_exec.js
+/cmd/wssh/static/ssh.wasm
+/cmd/wssh/static/wasm_exec.js
