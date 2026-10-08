@@ -15,6 +15,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	neturl "net/url"
+	"strconv"
 	"sync"
 
 	"github.com/coder/websocket"
@@ -58,9 +61,20 @@ type Options struct {
 	OnClose func(error)
 
 	// HostKeyCallback verifies the server's host key. Left nil, nothing is
-	// verified: a browser has no known_hosts to check against. Production
-	// callers should pin a key.
+	// verified, which means anything between here and the server can
+	// impersonate it. Callers that can should pin a key; see
+	// golang.org/x/crypto/ssh/knownhosts, which reads the usual file.
 	HostKeyCallback ssh.HostKeyCallback
+
+	// Auth are the methods to offer, in the order they should be tried. Empty
+	// means only "none" is possible, which every server here rejects once it
+	// has any authentication handler installed.
+	//
+	// The caller decides what to offer. There is no guessing at ~/.ssh or the
+	// environment: a browser has no home directory to read, and a password
+	// typed into a terminal and a key uploaded to a page are not the same
+	// thing to obtain.
+	Auth []ssh.AuthMethod
 }
 
 // Session is a live connection.
@@ -111,9 +125,29 @@ func Dial(ctx context.Context, opts Options) (*Session, error) {
 
 	// address is only used to label the connection in errors; there is no
 	// meaningful host to verify against on the far side of a pipe.
-	clientConn, chans, reqs, err := ssh.NewClientConn(netConn, opts.URL, &ssh.ClientConfig{
+	// The SSH destination is the WebSocket authority, not the URL. That is
+	// what identifies the far end everywhere else -- in known_hosts entries and
+	// in the wording of a host key warning -- and a URL would not match either.
+	parsed, err := neturl.Parse(opts.URL)
+	if err != nil {
+		cancel()
+		_ = wsConn.Close(websocket.StatusNormalClosure, "")
+		return nil, fmt.Errorf("parse %q: %w", opts.URL, err)
+	}
+	address := parsed.Host
+	if address == "" {
+		address = opts.URL
+	}
+
+	// Host key verification inspects the peer address and expects host:port.
+	// The WebSocket reports a placeholder, which nothing can match, so the
+	// connection is given one that describes where we actually dialled.
+	netConn = &peerAddrConn{Conn: netConn, addr: webPeer(parsed)}
+
+	clientConn, chans, reqs, err := ssh.NewClientConn(netConn, address, &ssh.ClientConfig{
 		User:            opts.User,
 		HostKeyCallback: opts.HostKeyCallback,
+		Auth:            opts.Auth,
 	})
 	if err != nil {
 		cancel()
@@ -315,4 +349,30 @@ func (s *Session) close(cause error) {
 // safe: it reports ErrSessionClosed rather than falling over.
 func (s *Session) CloseStdin() {
 	s.stdinOnce.Do(func() { close(s.done) })
+}
+
+// peerAddrConn reports a network-shaped address for a WebSocket connection.
+type peerAddrConn struct {
+	net.Conn
+	addr net.Addr
+}
+
+func (c *peerAddrConn) RemoteAddr() net.Addr { return c.addr }
+
+// webPeer turns the WebSocket URL into an address with a port, defaulting the
+// way the scheme implies.
+func webPeer(u *neturl.URL) net.Addr {
+	port := u.Port()
+	if port == "" {
+		if u.Scheme == "wss" || u.Scheme == "https" {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	}
+	number, err := strconv.Atoi(port)
+	if err != nil {
+		return &net.TCPAddr{}
+	}
+	return &net.TCPAddr{IP: net.ParseIP(u.Hostname()), Port: number}
 }
