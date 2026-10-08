@@ -6,6 +6,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import htm from 'htm';
+import { CredentialsPanel, credentialsForConnect, installHooks } from './credentials.js';
 
 const html = htm.bind(React.createElement);
 
@@ -172,6 +173,7 @@ function App() {
   const connectRef = useRef(() => {});
 
   const [listOpen, setListOpen] = useState(false);
+  const [credsOpen, setCredsOpen] = useState(false);
   const [saved, setSaved] = useState(savedEndpoints);
   const [editing, setEditing] = useState(null); // the entry being renamed
   const [editValue, setEditValue] = useState('');
@@ -230,6 +232,35 @@ function App() {
     }
   }, [endpoint, listOpen, visible, chooseEndpoint]);
 
+
+  // --- prompts --------------------------------------------------------------
+  //
+  // The handshake may need a passphrase for an encrypted key, or a password,
+  // and it asks at the moment it needs one rather than up front.
+  // Prompts queue rather than replace each other: the handshake can ask for
+  // more than one thing, and a single slot would leave the last dialog on
+  // screen with nothing waiting behind it.
+  // A prompt only makes sense before a session is up; showing one over a live
+  // terminal is worse than useless. The dialog below is tied to !connected for
+  // that reason, rather than to the queue bookkeeping.
+  const [prompts, setPrompts] = useState([]);
+  const promptQueue = useRef([]);
+
+  const ask = useCallback((label, secret) => new Promise((resolve) => {
+    const next = [...promptQueue.current, { label, secret, resolve }];
+    promptQueue.current = next;
+    setPrompts(next);
+  }), []);
+
+  const answerPrompt = useCallback((value) => {
+    // The queue lives in a ref as well as in state: resolving a promise from
+    // inside a state updater is a side effect in the wrong place, and the
+    // dialog then never clears.
+    const [current, ...rest] = promptQueue.current;
+    promptQueue.current = rest;
+    setPrompts(rest);
+    if (current) current.resolve(value);
+  }, []);
 
   // --- terminal lifecycle -------------------------------------------------
 
@@ -312,6 +343,11 @@ function App() {
         case 'connected':
           setStatus('connected');
           setConnected(true);
+          // Once in, any prompt still queued is moot. The handshake can ask
+          // for more than it needs, and a leftover dialog would sit over the
+          // terminal with nothing waiting behind it.
+          promptQueue.current = [];
+          setPrompts([]);
           // Only an address that actually worked is worth remembering.
           if (currentEndpoint.current) {
             rememberEndpoint(currentEndpoint.current);
@@ -344,6 +380,35 @@ function App() {
     };
   }, []);
 
+  // The worker owns the handshake and cannot reach this page's objects, so a
+  // prompt is answered over a message instead. The reply carries the id it
+  // came with, since more than one can be open at a time.
+  const seenPrompts = useRef(new Set());
+
+  useEffect(() => {
+    const worker = workerRef.current;
+    if (!worker) return undefined;
+
+    const onPrompt = (event) => {
+      const { id, kind, name } = event.data || {};
+      // One dialog per question. Anything that re-delivers the same message
+      // would otherwise stack prompts nobody asked for.
+      if (seenPrompts.current.has(id)) return;
+      seenPrompts.current.add(id);
+
+      const label = kind === 'passphrase' ? `passphrase for ${name}` : 'password';
+      ask(label, kind === 'passphrase').then((value) => {
+        worker.postMessage({ type: 'promptAnswer', id, value });
+      });
+    };
+    worker.addEventListener('message', onPrompt);
+    return () => worker.removeEventListener('message', onPrompt);
+  }, [ask]);
+
+  // The Go side still needs a hook to exist in its own scope; these make the
+  // module safe to load even before a worker is up.
+  useEffect(() => { installHooks(null, null); }, []);
+
   // --- input --------------------------------------------------------------
 
   useEffect(() => {
@@ -374,6 +439,7 @@ function App() {
     }
     setError('');
     setStatus('connecting');
+    setCredsOpen(false);
     syncQuery(url);
     const term = termRef.current;
     workerRef.current?.postMessage({
@@ -382,6 +448,7 @@ function App() {
       user: user.trim() || 'root',
       cols: term?.cols ?? 80,
       rows: term?.rows ?? 24,
+      credentials: credentialsForConnect(),
     });
   }, [endpoint, user]);
 
@@ -503,6 +570,29 @@ function App() {
           title="Point back at this page's own server"
           disabled=${connected || status === 'connecting'}
           onClick=${resetEndpoint}>reset</button>
+        <div
+          class="relative shrink-0"
+          onBlur=${(e) => {
+            // Same rule as the address list: stay open while focus is inside,
+            // and close once it leaves, rather than covering the terminal
+            // while someone is trying to type in it.
+            if (!e.currentTarget.contains(e.relatedTarget)) setCredsOpen(false);
+          }}
+        >
+          <button
+            class="px-2 py-1 text-xs rounded bg-slate-800 hover:bg-slate-700 text-slate-300
+                   disabled:opacity-50"
+            title="Keys and passwords to authenticate with"
+            disabled=${connected || status === 'connecting'}
+            onMouseDown=${(e) => e.preventDefault()}
+            onClick=${() => setCredsOpen((open) => !open)}
+          >🔑</button>
+          ${credsOpen && html`
+            <${CredentialsPanel}
+              workerRef=${workerRef}
+              onClose=${() => setCredsOpen(false)}
+            />`}
+        </div>
         <label class="sr-only" for="user">user</label>
         <input
           id="user"
@@ -534,6 +624,37 @@ function App() {
         onClick=${focusTerminal}
         class="flex-1 min-h-0 p-2 overflow-hidden"
       ></main>
+
+      ${prompts.length > 0 && !connected && html`
+        <div class="fixed inset-0 z-40 flex items-center justify-center bg-black/50">
+          <div class="w-80 rounded border border-slate-700 bg-slate-900 p-3 shadow-2xl">
+            <label class="block text-xs text-slate-300 mb-1" for="prompt-value">
+              ${prompts[0].label}
+              ${prompts.length > 1 && html`<span class="text-slate-500"> (${prompts.length} waiting)</span>`}
+            </label>
+            <input
+              id="prompt-value"
+              autoFocus
+              type=${prompts[0].secret ? 'password' : 'text'}
+              class="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 text-sm
+                     focus:outline-none focus:border-emerald-500"
+              onKeyDown=${(e) => {
+                if (e.key === 'Enter') answerPrompt(e.target.value);
+                // Cancelling is an answer too: Go reads an empty string as
+                // "none given" rather than as a failure.
+                if (e.key === 'Escape') answerPrompt('');
+              }}
+            />
+            <div class="flex justify-end gap-2 mt-2">
+              <button class="px-2 py-1 text-xs rounded bg-slate-700 hover:bg-slate-600"
+                      onClick=${() => answerPrompt('')}>cancel</button>
+              <button class="px-2 py-1 text-xs rounded bg-emerald-600 hover:bg-emerald-500
+                             text-slate-900"
+                      onClick=${(e) => answerPrompt(
+                        e.currentTarget.parentElement.previousElementSibling.value)}>ok</button>
+            </div>
+          </div>
+        </div>`}
     </div>
   `;
 }

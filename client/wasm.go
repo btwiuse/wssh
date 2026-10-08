@@ -15,6 +15,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"syscall/js"
 	"time"
@@ -29,11 +30,14 @@ const ExportResolver = "websshGoExportResolve"
 // Start registers the JavaScript bridge and then parks forever. The browser
 // binary calls this from its main; nothing else needs to.
 func Start() {
+
 	js.Global().Get(ExportResolver).Invoke(map[string]any{
-		"connect":    js.FuncOf(jsConnect),
-		"write":      js.FuncOf(jsWrite),
-		"resize":     js.FuncOf(jsResize),
-		"disconnect": js.FuncOf(jsDisconnect),
+		"connect":     js.FuncOf(jsConnect),
+		"write":       js.FuncOf(jsWrite),
+		"resize":      js.FuncOf(jsResize),
+		"disconnect":  js.FuncOf(jsDisconnect),
+		"generateKey": js.FuncOf(jsGenerateKey),
+		"keyInfo":     js.FuncOf(jsKeyInfo),
 	})
 
 	// keepAlive is not decoration. WebAssembly is single-threaded, and once
@@ -65,8 +69,53 @@ func jsConnect(_ js.Value, args []js.Value) any {
 		cols, rows = args[2].Int(), args[3].Int()
 	}
 
+	// Credentials come across as JSON rather than as loose arguments: the page
+	// may have any number of keys, each with its own passphrase, and this is
+	// the one place that shape has to be understood.
+	var creds credentials
+	if len(args) > 4 && args[4].Type() == js.TypeString {
+		if err := json.Unmarshal([]byte(args[4].String()), &creds); err != nil {
+			post(map[string]any{"type": "error", "message": "bad credentials: " + err.Error()})
+			return nil
+		}
+	}
+	// The password is asked for by the page, at the moment the handshake
+	// actually wants one, so this is a function rather than a string.
+	var askPassword func() (string, error)
+	if len(args) > 5 && args[5].Type() == js.TypeFunction {
+		fn := args[5]
+		askPassword = func() (string, error) {
+			value, err := awaitString(fn)
+			if err != nil || value == "" {
+				return "", errNoPassword
+			}
+			return value, nil
+		}
+	}
+
+	// An encrypted key is opened by asking the page for its passphrase. The
+	// private key itself never has to be understood by JavaScript: the page
+	// hands over the text, Go does the cryptography.
+	var askKeyPassphrase func(name string) (string, error)
+	if hook := js.Global().Get("websshAskPassphraseFn"); hook.Type() == js.TypeFunction {
+		askKeyPassphrase = func(name string) (string, error) {
+			value, err := awaitString(hook, name)
+			if err != nil || value == "" {
+				return "", nil //nolint:nilnil
+			}
+			return value, nil
+		}
+	}
+
 	go func() {
+		auth, err := buildAuth(creds, askPassword, askKeyPassphrase)
+		if err != nil {
+			post(map[string]any{"type": "error", "message": err.Error()})
+			return
+		}
+
 		sess, err := Dial(context.Background(), Options{
+			Auth:   auth,
 			URL:    url,
 			User:   user,
 			Cols:   cols,
@@ -153,3 +202,54 @@ func postBytes(event map[string]any, payload []byte) {
 }
 
 func postData(payload []byte) { postBytes(map[string]any{"type": "data"}, payload) }
+
+// connectAskPassphrase points the passphrase hook at the page's function, once
+// the module has loaded.
+
+// awaitString calls a JavaScript function and waits for the promise it returns.
+//
+// A prompt cannot block in JavaScript, so the page answers with a promise.
+// Invoking it directly would hand back the promise object rather than its
+// value, and a caller waiting on the answer would get the string
+// "[object Promise]". Blocking here is safe: the handshake runs on its own
+// goroutine, so the runtime stays free to service the promise while we wait.
+func awaitString(fn js.Value, args ...any) (string, error) {
+	if fn.Type() != js.TypeFunction {
+		return "", errNoFunction
+	}
+
+	incoming := make([]any, 0, len(args))
+	for _, arg := range args {
+		incoming = append(incoming, arg)
+	}
+
+	type settledValue struct {
+		value string
+		fail  string
+	}
+	settled := make(chan settledValue, 1)
+
+	resolve := js.FuncOf(func(_ js.Value, a []js.Value) any {
+		settled <- settledValue{value: a[0].String()}
+		return nil
+	})
+	defer resolve.Release()
+
+	reject := js.FuncOf(func(_ js.Value, a []js.Value) any {
+		reason := ""
+		if len(a) > 0 {
+			reason = a[0].String()
+		}
+		settled <- settledValue{fail: reason}
+		return nil
+	})
+	defer reject.Release()
+
+	fn.Invoke(incoming...).Call("then", resolve, reject)
+
+	out := <-settled
+	if out.fail != "" {
+		return "", errors.New(out.fail)
+	}
+	return out.value, nil
+}

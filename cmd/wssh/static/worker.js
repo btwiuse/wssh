@@ -77,25 +77,76 @@ function flushInput() {
   flushScheduled = false;
 }
 
+// --- helpers ----------------------------------------------------------------
+
+// Prompts have to make a round trip: a worker's globals are not the page's,
+// so a hook installed by the page is invisible from here, and Go can only see
+// this worker's scope. Each request goes out as a message and the answer comes
+// back the same way.
+let nextPromptId = 0;
+const pendingPrompts = new Map();
+
+function askPage(kind, name) {
+  const id = ++nextPromptId;
+  return new Promise((resolve) => {
+    pendingPrompts.set(id, resolve);
+    postMessage({ type: 'prompt', id, kind, name: name || '' });
+  });
+}
+
+// Handed to Go: it returns a promise, which Go awaits inside the handshake.
+globalThis.__websshAskPassword = () => askPage('password');
+globalThis.__websshAskPassphraseFn = (name) => askPage('passphrase', name);
+
+// Answering a prompt the page has shown.
+function answerPrompt(id, value) {
+  const resolve = pendingPrompts.get(id);
+  if (resolve) {
+    pendingPrompts.delete(id);
+    resolve(value);
+  }
+}
+
+function apiGenerate(msg) {
+  exportedPromise.then((api) => api.generateKey(msg.kind, msg.bits || 0))
+    .catch((err) => postMessage({ type: 'error', message: String(err) }));
+}
+
 // --- message pump -----------------------------------------------------------
 
-self.onmessage = (event) => {
+self.onmessage = async (event) => {
   const msg = event.data;
+  if (msg.type === 'promptAnswer') {
+    answerPrompt(msg.id, msg.value);
+    return;
+  }
   try {
+    const api = await exportedPromise;
     switch (msg.type) {
       case 'input':
         pendingInput.push(msg.data);
         scheduleFlush();
         return;
-      case 'connect':
+      case 'connect': {
         // Connecting is the one place worth waiting: nothing may be sent to
         // the runtime before it has finished booting.
-        exportedPromise.then((a) => {
-          a.connect(msg.url, msg.user, msg.cols, msg.rows);
-        }).catch((err) => {
-          postMessage({ type: 'error', message: String(err) });
-        });
+        const api = await exportedPromise;
+        // Credentials go across as one JSON blob and the page supplies the
+        // passphrase and password callbacks, so neither ever passes through
+        // this worker as data.
+        const credentials = JSON.stringify(msg.credentials || { keys: [], passwords: [] });
+        api.connect(msg.url, msg.user, msg.cols, msg.rows, credentials,
+                   globalThis.__websshAskPassword);
         return;
+      }
+      case 'generateKey':
+        apiGenerate(msg);
+        return;
+      case 'keyInfo': {
+        const api = await exportedPromise;
+        api.keyInfo(msg.privateKey);
+        return;
+      }
       case 'resize':
         if (api) api.resize(msg.cols, msg.rows);
         return;
