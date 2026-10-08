@@ -445,14 +445,26 @@ function App() {
                              px-2 py-1 font-mono text-xs focus:outline-none"
                       value=${editValue}
                       autoFocus
+                      spellcheck="false"
+                      autocomplete="off"
+                      title="Enter saves, Escape cancels"
                       onFocus=${(e) => e.target.select()}
                       onInput=${(e) => setEditValue(e.target.value)}
                       onKeyDown=${(e) => {
                         if (e.key === 'Enter') commitRename();
                         if (e.key === 'Escape') cancelRename();
                       }}
-                      onBlur=${commitRename}
-                    />`
+                    />
+                    <button
+                      class="px-1.5 py-1 text-xs text-emerald-400 hover:text-emerald-300"
+                      title="Save this address"
+                      onClick=${commitRename}
+                    >✓</button>
+                    <button
+                      class="px-1.5 py-1 text-xs text-slate-500 hover:text-slate-200"
+                      title="Cancel"
+                      onClick=${cancelRename}
+                    >✗</button>`
                   : html`<button
                       class="flex-1 min-w-0 text-left px-2 py-1 font-mono text-xs
                              truncate text-slate-300 hover:text-emerald-300"
