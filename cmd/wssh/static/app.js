@@ -36,6 +36,34 @@ const store = {
   },
 };
 
+// The WebSocket endpoint this page serves by default: its own origin.
+function endpointFor(loc) {
+  const scheme = loc.protocol === 'https:' ? 'wss' : 'ws';
+  return `${scheme}://${loc.host}/ws`;
+}
+
+// addrFromQuery reads ?addr=, so a session can be handed around as a link:
+//
+//     http://localhost:7070/?addr=ws://localhost:7171/ws
+//
+// The value is usually unencoded, which is why it is read as raw text rather
+// than trusted to be a well-formed query parameter.
+function addrFromQuery() {
+  const raw = new URLSearchParams(location.search).get('addr');
+  const value = raw && raw.trim();
+  return value || null;
+}
+
+// syncQuery keeps the address bar in step with where we are pointed, so the
+// URL can be copied or bookmarked and always names the target. It is done on
+// connect rather than on every keystroke, which would churn history and leave
+// half-typed addresses in the bar.
+function syncQuery(addr) {
+  const url = new URL(location.href);
+  url.searchParams.set('addr', addr);
+  history.replaceState(null, '', url);
+}
+
 const STATUS = {
   idle: { label: 'Disconnected', color: 'text-slate-400' },
   connecting: { label: 'Connecting…', color: 'text-amber-300' },
@@ -60,9 +88,14 @@ function App() {
 
   // The address is editable because the page does not have to be talking to
   // the server that served it: `wssh web --ui-only` is a client for a wssh
-  // server somewhere else entirely. It is remembered between visits, and
-  // always starts out pointing at the origin the page came from.
+  // server somewhere else entirely.
+  //
+  // Three sources, in order: an ?addr= in the query string, which makes a
+  // session link shareable; then whatever was last used here; then the origin
+  // the page came from.
   const [endpoint, setEndpoint] = useState(() => {
+    const fromQuery = addrFromQuery();
+    if (fromQuery) return fromQuery;
     const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
     return store.get('wssh.endpoint') || `${scheme}://${location.host}/ws`;
   });
@@ -75,6 +108,7 @@ function App() {
   const resetEndpoint = useCallback(() => {
     const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
     onEndpointChange(`${scheme}://${location.host}/ws`);
+    syncQuery(endpointFor(location));
   }, [onEndpointChange]);
 
   // --- terminal lifecycle -------------------------------------------------
@@ -205,12 +239,21 @@ function App() {
   const focusTerminal = useCallback(() => termRef.current?.focus(), []);
 
   const connect = useCallback(() => {
+    const url = endpoint.trim();
+    // A mistyped address otherwise fails deep inside the WebSocket handshake,
+    // where the message is about the connection rather than the typing.
+    if (!/^wss?:\/\//i.test(url)) {
+      setError(`"${url}" is not a WebSocket address; it should start with ws:// or wss://`);
+      setStatus('idle');
+      return;
+    }
     setError('');
     setStatus('connecting');
+    syncQuery(url);
     const term = termRef.current;
     workerRef.current?.postMessage({
       type: 'connect',
-      url: endpoint.trim(),
+      url,
       user: user.trim() || 'root',
       cols: term?.cols ?? 80,
       rows: term?.rows ?? 24,
