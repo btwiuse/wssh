@@ -44,5 +44,7 @@ A stock ssh client reaches it through any WebSocket proxy:
 	cmd.Flags().StringSliceVar(&opts.Origins, "origins", nil,
 		"browser origins allowed to open a session (default any, or $ALLOWED_ORIGINS)")
 
+	addAuthFlags(cmd, &opts.Auth)
+
 	return cmd
 }

@@ -15,7 +15,9 @@ import (
 	"charm.land/log/v2"
 	"charm.land/wish/v2"
 	"github.com/btwiuse/wssh"
+	"github.com/btwiuse/wssh/auth"
 	"github.com/btwiuse/wssh/shell"
+	"github.com/spf13/cobra"
 )
 
 // shutdownTimeout bounds how long live sessions get to finish.
@@ -42,6 +44,10 @@ type serveOptions struct {
 	// Assets, when set, is served at / alongside the sessions at /ws.
 	Assets fs.FS
 
+	// Auth decides who may connect. The zero value authenticates nobody,
+	// which means it accepts everybody, so the startup log says so loudly.
+	Auth auth.Config
+
 	// Description labels the listener in the log line.
 	Description string
 }
@@ -64,15 +70,24 @@ func serve(opts serveOptions) error {
 		}
 	}
 
+	authOpts, err := opts.Auth.Options()
+	if err != nil {
+		return err //nolint:wrapcheck
+	}
+
 	sessions, err := wssh.NewServer(wssh.Options{
 		HostKeyPath:        opts.HostKeyPath,
 		Middleware:         []wish.Middleware{shell.Middleware()},
 		Pty:                true,
 		AllowTcpForwarding: opts.AllowTcpForwarding,
 		OriginPatterns:     opts.Origins,
+		SSHOptions:         authOpts,
 	})
 	if err != nil {
 		return err //nolint:wrapcheck
+	}
+	if !opts.Auth.Enabled() {
+		log.Warn("no authentication configured: every connection that reaches this port gets a shell")
 	}
 	if opts.AllowTcpForwarding {
 		log.Warn("TCP forwarding enabled: clients can relay to any host this server can reach")
@@ -137,6 +152,22 @@ func serve(opts serveOptions) error {
 		return err //nolint:wrapcheck
 	}
 	return nil
+}
+
+// addAuthFlags registers the authentication flags shared by the subcommands.
+//
+// Authentication is off until one of these is used. That is the right default
+// for trying wssh out on a laptop and the wrong one for anything else, so
+// serve() logs a warning when it finds nothing configured.
+func addAuthFlags(cmd *cobra.Command, cfg *auth.Config) {
+	cmd.Flags().StringSliceVar(&cfg.KeyFiles, "authorized-keys", nil,
+		`authorized_keys files to accept; "system" means /etc/ssh/authorized_keys and ~/.ssh/authorized_keys`)
+	cmd.Flags().StringSliceVar(&cfg.Keys, "authorized-key", nil,
+		"an authorized_keys entry given inline, repeatable")
+	cmd.Flags().StringVar(&cfg.PasswordFile, "password-file", "",
+		"file of accepted passwords, one per line, plaintext or bcrypt")
+	cmd.Flags().StringSliceVar(&cfg.Passwords, "password", nil,
+		"an accepted password given inline (visible in ps; prefer --password-file)")
 }
 
 // noCache keeps the browser from holding on to a stale wasm binary after a

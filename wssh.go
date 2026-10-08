@@ -58,6 +58,15 @@ type Options struct {
 	// Pair it with authentication before exposing this to anyone.
 	AllowTcpForwarding bool
 
+	// SSHOptions are extra options handed straight to the underlying SSH
+	// server, applied after the structured settings above. This is how
+	// authentication is installed: see package auth.
+	//
+	// The zero value accepts every connection, because the SSH server allows
+	// unauthenticated clients only while no auth handler is installed. Passing
+	// anything from package auth turns authentication on.
+	SSHOptions []ssh.Option
+
 	// Logger receives session-level detail. Defaults to the charm default
 	// logger, which honours whatever level the process has set.
 	Logger *log.Logger
@@ -86,6 +95,8 @@ func NewServer(opts Options) (*Server, error) {
 	if opts.Pty {
 		sshOpts = append(sshOpts, ssh.AllocatePty())
 	}
+	// Applied last so callers can override anything above.
+	sshOpts = append(sshOpts, opts.SSHOptions...)
 
 	sessions, err := wish.NewServer(sshOpts...)
 	if err != nil {

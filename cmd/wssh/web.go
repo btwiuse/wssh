@@ -63,5 +63,7 @@ Open the served address, press Connect, and you have a shell.`,
 	cmd.Flags().StringSliceVar(&opts.Origins, "origins", nil,
 		"browser origins allowed to open a session (default any, or $ALLOWED_ORIGINS)")
 
+	addAuthFlags(cmd, &opts.Auth)
+
 	return cmd
 }
