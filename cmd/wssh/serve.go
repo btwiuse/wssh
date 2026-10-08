@@ -48,6 +48,11 @@ type serveOptions struct {
 	// which means it accepts everybody, so the startup log says so loudly.
 	Auth auth.Config
 
+	// UIOnly serves the front end alone: no /ws and no session server, so the
+	// page is a client for a server elsewhere. Authentication, host key and
+	// forwarding settings are then meaningless and are ignored.
+	UIOnly bool
+
 	// Description labels the listener in the log line.
 	Description string
 }
@@ -70,34 +75,42 @@ func serve(opts serveOptions) error {
 		}
 	}
 
-	authOpts, err := opts.Auth.Options()
-	if err != nil {
-		return err //nolint:wrapcheck
-	}
-
-	sessions, err := wssh.NewServer(wssh.Options{
-		HostKeyPath:        opts.HostKeyPath,
-		Middleware:         []wish.Middleware{shell.Middleware()},
-		Pty:                true,
-		AllowTcpForwarding: opts.AllowTcpForwarding,
-		OriginPatterns:     opts.Origins,
-		SSHOptions:         authOpts,
-	})
-	if err != nil {
-		return err //nolint:wrapcheck
-	}
-	if !opts.Auth.Enabled() {
-		log.Warn("no authentication configured: every connection that reaches this port gets a shell")
-	}
-	if opts.AllowTcpForwarding {
-		log.Warn("TCP forwarding enabled: clients can relay to any host this server can reach")
-	}
-	if len(opts.Origins) > 0 {
-		log.Info("restricting origins", "patterns", opts.Origins)
-	}
-
 	mux := http.NewServeMux()
-	mux.Handle("/ws", sessions)
+
+	// UIOnly serves the front end and nothing else: no session server, so no
+	// /ws, no host key and no shell listening behind this port. The page
+	// becomes a client for a wssh server somewhere else, which is what makes
+	// the endpoint editable in the first place.
+	var sessions *wssh.Server
+	if !opts.UIOnly {
+		authOpts, err := opts.Auth.Options()
+		if err != nil {
+			return err //nolint:wrapcheck
+		}
+
+		sessions, err = wssh.NewServer(wssh.Options{
+			HostKeyPath:        opts.HostKeyPath,
+			Middleware:         []wish.Middleware{shell.Middleware()},
+			Pty:                true,
+			AllowTcpForwarding: opts.AllowTcpForwarding,
+			OriginPatterns:     opts.Origins,
+			SSHOptions:         authOpts,
+		})
+		if err != nil {
+			return err //nolint:wrapcheck
+		}
+		if !opts.Auth.Enabled() {
+			log.Warn("no authentication configured: every connection that reaches this port gets a shell")
+		}
+		if opts.AllowTcpForwarding {
+			log.Warn("TCP forwarding enabled: clients can relay to any host this server can reach")
+		}
+		if len(opts.Origins) > 0 {
+			log.Info("restricting origins", "patterns", opts.Origins)
+		}
+		mux.Handle("/ws", sessions)
+	}
+
 	if opts.Assets != nil {
 		mux.Handle("/", noCache(http.FileServer(http.FS(opts.Assets))))
 	}
@@ -148,8 +161,10 @@ func serve(opts serveOptions) error {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	if err := sessions.Shutdown(shutdownCtx); err != nil {
-		return err //nolint:wrapcheck
+	if sessions != nil {
+		if err := sessions.Shutdown(shutdownCtx); err != nil {
+			return err //nolint:wrapcheck
+		}
 	}
 	return nil
 }

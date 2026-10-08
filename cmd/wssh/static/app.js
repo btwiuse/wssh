@@ -3,7 +3,7 @@
 // No bundler: React and htm come from esm.sh via the import map in
 // index.html, and xterm.js is a plain global from jsDelivr.
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import htm from 'htm';
 
@@ -28,13 +28,27 @@ function App() {
 
   const [status, setStatus] = useState('idle');
   const [error, setError] = useState('');
-  const [user, setUser] = useState('root');
+  const [user, setUser] = useState(() => localStorage.getItem('wssh.user') || 'root');
   const [connected, setConnected] = useState(false);
 
-  const endpoint = useMemo(() => {
+  // The address is editable because the page does not have to be talking to
+  // the server that served it: `wssh web --ui-only` is a client for a wssh
+  // server somewhere else entirely. It is remembered between visits, and
+  // always starts out pointing at the origin the page came from.
+  const [endpoint, setEndpoint] = useState(() => {
     const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-    return `${scheme}://${location.host}/ws`;
+    return localStorage.getItem('wssh.endpoint') || `${scheme}://${location.host}/ws`;
+  });
+
+  const onEndpointChange = useCallback((value) => {
+    setEndpoint(value);
+    localStorage.setItem('wssh.endpoint', value);
   }, []);
+
+  const resetEndpoint = useCallback(() => {
+    const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+    onEndpointChange(`${scheme}://${location.host}/ws`);
+  }, [onEndpointChange]);
 
   // --- terminal lifecycle -------------------------------------------------
 
@@ -169,7 +183,7 @@ function App() {
     const term = termRef.current;
     workerRef.current?.postMessage({
       type: 'connect',
-      url: endpoint,
+      url: endpoint.trim(),
       user: user.trim() || 'root',
       cols: term?.cols ?? 80,
       rows: term?.rows ?? 24,
@@ -186,30 +200,47 @@ function App() {
 
   return html`
     <div class="h-full flex flex-col">
-      <header class="flex items-center gap-3 px-4 py-2 bg-slate-900 border-b border-slate-800">
-        <span class="font-semibold tracking-tight">webssh</span>
-        <span class="text-xs text-slate-500 truncate">${endpoint}</span>
-        <div class="ml-auto flex items-center gap-2">
-          <label class="sr-only" for="user">user</label>
-          <input
-            id="user"
-            class="w-28 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm
-                   focus:outline-none focus:border-emerald-500 disabled:opacity-50"
-            value=${user}
-            disabled=${connected || status === 'connecting'}
-            onInput=${(e) => setUser(e.target.value)}
-            onKeyDown=${(e) => { if (e.key === 'Enter' && !connected) connect(); }}
-          />
-          ${connected || status === 'connecting'
-            ? html`<button
-                class="px-3 py-1 text-sm rounded bg-slate-700 hover:bg-slate-600"
-                onClick=${disconnect}>Disconnect</button>`
-            : html`<button
-                class="px-3 py-1 text-sm rounded bg-emerald-600 hover:bg-emerald-500
-                       text-slate-900 font-medium"
-                onClick=${connect}>Connect</button>`}
-          <span class=${`text-xs ${statusInfo.color}`}>${statusInfo.label}</span>
-        </div>
+      <header class="flex items-center gap-2 px-4 py-2 bg-slate-900 border-b border-slate-800">
+        <span class="font-semibold tracking-tight shrink-0">webssh</span>
+        <label class="sr-only" for="endpoint">WebSocket address</label>
+        <input
+          id="endpoint"
+          class="flex-1 min-w-0 bg-slate-800 border border-slate-700 rounded px-2 py-1
+                 font-mono text-xs focus:outline-none focus:border-emerald-500
+                 disabled:opacity-50"
+          value=${endpoint}
+          spellcheck="false"
+          autocomplete="off"
+          title="WebSocket address of the wssh server to connect to"
+          disabled=${connected || status === 'connecting'}
+          onInput=${(e) => onEndpointChange(e.target.value)}
+          onKeyDown=${(e) => { if (e.key === 'Enter' && !connected) connect(); }}
+        />
+        <button
+          class="px-2 py-1 text-xs rounded bg-slate-800 hover:bg-slate-700 text-slate-300
+                 disabled:opacity-50"
+          title="Point back at this page's own server"
+          disabled=${connected || status === 'connecting'}
+          onClick=${resetEndpoint}>reset</button>
+        <label class="sr-only" for="user">user</label>
+        <input
+          id="user"
+          class="w-24 shrink-0 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm
+                 focus:outline-none focus:border-emerald-500 disabled:opacity-50"
+          value=${user}
+          disabled=${connected || status === 'connecting'}
+          onInput=${(e) => { setUser(e.target.value); localStorage.setItem('wssh.user', e.target.value); }}
+          onKeyDown=${(e) => { if (e.key === 'Enter' && !connected) connect(); }}
+        />
+        ${connected || status === 'connecting'
+          ? html`<button
+              class="px-3 py-1 text-sm rounded bg-slate-700 hover:bg-slate-600 shrink-0"
+              onClick=${disconnect}>Disconnect</button>`
+          : html`<button
+              class="px-3 py-1 text-sm rounded bg-emerald-600 hover:bg-emerald-500
+                     text-slate-900 font-medium shrink-0"
+              onClick=${connect}>Connect</button>`}
+        <span class=${`text-xs shrink-0 ${statusInfo.color}`}>${statusInfo.label}</span>
       </header>
 
       ${error && html`

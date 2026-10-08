@@ -27,6 +27,7 @@ func webAssets() fs.FS {
 
 func newWebCmd() *cobra.Command {
 	var opts serveOptions
+	var uiOnly bool
 
 	cmd := &cobra.Command{
 		Use:   "web",
@@ -39,9 +40,16 @@ compiled to WebAssembly which runs a real SSH client and dials the same
 WebSocket endpoint. The front end is served from memory, so there is nothing
 to deploy alongside the binary.
 
-Open the served address, press Connect, and you have a shell.`,
+Open the served address, press Connect, and you have a shell.
+
+With --ui-only, only the page is served and no sessions are. That makes it a
+browser SSH client for a server somewhere else, which is why the address in
+the toolbar is editable.`,
 		Example: `  # Serve the browser front end on :8080
   wssh web
+
+  # Serve only the page, and connect to a wssh server elsewhere
+  wssh web --ui-only
 
   # Bind a fixed port
   wssh web --addr :2222
@@ -50,12 +58,18 @@ Open the served address, press Connect, and you have a shell.`,
   wssh web --origins https://ssh.example.com`,
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			opts.Description = "websocket + web"
+			opts.UIOnly = uiOnly
+			opts.Description = "web only"
+			if !uiOnly {
+				opts.Description = "websocket + web"
+			}
 			opts.Assets = webAssets()
 			return serve(opts)
 		},
 	}
 
+	cmd.Flags().BoolVar(&uiOnly, "ui-only", false,
+		"serve only the front end: no /ws and no sessions behind this port")
 	cmd.Flags().StringVar(&opts.Addr, "addr", "", "address to listen on (default $PORT or :8080)")
 	cmd.Flags().StringVar(&opts.HostKeyPath, "hostkey", defaultHostKey(), "path to the ed25519 host key")
 	cmd.Flags().BoolVar(&opts.AllowTcpForwarding, "allow-tcp-forwarding", false,
