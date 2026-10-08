@@ -3,15 +3,18 @@ module github.com/btwiuse/wssh
 go 1.27.0
 
 require (
+	charm.land/fang/v2 v2.0.1
 	charm.land/log/v2 v2.0.1
 	charm.land/ssh v0.4.3
 	charm.land/wish/v2 v2.0.5
 	github.com/coder/websocket v1.8.15
+	github.com/spf13/cobra v1.9.1
+	golang.org/x/crypto v0.57.0
+	golang.org/x/term v0.46.0
 )
 
 require (
 	charm.land/bubbletea/v2 v2.0.10 // indirect
-	charm.land/fang/v2 v2.0.1 // indirect
 	charm.land/lipgloss/v2 v2.0.6 // indirect
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
@@ -38,10 +41,8 @@ require (
 	github.com/muesli/roff v0.1.0 // indirect
 	github.com/pires/go-proxyproto v0.15.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
-	github.com/spf13/cobra v1.9.1 // indirect
 	github.com/spf13/pflag v1.0.6 // indirect
 	github.com/xo/terminfo v1.2.0 // indirect
-	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/exp v0.0.0-20260908205506-85c1c2202aba // indirect
 	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect

@@ -1,4 +1,4 @@
-// Package sshclient runs an SSH session over a WebSocket.
+// Package client runs an SSH session over a WebSocket.
 //
 // It is the browser half of webssh, and the exact mirror of the server: the
 // server accepts a WebSocket and hands the bytes to a wish SSH server, and
@@ -8,7 +8,7 @@
 //
 // Nothing here touches syscall/js. The same code runs natively, which is what
 // makes the session logic testable without a browser in the loop.
-package sshclient
+package client
 
 import (
 	"context"
@@ -64,6 +64,7 @@ type Session struct {
 	stdin chan []byte
 
 	closeOnce sync.Once
+	stdinOnce sync.Once
 	closeErr  error
 }
 
@@ -211,12 +212,26 @@ func (s *Session) pump(stdin io.WriteCloser, stdout, stderr io.Reader, opts Opti
 
 // Write sends keystrokes to the remote program. It never blocks: if the remote
 // end is not draining, the input is dropped rather than stalling the caller.
+//
+// That suits a browser, where stalling the callback would stall the whole
+// event loop. A terminal wants the opposite; see WriteContext.
 func (s *Session) Write(p []byte) error {
 	select {
 	case s.stdin <- p:
 		return nil
 	default:
 		return fmt.Errorf("input buffer full")
+	}
+}
+
+// WriteContext queues keystrokes, waiting for room rather than dropping them.
+// A terminal should never silently lose what someone typed.
+func (s *Session) WriteContext(ctx context.Context, p []byte) error {
+	select {
+	case s.stdin <- p:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -236,7 +251,18 @@ func (s *Session) close(cause error) {
 	s.closeOnce.Do(func() {
 		s.cancel()
 		s.closeErr = s.conn.Close(websocket.StatusNormalClosure, "")
-		close(s.stdin)
+		s.CloseStdin()
 		_ = cause
 	})
+}
+
+// CloseStdin signals end of input to the remote program while leaving the
+// connection open.
+//
+// This is not the same as Close. Tearing the socket down the moment stdin
+// ends means the far side never gets to read what is already buffered and
+// never gets to report anything; sending EOF instead lets a shell finish its
+// last command and exit on its own terms.
+func (s *Session) CloseStdin() {
+	s.stdinOnce.Do(func() { close(s.stdin) })
 }

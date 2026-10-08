@@ -9,6 +9,7 @@
 package shell
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -44,6 +45,15 @@ func Middleware() wish.Middleware {
 			)
 
 			if err := run(s); err != nil {
+				// A command that fails is not a server error. Reporting it
+				// with the status it actually exited with is what lets
+				// scripts and CI see the truth; collapsing everything to 1
+				// would make every failure look identical.
+				var exitErr *exec.ExitError
+				if errors.As(err, &exitErr) {
+					_ = s.Exit(exitErr.ExitCode())
+					return
+				}
 				wish.Fatalln(s, err)
 			}
 			next(s)

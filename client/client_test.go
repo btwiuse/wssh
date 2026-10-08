@@ -1,6 +1,6 @@
 //go:build !js
 
-package sshclient_test
+package client_test
 
 import (
 	"bytes"
@@ -17,12 +17,12 @@ import (
 	charmlog "charm.land/log/v2"
 	"charm.land/wish/v2"
 	"github.com/btwiuse/wssh"
+	"github.com/btwiuse/wssh/client"
 	"github.com/btwiuse/wssh/shell"
-	"github.com/btwiuse/wssh/sshclient"
 )
 
 // These tests drive a real wsshd over a real WebSocket on loopback. Keeping
-// sshclient free of syscall/js is what makes this possible: the exact code the
+// client free of syscall/js is what makes this possible: the exact code the
 // browser runs is exercised here, with ordinary error messages and a debugger
 // that works.
 
@@ -102,7 +102,7 @@ func TestSessionRunsCommandAndEnds(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	sess, err := sshclient.Dial(ctx, sshclient.Options{
+	sess, err := client.Dial(ctx, client.Options{
 		URL:     url,
 		User:    "tester",
 		Command: "echo NATIVE_CLIENT_OK",
@@ -135,7 +135,7 @@ func TestSessionIsInteractive(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	sess, err := sshclient.Dial(ctx, sshclient.Options{
+	sess, err := client.Dial(ctx, client.Options{
 		URL:    url,
 		User:   "tester",
 		OnData: col.onData,

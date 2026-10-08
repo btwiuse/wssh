@@ -16,7 +16,7 @@ mkdir -p "$OUT"
 echo "building client -> $OUT/ssh.wasm"
 (
 	cd "$HERE"
-	GOOS=js GOARCH=wasm go build -trimpath -o "$OUT/ssh.wasm" .
+	GOOS=js GOARCH=wasm go build -trimpath -o "$OUT/ssh.wasm" ./cmd/webssh-web
 )
 
 # wasm_exec.js must match the Go toolchain that built the binary, or the two

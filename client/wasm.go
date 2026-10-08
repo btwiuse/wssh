@@ -1,38 +1,38 @@
 //go:build js && wasm
 
-// Command client is the browser front end for webssh: a thin bridge between
-// JavaScript and the SSH-over-WebSocket session in package sshclient.
+// This file is the browser half of the package: a bridge from JavaScript to a
+// session in this package. It exports its functions through the global
+// websshGoExportResolve hook rather than owning a main, so the browser binary
+// and anything else that wants the same bridge can share it.
 //
-// The session logic lives in sshclient precisely so it can be tested natively.
-// Everything here is plumbing: a js.Func per operation, and a postMessage for
-// everything coming back.
-//
-// One rule governs this file. A js.Func is invoked on whichever Go goroutine
-// last handed control back to JavaScript, and calling into Go resumes the Go
+// One rule governs this file. A js.Func is invoked on whichever goroutine last
+// handed control back to JavaScript, and calling into Go resumes the Go
 // scheduler. That goroutine must therefore return promptly. Opening a session
-// dials a socket and performs a key exchange, which is far too slow to do
-// inline: the browser's WebSocket events are delivered on the very thread we
-// would be blocking. Every operation here starts a goroutine and returns.
-package main
+// dials a socket and performs a key exchange, far too slow to do inline: the
+// browser's WebSocket events arrive on the very thread we would be blocking.
+// Every operation here starts a goroutine and returns.
+package client
 
 import (
 	"context"
 	"syscall/js"
 	"time"
-
-	"github.com/btwiuse/wssh/sshclient"
 )
 
-func main() {
-	js.Global().Get("websshGoExportResolve").Invoke(map[string]any{
+// ExportResolver is the global the host page installs, called once the
+// exported functions are ready.
+const ExportResolver = "websshGoExportResolve"
+
+// Start registers the JavaScript bridge and then parks forever. The browser
+// binary calls this from its main; nothing else needs to.
+func Start() {
+	js.Global().Get(ExportResolver).Invoke(map[string]any{
 		"connect":    js.FuncOf(jsConnect),
 		"write":      js.FuncOf(jsWrite),
 		"resize":     js.FuncOf(jsResize),
 		"disconnect": js.FuncOf(jsDisconnect),
 	})
 
-	// Park forever, because the exported functions are driven by the page.
-	//
 	// keepAlive is not decoration. WebAssembly is single-threaded, and once
 	// every goroutine is parked with nothing pending the runtime calls
 	// wasmExit and the program dies in silence. The next call from JavaScript
@@ -41,7 +41,7 @@ func main() {
 	// runtime.checkdead from declaring that deadlock; a blocked channel is
 	// not, so this has to be a sleep.
 	go keepAlive()
-	select {}
+	<-make(chan struct{})
 }
 
 func keepAlive() {
@@ -51,7 +51,7 @@ func keepAlive() {
 }
 
 var current struct {
-	s *sshclient.Session
+	s *Session
 }
 
 func jsConnect(_ js.Value, args []js.Value) any {
@@ -63,7 +63,7 @@ func jsConnect(_ js.Value, args []js.Value) any {
 	}
 
 	go func() {
-		sess, err := sshclient.Dial(context.Background(), sshclient.Options{
+		sess, err := Dial(context.Background(), Options{
 			URL:    url,
 			User:   user,
 			Cols:   cols,

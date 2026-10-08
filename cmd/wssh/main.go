@@ -16,10 +16,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 
 	"charm.land/fang/v2"
 	"github.com/spf13/cobra"
+	gossh "golang.org/x/crypto/ssh"
 )
 
 // Set with -ldflags at build time.
@@ -64,7 +66,7 @@ beyond a WebSocket proxy:
 
 	root.PersistentFlags().BoolVar(debug, "verbose", false, "log session-level detail")
 
-	root.AddCommand(newServerCmd(), newWebCmd())
+	root.AddCommand(newServerCmd(), newWebCmd(), newClientCmd())
 
 	options := []fang.Option{
 		fang.WithVersion(version),
@@ -74,8 +76,14 @@ beyond a WebSocket proxy:
 	}
 
 	// fang reports the error itself, in its own styled form, so all that is
-	// left here is the exit status.
+	// left here is the exit status. A remote command's own status is passed
+	// through: reporting "exited 7" and then exiting 1 would make every
+	// failure indistinguishable to whatever is calling us.
 	if err := fang.Execute(context.Background(), root, options...); err != nil {
+		var exitErr *gossh.ExitError
+		if errors.As(err, &exitErr) {
+			os.Exit(exitErr.ExitStatus())
+		}
 		os.Exit(1)
 	}
 }
