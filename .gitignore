@@ -14,3 +14,7 @@
 # Optional client wrapper around websocat. Useful locally, but plain
 # `websocat -b wss://host` covers the common case, so it stays untracked.
 /wssh-proxy
+
+# WASM build output: rebuild with client/build.sh
+/cmd/webssh/static/ssh.wasm
+/cmd/webssh/static/wasm_exec.js

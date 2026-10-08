@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>webssh</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230f172a'/%3E%3Cpath d='M7 11l5 5-5 5' stroke='%2334d399' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M15 21h10' stroke='%2334d399' stroke-width='2.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+
+  <!-- xterm.js 6 beta from jsDelivr: the core plus the plugins the terminal
+       actually needs. fit tracks the container size, webgl keeps redraws off
+       the main thread, clipboard adds the usual copy/paste bindings. -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@6/css/xterm.css" />
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@6.1.0-beta.285/lib/xterm.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.12.0-beta.285/lib/addon-fit.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-webgl@0.20.0-beta.284/lib/addon-webgl.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-clipboard@0.3.0-beta.285/lib/addon-clipboard.js"></script>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- React without a build step: ES modules from esm.sh, and htm for
+       JSX-like templates so nothing needs compiling. -->
+  <script type="importmap">
+  {
+    "imports": {
+      "react":              "https://esm.sh/react@19",
+      "react-dom/client":   "https://esm.sh/react-dom@19/client",
+      "htm":                "https://esm.sh/htm@3"
+    }
+  }
+  </script>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body, #root { height: 100%; margin: 0; }
+    body { background: #0f172a; color: #e2e8f0; }
+    /* xterm's own scrollbar fights the container's; keep just one. */
+    .xterm-viewport { overflow-y: hidden !important; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

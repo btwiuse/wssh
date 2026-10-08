@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>webssh selftest</title>
+  <style>
+    body { background:#0f172a; color:#e2e8f0; font-family: ui-monospace, monospace; padding:1rem; }
+    pre { white-space: pre-wrap; }
+    .pass { color:#34d399; font-weight:bold; }
+    .fail { color:#f87171; font-weight:bold; }
+  </style>
+</head>
+<body>
+<h1>webssh selftest</h1>
+<pre id="out">starting…</pre>
+<script>
+// Exercises worker + Go/WASM + SSH end to end by sending real key events, one
+// per character, exactly as a terminal does. It deliberately does not go
+// through xterm: this is about the transport, and synthesising keystrokes adds
+// a variable that has nothing to do with it.
+const out = document.getElementById('out');
+const lines = [];
+const say = (s) => { lines.push(s); out.textContent = lines.join('\n'); };
+const enc = new TextEncoder();
+
+const w = new Worker('./worker.js');
+let phase = 'prompt';
+let acc = '';
+const results = [];
+
+function typeToShell(text) {
+  for (const ch of text) w.postMessage({ type: 'input', data: enc.encode(ch) });
+  w.postMessage({ type: 'input', data: enc.encode('\n') });
+}
+
+const CMD = 'echo ORDERING_CANARY_12345';
+const EXPECT = 'ORDERING_CANARY_12345';
+
+w.onmessage = (e) => {
+  const m = e.data;
+  if (m.type === 'data') {
+    acc += new TextDecoder().decode(new Uint8Array(m.payload));
+    if (phase === 'prompt') {
+      typeToShell(CMD);
+      phase = 'output';
+    } else if (phase === 'output') {
+      // The typed line is echoed as it is entered, so the command text itself
+      // already contains the token. The real output is a second, standalone
+      // occurrence on a line of its own.
+      const first = acc.indexOf(EXPECT);
+      if (first !== -1 && acc.indexOf(EXPECT, first + EXPECT.length) !== -1) {
+        results.push('typed ' + CMD.length + ' chars one message each');
+        results.push('output matched: ' + EXPECT);
+        say('PASS — browser → WebSocket → SSH → shell round trip is intact');
+        out.innerHTML = '<span class="pass">SELFTEST PASS</span>\n\n' + results.join('\n');
+        w.postMessage({ type: 'input', data: enc.encode('exit\n') });
+        phase = 'done';
+      }
+    }
+    out.textContent = out.textContent; // keep last render
+  } else if (m.type === 'connected') {
+    say('connected to ' + location.host);
+    phase = 'prompt';
+    typeToShell('true\n');   // a cheap prompt warmer
+  } else if (m.type === 'error') {
+    say('<span class="fail">ERROR: ' + m.message + '</span>');
+  } else if (m.type === 'closed') {
+    if (phase !== 'done') say('<span class="fail">session closed early</span>');
+  }
+};
+w.onerror = (e) => say('<span class="fail">WORKER ERROR: ' + e.message + '</span>');
+
+setTimeout(() => {
+  if (phase !== 'done') {
+    out.innerHTML = '<span class="fail">SELFTEST FAIL (phase=' + phase + ')</span>\n\n' + acc.slice(-800);
+  }
+}, 20000);
+
+const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+w.postMessage({ type: 'connect', url: `${scheme}://${location.host}/ws`, user: 'selftest', cols: 80, rows: 24 });
+</script>
+</body>
+</html>
