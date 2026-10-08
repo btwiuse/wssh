@@ -47,6 +47,8 @@ for a directly reachable server.`,
 		},
 	}
 
+	cmd.Flags().StringVar(&opts.SessionPath, "path", "",
+		"URL path sessions are served on; empty means any path works")
 	cmd.Flags().DurationVar(&opts.ShutdownTimeout, "shutdown-timeout", 5*time.Second,
 		"how long live sessions get to finish after an interrupt; 0 waits forever")
 	cmd.Flags().StringVar(&opts.Addr, "addr", "", "address to listen on (default $PORT or :8080)")

@@ -61,6 +61,9 @@ the toolbar is editable.`,
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			opts.UIOnly = uiOnly
+			// The page and its assets need the paths, so sessions get a
+			// fixed one to live under.
+			opts.SessionPath = "/ws"
 			opts.Description = "web only"
 			if !uiOnly {
 				opts.Description = "websocket + web"

@@ -56,6 +56,12 @@ type serveOptions struct {
 	// which means it accepts everybody, so the startup log says so loudly.
 	Auth auth.Config
 
+	// SessionPath is the URL path the session endpoint lives on. Empty, the
+	// default, serves sessions on any path, which suits a server that has
+	// nothing else on it. The browser front end needs it because it also
+	// serves static files, and those need the paths left to themselves.
+	SessionPath string
+
 	// ShutdownTimeout is how long live sessions get to finish after an
 	// interrupt. Zero waits as long as it takes. A shell waits for input, so
 	// an interactive session will never end by itself: without a bound, every
@@ -118,6 +124,7 @@ func serve(opts serveOptions) error {
 			HostKeyPath:        opts.HostKeyPath,
 			Middleware:         []wish.Middleware{shell.Middleware()},
 			Pty:                true,
+			Path:               opts.SessionPath,
 			AllowTcpForwarding: opts.AllowTcpForwarding,
 			OriginPatterns:     opts.Origins,
 			SSHOptions:         authOpts,
@@ -136,7 +143,14 @@ func serve(opts serveOptions) error {
 			// time this log line really mattered.
 			log.Info("restricting origins", "patterns", opts.Origins)
 		}
-		mux.Handle("/ws", sessions)
+		// An empty path mounts on "/", which in Go's mux is the catch-all:
+		// any path opens a session, exactly as a client dialling a bare
+		// host and port would expect.
+		pattern := opts.SessionPath
+		if pattern == "" {
+			pattern = "/"
+		}
+		mux.Handle(pattern, sessions)
 	}
 
 	if opts.Assets != nil {

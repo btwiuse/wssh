@@ -48,6 +48,12 @@ type Options struct {
 	// websocat: neither sends an Origin, so there is nothing to verify.
 	OriginPatterns []string
 
+	// Path is the URL path sessions are served on. Empty, the default, means
+	// any path opens one, which is what a bare SSH server wants: it serves
+	// nothing else, so there is nothing to collide with. Set it when the same
+	// port also serves other things, as the browser front end does.
+	Path string
+
 	// AllowTcpForwarding enables the direct-tcpip channel, which backs
 	// `ssh -L` and `ssh -D`. Off by default.
 	//
@@ -134,6 +140,14 @@ func NewServer(opts Options) (*Server, error) {
 // stream to the SSH server, which runs the handshake and then the session to
 // completion. It blocks for the life of the session.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Only a configured path narrows this down. With none set, any path opens
+	// a session: there is nothing else on the server to collide with, and a
+	// client is then free to use whatever URL it likes.
+	if s.opts.Path != "" && r.URL.Path != s.opts.Path {
+		http.NotFound(w, r)
+		return
+	}
+
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		OriginPatterns: s.opts.OriginPatterns,
 		// The payload is already encrypted. Compressing it burns CPU on both
