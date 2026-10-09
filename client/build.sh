@@ -13,10 +13,15 @@ readonly OUT="$HERE/../cmd/wssh/static"
 
 mkdir -p "$OUT"
 
+# CGO_ENABLED=0 is required on hosts (Termux, certain Linux distributions)
+# that default it on: cgo is unavailable for js/wasm, and leaving the flag on
+# makes os/user skip the build tag that provides its js/wasm backend. The
+# upstream Go toolchain leaves cgo off everywhere it is not supported, so this
+# only matters for the cross-compile step.
 echo "building client -> $OUT/ssh.wasm"
 (
 	cd "$HERE"
-	GOOS=js GOARCH=wasm go build -trimpath -o "$OUT/ssh.wasm" ./cmd/webssh-web
+	CGO_ENABLED=0 GOOS=js GOARCH=wasm go build -trimpath -o "$OUT/ssh.wasm" ./cmd/webssh-web
 )
 
 # wasm_exec.js must match the Go toolchain that built the binary, or the two

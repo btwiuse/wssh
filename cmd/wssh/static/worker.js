@@ -133,10 +133,12 @@ self.onmessage = async (event) => {
         const api = await exportedPromise;
         // Credentials go across as one JSON blob and the page supplies the
         // passphrase and password callbacks, so neither ever passes through
-        // this worker as data.
+        // this worker as data. The optional command is forwarded verbatim:
+        // empty means an interactive shell, anything else is run on the far
+        // side and the session ends when it does.
         const credentials = JSON.stringify(msg.credentials || { keys: [], passwords: [] });
         api.connect(msg.url, msg.user, msg.cols, msg.rows, credentials,
-                   globalThis.__websshAskPassword);
+                   globalThis.__websshAskPassword, msg.command || '');
         return;
       }
       case 'generateKey':

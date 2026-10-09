@@ -68,6 +68,12 @@ func jsConnect(_ js.Value, args []js.Value) any {
 	if len(args) > 2 {
 		cols, rows = args[2].Int(), args[3].Int()
 	}
+	// Optional command: when set, the remote side runs it and exits, the way
+	// `ssh host -- command` does. Empty keeps the existing interactive shell.
+	command := ""
+	if len(args) > 6 && args[6].Type() == js.TypeString {
+		command = args[6].String()
+	}
 
 	// Credentials come across as JSON rather than as loose arguments: the page
 	// may have any number of keys, each with its own passphrase, and this is
@@ -115,12 +121,13 @@ func jsConnect(_ js.Value, args []js.Value) any {
 		}
 
 		sess, err := Dial(context.Background(), Options{
-			Auth:   auth,
-			URL:    url,
-			User:   user,
-			Cols:   cols,
-			Rows:   rows,
-			OnData: postData,
+			Auth:    auth,
+			URL:     url,
+			User:    user,
+			Cols:    cols,
+			Rows:    rows,
+			Command: command,
+			OnData:  postData,
 			OnClose: func(err error) {
 				// Forget the session first. The page keeps delivering keystrokes
 				// after the far side has gone, and reporting each one as an

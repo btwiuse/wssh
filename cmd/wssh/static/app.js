@@ -103,13 +103,26 @@ function addrFromQuery() {
   return value || null;
 }
 
+// cmdFromQuery reads ?cmd=, so a one-shot command can be handed around the
+// same way. Empty means an interactive shell, exactly as on the CLI.
+function cmdFromQuery() {
+  const raw = new URLSearchParams(location.search).get('cmd');
+  const value = raw && raw.trim();
+  return value || '';
+}
+
 // syncQuery keeps the address bar in step with where we are pointed, so the
 // URL can be copied or bookmarked and always names the target. It is done on
 // connect rather than on every keystroke, which would churn history and leave
 // half-typed addresses in the bar.
-function syncQuery(addr) {
+function syncQuery(addr, command) {
   const url = new URL(location.href);
   url.searchParams.set('addr', addr);
+  if (command) {
+    url.searchParams.set('cmd', command);
+  } else {
+    url.searchParams.delete('cmd');
+  }
   history.replaceState(null, '', url);
 }
 
@@ -133,6 +146,10 @@ function App() {
   const [status, setStatus] = useState('idle');
   const [error, setError] = useState('');
   const [user, setUser] = useState(() => store.get('wssh.user') || 'root');
+  // A non-interactive command turns the session into a one-shot run, the way
+  // `ssh host -- command` does. The query string seeds it on first load so a
+  // link can hand around both the endpoint and what to run there.
+  const [command, setCommand] = useState(() => cmdFromQuery());
   const [connected, setConnected] = useState(false);
 
   // The address is editable because the page does not have to be talking to
@@ -160,8 +177,8 @@ function App() {
 
   const resetEndpoint = useCallback(() => {
     onEndpointChange(endpointFor(location));
-    syncQuery(endpointFor(location));
-  }, [onEndpointChange]);
+    syncQuery(endpointFor(location), command.trim());
+  }, [onEndpointChange, command]);
 
   // --- the endpoint combobox -----------------------------------------------
   //
@@ -440,7 +457,7 @@ function App() {
     setError('');
     setStatus('connecting');
     setCredsOpen(false);
-    syncQuery(url);
+    syncQuery(url, command.trim());
     const term = termRef.current;
     workerRef.current?.postMessage({
       type: 'connect',
@@ -448,9 +465,10 @@ function App() {
       user: user.trim() || 'root',
       cols: term?.cols ?? 80,
       rows: term?.rows ?? 24,
+      command: command.trim(),
       credentials: credentialsForConnect(),
     });
-  }, [endpoint, user]);
+  }, [endpoint, user, command]);
 
   // The address key handler runs before connect is declared, so it calls
   // through this.
@@ -601,6 +619,20 @@ function App() {
           value=${user}
           disabled=${connected || status === 'connecting'}
           onInput=${(e) => { setUser(e.target.value); store.set('wssh.user', e.target.value); }}
+          onKeyDown=${(e) => { if (e.key === 'Enter' && !connected) connect(); }}
+        />
+        <label class="sr-only" for="command">command</label>
+        <input
+          id="command"
+          class="flex-1 min-w-32 max-w-96 bg-slate-800 border border-slate-700 rounded px-2 py-1
+                 text-sm font-mono focus:outline-none focus:border-emerald-500 disabled:opacity-50"
+          placeholder="command (optional)"
+          title="Run this command on the remote side and exit; leave blank for an interactive shell"
+          value=${command}
+          spellcheck="false"
+          autocomplete="off"
+          disabled=${connected || status === 'connecting'}
+          onInput=${(e) => setCommand(e.target.value)}
           onKeyDown=${(e) => { if (e.key === 'Enter' && !connected) connect(); }}
         />
         ${connected || status === 'connecting'
