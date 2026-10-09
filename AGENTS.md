@@ -118,6 +118,8 @@ the `SELFTEST PASS` banner. Useful after touching the front end.
 ./wssh keygen                                   # generate ed25519 key pair
 ./wssh client wss://host:8080/ws                # CLI client (no websocat)
 ./wssh client wss://host:8080/ws -- uptime      # CLI client, run one command
+./wssh server --agent-keys ./signer.ed25519     # expose the key as an in-memory ssh-agent
+./wssh client --agent ./id_ed25519 wss://host:8080/ws   # use the same key for pubkey auth and the agent channel
 ```
 
 The default listen address is `$PORT` (if set) or `:8080`. Default host key
@@ -203,6 +205,19 @@ is real.
   seventh argument. `client/wasm.go:74-76` reads it. An empty value falls
   through to the existing interactive-shell path; a non-empty value runs
   the command on the remote side and ends the session when it exits.
+- The CLI's `client --agent <keyfile>` flag uses the same key for two
+  purposes: as a publickey auth method on the SSH handshake, and as the
+  keyring of an in-band ssh-agent served over the
+  `auth-agent@openssh.com` channel on the same connection. The same key
+  does both jobs, so the server can authenticate the user with what it
+  sees in the channel, and the channel can hand out signatures for things
+  the user does on the remote side. `client.Session.Client()` returns the
+  underlying `*ssh.Client`, which the test harness and the WASM bridge
+  use to open additional channels. The unsafe trick in
+  `auth/authfwd.ExtractSigner` reaches into the `wrappedSigner` struct
+  that `ssh.ParsePrivateKey` produces to recover the inner
+  `crypto.Signer` (the standard library hides it behind a private field
+  that `reflect` cannot reach on Termux).
 - `cmd/wssh/static/index.html` contains the literal placeholder
   `__WSSH_SESSION_PATH__`, which `cmd/wssh/serve.go`'s `frontEnd` replaces
   with the configured `--path` value before serving. The page resolves it
@@ -229,6 +244,35 @@ is real.
 - `charm.land/ssh` (server-side) and `golang.org/x/crypto/ssh` (client-side)
   are both imported. The server is the wish SSH server; the client is the
   standard library. `cmd/wssh/client.go` aliases the latter as `gossh`.
+- Agent forwarding is supported server-side via `auth/authfwd/`. The
+  `--agent-keys` flag on the server subcommands loads private keys
+  (PEM, unencrypted) into an in-memory keyring. The server installs
+  the `auth-agent@openssh.com` channel handler and accepts the
+  `auth-agent-req@openssh.com` global request. A client that opens
+  the channel speaks the standard agent protocol against the
+  in-memory keys; signatures are produced in this process and never
+  reach the wire.
+  Note that openssh's `ssh -A` is the *reverse* direction -- it
+  forwards the *client's* local agent to the server. Talking to a
+  server-side agent requires a custom client (the browser, a small
+  Go program that opens the channel directly, or `wssh client
+  --agent`).
+  `authfwd.Install` also creates a per-connection local Unix socket
+  in a temp dir and stashes its path on the per-connection
+  context under `authfwd.SSHAuthSockKey`. The shell middleware
+  reads that path and appends `SSH_AUTH_SOCK=<path>` to the
+  session env, so any program on the remote side that talks to
+  `SSH_AUTH_SOCK` (ssh-add, git push over SSH, etc) finds a working
+  local agent backed by the in-memory keyring. The socket is
+  created eagerly on every connection (not lazily when the
+  channel opens) so the env can be set at exec time; cleanup
+  watches the connection context and removes the temp dir on
+  disconnect.
+- The agent channel handler is installed AFTER the default channel
+  handlers map is created. The `wish.NewServer` options run before
+  that map is set, so any handler installed via `ssh.Option` would be
+  wiped. `auth/authfwd.Install` mutates the map in place after it has
+  been built, which is the only ordering that survives.
 
 ## File-by-file map
 
@@ -237,13 +281,14 @@ is real.
 | `Makefile` | Build entry point. `make wssh` is the target that builds a working binary; bare `make` lists targets. |
 | `wssh.go`, `wssh_test.go` | `Server` (HTTP handler wrapping wish). Path/origin/auth tests. |
 | `auth/auth.go`, `auth/auth_test.go` | `auth.Config`, key files (re-read each attempt), password file (bcrypt or plaintext). |
+| `auth/authfwd/`, `auth/authfwd/agent_e2e_test.go` | In-memory ssh-agent. `Keyring([]crypto.Signer)` builds it; `Install(*ssh.Server, agent)` registers the auth-agent channel and request handlers on a server already built (the option-style `Forwarding` exists for callers that wire from a fresh `wish.NewServer`). `--agent-keys` in `cmd/wssh/serve.go` loads PEM keys (ed25519/RSA) and feeds the result. |
 | `client/client.go`, `client/client_test.go` | `Session`, `Dial`, `Write`/`WriteContext`/`Resize`/`Close`/`CloseStdin`. Native tests over loopback. |
 | `client/wasm.go` | `//go:build js && wasm`. JS bridge, parked forever, exports `connect`/`write`/`resize`/`disconnect`/`generateKey`/`keyInfo`. Reads the optional command from arg 6. |
 | `client/wasmauth.go` | `//go:build js && wasm`. JSON-shaped `credentials`, `signerFor`, `buildAuth`, `jsGenerateKey`, `jsKeyInfo`. |
 | `client/build.sh` | WASM build + `wasm_exec.js` copy. Sets `CGO_ENABLED=0` so the cross-compile works on hosts (Termux) where cgo is on by default. |
 | `client/cmd/webssh-web/main.go` | `//go:build js && wasm`. Just calls `client.Start()`. |
 | `cmd/wssh/main.go` | Cobra root, fang executor, `--verbose`, `version`/`commit` from `-ldflags`. |
-| `cmd/wssh/serve.go` | Shared `serveOptions`, `serve`, `drain`, `frontEnd`, `noCache`, `startRelays`, `addAuthFlags`, `openBrowser`. |
+| `cmd/wssh/serve.go` | Shared `serveOptions`, `serve`, `drain`, `frontEnd`, `noCache`, `startRelays`, `addAuthFlags`, `addAgentFlags`, `openBrowser`, openssh-key-v1 parser (in `parseUnencryptedKey`). |
 | `cmd/wssh/server.go` | `wssh server` subcommand (bare transport). |
 | `cmd/wssh/web.go` | `wssh web` subcommand (server + front end, `--ui-only`, `--open`, `--path /ws`). Carries `//go:embed all:static` and `//go:generate bash ../../client/build.sh`; `wasmClientMissing` warns at startup if the wasm is absent. |
 | `cmd/wssh/client.go` | `wssh client` subcommand (terminal raw mode, `known_hosts`, password/key auth, custom command via trailing args). |

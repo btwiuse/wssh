@@ -19,6 +19,7 @@ import (
 	"charm.land/log/v2"
 	"charm.land/ssh"
 	"charm.land/wish/v2"
+	"github.com/btwiuse/wssh/auth/authfwd"
 )
 
 // defaultTerm is used when the client did not ask for a PTY, so programs that
@@ -231,6 +232,16 @@ func environ(s ssh.Session, term string) []string {
 	// it in the child environment is the difference.
 	if !hasEnv(env, "PATH") {
 		env = append(env, "PATH="+systemPath())
+	}
+
+	// SSH_AUTH_SOCK is set when the server has an in-memory agent
+	// running on the connection; the path is the local Unix
+	// socket authfwd stashed on the per-connection context. An
+	// empty path means "no agent on this connection" -- which is
+	// the common case when the server has no --agent-keys -- and
+	// is left unset so programs can tell the difference.
+	if sock, _ := s.Context().Value(authfwd.SSHAuthSockKey).(string); sock != "" {
+		env = set(env, "SSH_AUTH_SOCK", sock)
 	}
 
 	return env

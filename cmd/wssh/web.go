@@ -115,6 +115,7 @@ the toolbar is editable.`,
 			"listens locally, anything else dials a remote relay")
 
 	addAuthFlags(cmd, &opts.Auth)
+	addAgentFlags(cmd, &opts.AgentKeys)
 
 	return cmd
 }

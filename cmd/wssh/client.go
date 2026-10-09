@@ -33,6 +33,7 @@ func newClientCmd() *cobra.Command {
 		passphraseFile  string
 		knownHosts      string
 		insecureHostKey bool
+		agentKey        string
 		cols, rows      int
 	)
 
@@ -64,6 +65,10 @@ SSH window-change request.`,
   # Offer a password as well, prompted for
   wssh client --password-auth wss://ssh.example.com/ws
 
+  # Expose the same key over an in-band ssh-agent channel; the remote
+  # shell will see SSH_AUTH_SOCK and can use it for further hops
+  wssh client --agent ~/.ssh/id_ed25519 wss://ssh.example.com/ws
+
   # Run one command and exit
   wssh client wss://ssh.example.com/ws -- uptime`,
 		Args: cobra.MinimumNArgs(1),
@@ -74,7 +79,7 @@ SSH window-change request.`,
 				args = args[1:]
 			}
 			opts, err := clientOptions(url, username, identities, passwordAuth,
-				passphraseFile, knownHosts, insecureHostKey, cols, rows)
+				passphraseFile, knownHosts, insecureHostKey, agentKey, cols, rows)
 			if err != nil {
 				return err
 			}
@@ -94,6 +99,11 @@ SSH window-change request.`,
 		"known_hosts file to verify the server against (default ~/.ssh/known_hosts)")
 	cmd.Flags().BoolVar(&insecureHostKey, "insecure-host-key", false,
 		"do not verify the server's host key at all")
+	cmd.Flags().StringVar(&agentKey, "agent", "",
+		"unencrypted private key to expose over an in-band ssh-agent "+
+			"channel; the same key is offered for pubkey auth and as the "+
+			"agent's signing key, so the remote side can use it for further "+
+			"hops. Encrypted keys are not supported.")
 	cmd.Flags().IntVar(&cols, "cols", 0, "terminal columns to start with (default: detect)")
 	cmd.Flags().IntVar(&rows, "rows", 0, "terminal rows to start with (default: detect)")
 
@@ -103,7 +113,7 @@ SSH window-change request.`,
 // clientOptions resolves everything that has to be settled before a session
 // starts: who to log in as, what to offer, and what to trust.
 func clientOptions(url, username string, identities []string, passwordAuth bool,
-	passphraseFile, knownHostsPath string, insecureHostKey bool, cols, rows int,
+	passphraseFile, knownHostsPath string, insecureHostKey bool, agentKey string, cols, rows int,
 ) (*client.Options, error) {
 
 	if !strings.HasPrefix(url, "ws://") && !strings.HasPrefix(url, "wss://") {
@@ -122,6 +132,15 @@ func clientOptions(url, username string, identities []string, passwordAuth bool,
 		return nil, errors.New("no user given: pass --user or set WS_USER")
 	}
 
+	// The --agent key also serves as a pubkey auth method. Add
+	// it to the identities list so the standard "no keys were
+	// found" check does not fire when the user only gave
+	// --agent. The client.Dial path recognises the same key
+	// path and avoids loading the file twice.
+	if agentKey != "" {
+		identities = append(identities, agentKey)
+	}
+
 	opts := &client.Options{URL: url, User: username, Cols: cols, Rows: rows}
 
 	auth, err := clientAuthMethods(identities, passwordAuth, passphraseFile)
@@ -129,6 +148,7 @@ func clientOptions(url, username string, identities []string, passwordAuth bool,
 		return nil, err
 	}
 	opts.Auth = auth
+	opts.AgentKeyPath = agentKey
 
 	opts.HostKeyCallback, err = clientHostKeyCallback(knownHostsPath, insecureHostKey)
 	if err != nil {

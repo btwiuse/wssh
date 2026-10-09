@@ -1,10 +1,19 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto"
+	"crypto/ed25519"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/binary"
+	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -20,6 +29,7 @@ import (
 	"charm.land/wish/v2"
 	"github.com/btwiuse/wssh"
 	"github.com/btwiuse/wssh/auth"
+	"github.com/btwiuse/wssh/auth/authfwd"
 	"github.com/btwiuse/wssh/shell"
 	"github.com/spf13/cobra"
 	"github.com/webteleport/wtf"
@@ -66,6 +76,13 @@ type serveOptions struct {
 	// Auth decides who may connect. The zero value authenticates nobody,
 	// which means it accepts everybody, so the startup log says so loudly.
 	Auth auth.Config
+
+	// AgentKeys are paths to private keys loaded into the in-memory
+	// ssh-agent served over the "auth-agent@openssh.com" channel. Each
+	// path is a PEM-encoded private key (encrypted keys are not
+	// supported). The same keys are not used for authentication here;
+	// they are exposed to clients so they can sign with them.
+	AgentKeys []string
 
 	// OpenBrowser points the user's browser at the front end once it is up.
 	// Only meaningful for the web command, which is the one with a page.
@@ -131,6 +148,11 @@ func serve(opts serveOptions) error {
 			return err //nolint:wrapcheck
 		}
 
+		agentRing, err := buildAgent(opts.AgentKeys)
+		if err != nil {
+			return err
+		}
+
 		sessions, err = wssh.NewServer(wssh.Options{
 			HostKeyPath:        opts.HostKeyPath,
 			Middleware:         []wish.Middleware{shell.Middleware()},
@@ -138,6 +160,7 @@ func serve(opts serveOptions) error {
 			Path:               opts.SessionPath,
 			AllowTcpForwarding: opts.AllowTcpForwarding,
 			OriginPatterns:     opts.Origins,
+			Agent:              agentRing,
 			SSHOptions:         authOpts,
 		})
 		if err != nil {
@@ -157,6 +180,9 @@ func serve(opts serveOptions) error {
 		}
 		if len(opts.Origins) > 0 && !anyOrigin {
 			log.Info("restricting origins", "patterns", opts.Origins)
+		}
+		if len(opts.AgentKeys) > 0 {
+			log.Warn("agent forwarding enabled with keys: any client can sign with the loaded keys")
 		}
 		// An empty path mounts on "/", which in Go's mux is the catch-all:
 		// any path opens a session, exactly as a client dialling a bare
@@ -274,6 +300,277 @@ func addAuthFlags(cmd *cobra.Command, cfg *auth.Config) {
 	cmd.Flags().StringSliceVar(&cfg.Passwords, "password", nil,
 		"an accepted password given inline (visible in ps; prefer --password-file)")
 }
+
+// addAgentFlags registers the --agent-keys flag shared by the subcommands.
+func addAgentFlags(cmd *cobra.Command, paths *[]string) {
+	cmd.Flags().StringSliceVar(paths, "agent-keys", nil,
+		"private key files to load into the in-memory ssh-agent served over "+
+			"the auth-agent channel; repeatable, unencrypted PEM only")
+}
+
+// buildAgent loads the given key files into an in-memory ssh-agent. It is
+// called with whatever the user passed via --agent-keys; an empty list
+// returns a nil agent and no error, so callers can use the result
+// unconditionally.
+//
+// Each file is an unencrypted PEM block. We parse it ourselves rather
+// than going through gossh.ParsePrivateKey, because the SSH package
+// returns a value whose underlying crypto.Signer is hidden behind a
+// private struct field; the agent package needs that crypto.Signer to
+// hand the raw key to the agent protocol.
+func buildAgent(paths []string) (authfwd.Agent, error) {
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	keys := make([]crypto.Signer, 0, len(paths))
+	for _, p := range paths {
+		raw, err := os.ReadFile(p) //nolint:gosec
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", p, err)
+		}
+		signer, err := parseUnencryptedKey(raw)
+		if err != nil {
+			return nil, fmt.Errorf("parse %s: %w", p, err)
+		}
+		keys = append(keys, signer)
+	}
+	return authfwd.Keyring(keys)
+}
+
+// parseUnencryptedKey decodes a PEM block and returns the underlying
+// crypto.Signer. Encrypted keys are rejected with an error so a typo
+// does not silently load nothing.
+func parseUnencryptedKey(pemBytes []byte) (crypto.Signer, error) {
+	block, _ := pem.Decode(pemBytes)
+	if block == nil {
+		return nil, errors.New("no PEM block found")
+	}
+	if strings.Contains(block.Headers["Proc-Type"], "ENCRYPTED") || x509.IsEncryptedPEMBlock(block) {
+		return nil, errors.New("encrypted keys are not supported by --agent-keys")
+	}
+	switch block.Type {
+	case "RSA PRIVATE KEY":
+		return x509.ParsePKCS1PrivateKey(block.Bytes)
+	case "EC PRIVATE KEY":
+		return x509.ParseECPrivateKey(block.Bytes)
+	case "PRIVATE KEY":
+		k, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		s, ok := k.(crypto.Signer)
+		if !ok {
+			return nil, fmt.Errorf("PKCS#8 key is not a crypto.Signer: %T", k)
+		}
+		return s, nil
+	case "OPENSSH PRIVATE KEY":
+		// openssh-key-v1 -- newer format, what ssh-keygen produces by
+		// default. The format is well-specified; we parse it here so we
+		// can hand the raw key back to the agent without going through
+		// gossh, which wraps the inner crypto.Signer in an unexported
+		// field that we cannot extract with reflect (Go refuses to
+		// call Interface() on unexported fields).
+		return parseOpenSSHKey(block.Bytes)
+	default:
+		return nil, fmt.Errorf("unsupported PEM block type %q", block.Type)
+	}
+}
+
+// parseOpenSSHKey decodes an "openssh-key-v1" payload and returns the
+// underlying crypto.Signer. Format reference:
+// https://github.com/openssh/openssh-portable/blob/master/PROTOCOL.key
+//
+// Layout:
+//
+//	"openssh-key-v1\0"
+//	ciphername string (ssh-string)
+//	kdfname    string (ssh-string)
+//	kdfoptions string (ssh-string)
+//	number of keys, uint32
+//	public key blob (ssh-string)
+//	private key blob (ssh-string)
+//
+// For unencrypted keys ciphername and kdfname are "none" and kdfoptions is
+// empty. The private blob is itself a sub-format:
+//
+//	checkint  uint32
+//	(for each key) public part | private part
+//
+// We support a single key, which is what ssh-keygen produces.
+func parseOpenSSHKey(data []byte) (crypto.Signer, error) {
+	r := bytes.NewReader(data)
+	magic, err := readCString(r)
+	if err != nil {
+		return nil, fmt.Errorf("read magic: %w", err)
+	}
+	if !bytes.Equal(magic, []byte("openssh-key-v1")) {
+		return nil, fmt.Errorf("not an openssh-key-v1 blob (got %q)", string(magic))
+	}
+	cipher, err := readString(r)
+	if err != nil {
+		return nil, err
+	}
+	kdf, err := readString(r)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := readString(r); err != nil { // kdf options, ignored
+		return nil, err
+	}
+	if string(cipher) != "none" || string(kdf) != "none" {
+		return nil, errors.New("encrypted OPENSSH PRIVATE KEY: not supported by --agent-keys")
+	}
+	var nKeys uint32
+	if err := binary.Read(r, binary.BigEndian, &nKeys); err != nil {
+		return nil, err
+	}
+	if nKeys != 1 {
+		return nil, fmt.Errorf("expected 1 key, got %d", nKeys)
+	}
+	pubBlob, err := readString(r)
+	if err != nil {
+		return nil, err
+	}
+	privBlob, err := readString(r)
+	if err != nil {
+		return nil, err
+	}
+	_ = pubBlob
+
+	// Private blob layout: checkint (uint32), then per-key: type, public,
+	// private, comment. The per-key strings are length-prefixed without a
+	// trailing NUL (the NUL terminators are only at the top level).
+	pr := bytes.NewReader(privBlob)
+	// The spec says: uint32 checkint || uint32 checkint. The second copy
+	// is a sanity check for decryption: the two values must match. For
+	// unencrypted keys both are the same random 32-bit number.
+	var checkintA, checkintB uint32
+	if err := binary.Read(pr, binary.BigEndian, &checkintA); err != nil {
+		return nil, err
+	}
+	if err := binary.Read(pr, binary.BigEndian, &checkintB); err != nil {
+		return nil, err
+	}
+	if checkintA != checkintB {
+		return nil, fmt.Errorf("openssh key: checkints do not match (corrupt or encrypted)")
+	}
+	keyType, err := readString(pr)
+	if err != nil {
+		return nil, err
+	}
+	// The per-key section is: type, public, private, comment. We have
+	// the type, and we do not need the public (we already have it as
+	// pubBlob above), so skip it.
+	if _, err := readString(pr); err != nil {
+		return nil, err
+	}
+	// Private data is the rest of the blob up to the comment.
+	switch string(keyType) {
+	case "ssh-ed25519":
+		privBytes, err := readString(pr)
+		if err != nil {
+			return nil, err
+		}
+		if len(privBytes) != ed25519.PrivateKeySize {
+			return nil, fmt.Errorf("ed25519 private key: got %d bytes, want %d", len(privBytes), ed25519.PrivateKeySize)
+		}
+		return ed25519.PrivateKey(privBytes), nil
+	case "ssh-rsa":
+		// n, e, d, iqmp, p, q, comment -- eight MPINTs followed by a string.
+		// Pull each one through crypto/rsa.
+		n, err := readString(pr)
+		if err != nil {
+			return nil, err
+		}
+		e, err := readString(pr)
+		if err != nil {
+			return nil, err
+		}
+		d, err := readString(pr)
+		if err != nil {
+			return nil, err
+		}
+		iqmp, err := readString(pr)
+		if err != nil {
+			return nil, err
+		}
+		p, err := readString(pr)
+		if err != nil {
+			return nil, err
+		}
+		q, err := readString(pr)
+		if err != nil {
+			return nil, err
+		}
+		key := &rsa.PrivateKey{
+			PublicKey: rsa.PublicKey{
+				N: new(big.Int).SetBytes(n),
+				E: int(new(big.Int).SetBytes(e).Int64()),
+			},
+			D: new(big.Int).SetBytes(d),
+		}
+		key.Primes = []*big.Int{
+			new(big.Int).SetBytes(p),
+			new(big.Int).SetBytes(q),
+		}
+		// d mod (p-1) etc. are recomputed by Validate.
+		if err := key.Validate(); err != nil {
+			// Try once with explicit CRT values if Validate fails.
+			dI := new(big.Int).SetBytes(d)
+			pI := new(big.Int).SetBytes(p)
+			qI := new(big.Int).SetBytes(q)
+			iqmpI := new(big.Int).SetBytes(iqmp)
+			key.Precomputed = rsa.PrecomputedValues{
+				Dp:   new(big.Int).Mod(dI, new(big.Int).Sub(pI, big.NewInt(1))),
+				Dq:   new(big.Int).Mod(dI, new(big.Int).Sub(qI, big.NewInt(1))),
+				Qinv: iqmpI,
+			}
+			if err := key.Validate(); err != nil {
+				return nil, fmt.Errorf("rsa key invalid: %w", err)
+			}
+		}
+		return key, nil
+	default:
+		return nil, fmt.Errorf("openssh key type %q not supported by --agent-keys", keyType)
+	}
+}
+
+// readCString reads a NUL-terminated string from r.
+func readCString(r io.Reader) ([]byte, error) {
+	var buf bytes.Buffer
+	one := make([]byte, 1)
+	for {
+		if _, err := io.ReadFull(r, one); err != nil {
+			return nil, err
+		}
+		if one[0] == 0 {
+			return buf.Bytes(), nil
+		}
+		buf.WriteByte(one[0])
+	}
+}
+
+// readString reads a length-prefixed byte string: a uint32 length followed
+// by that many bytes. Used inside per-key sections, where there is no
+// trailing NUL.
+func readString(r io.Reader) ([]byte, error) {
+	var length uint32
+	if err := binary.Read(r, binary.BigEndian, &length); err != nil {
+		return nil, err
+	}
+	if length > 1<<20 {
+		return nil, fmt.Errorf("string length %d looks too large", length)
+	}
+	buf := make([]byte, length)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return nil, err
+	}
+	return buf, nil
+}
+
+// readString reads a length-prefixed byte string: a uint32 length followed
+// by that many bytes. Used inside per-key sections, where there is no
+// trailing NUL.
 
 // browserURL turns a listen address into something worth pasting into a bar.
 // A wildcard bind has no host to show, so localhost stands in for it.

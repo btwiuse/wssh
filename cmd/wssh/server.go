@@ -64,6 +64,7 @@ for a directly reachable server.`,
 			"listens locally, anything else dials a remote relay")
 
 	addAuthFlags(cmd, &opts.Auth)
+	addAgentFlags(cmd, &opts.AgentKeys)
 
 	return cmd
 }

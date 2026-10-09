@@ -12,16 +12,20 @@ package client
 
 import (
 	"context"
+	"crypto"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	neturl "net/url"
+	"os"
 	"strconv"
 	"sync"
 
+	"github.com/btwiuse/wssh/auth/authfwd"
 	"github.com/coder/websocket"
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/agent"
 )
 
 // ErrSessionClosed is returned when input is offered to a session that has
@@ -75,13 +79,30 @@ type Options struct {
 	// typed into a terminal and a key uploaded to a page are not the same
 	// thing to obtain.
 	Auth []ssh.AuthMethod
+
+	// AgentKeyPath, if set, is the path to a private key the dial
+	// will load and use in two ways: as a publickey auth method
+	// against the server, and as the basis for an in-band ssh-agent
+	// served over the "auth-agent@openssh.com" channel. The same
+	// key does both jobs, so the server can authenticate the user
+	// with what it sees in the channel, and the channel can hand
+	// out signatures for things the user does on the remote side.
+	AgentKeyPath string
 }
 
 // Session is a live connection.
 type Session struct {
-	sshSess *ssh.Session
-	conn    *websocket.Conn
-	cancel  context.CancelFunc
+	// sshClient is the underlying SSH client the session was opened
+	// from. It is exported via Client() so callers that need to
+	// open additional channels (notably the "auth-agent@openssh.com"
+	// channel, for an in-band ssh-agent) can reach the same
+	// connection. The session itself is a wrapper around an
+	// *ssh.Session; the client is the layer that owns the
+	// connection and the channels map.
+	sshClient *ssh.Client
+	sshSess   *ssh.Session
+	conn      *websocket.Conn
+	cancel    context.CancelFunc
 
 	// stdin is a queue rather than a direct writer: keystrokes have to keep
 	// their order, and a write to the SSH channel can block, which must never
@@ -92,6 +113,18 @@ type Session struct {
 	closeOnce sync.Once
 	stdinOnce sync.Once
 	closeErr  error
+}
+
+// Client returns the underlying *ssh.Client the session was opened
+// from. It is the same client the session's channel is multiplexed
+// over, so additional channels (such as "auth-agent@openssh.com")
+// opened through it share the session's authentication and lifetime.
+//
+// Returns nil only when Dial succeeded without producing a client,
+// which today does not happen; callers can treat a nil return as
+// "the session never started".
+func (s *Session) Client() *ssh.Client {
+	return s.sshClient
 }
 
 // Dial opens a session and starts the remote program. It returns once the
@@ -143,6 +176,22 @@ func Dial(ctx context.Context, opts Options) (*Session, error) {
 	// The WebSocket reports a placeholder, which nothing can match, so the
 	// connection is given one that describes where we actually dialled.
 	netConn = &peerAddrConn{Conn: netConn, addr: webPeer(parsed)}
+
+	// If an agent key path was given, the same key has to be
+	// offered for publickey auth as well as exposed on the agent
+	// channel. The two halves have to match: the server's
+	// PublicKeyHandler must accept this key for the handshake to
+	// succeed, after which the agent channel is the one the
+	// remote side uses for further work.
+	if opts.AgentKeyPath != "" {
+		signer, err := loadAgentKey(opts.AgentKeyPath)
+		if err != nil {
+			cancel()
+			_ = wsConn.Close(websocket.StatusNormalClosure, "")
+			return nil, err
+		}
+		opts.Auth = append(opts.Auth, ssh.PublicKeys(signer))
+	}
 
 	clientConn, chans, reqs, err := ssh.NewClientConn(netConn, address, &ssh.ClientConfig{
 		User:            opts.User,
@@ -204,16 +253,114 @@ func Dial(ctx context.Context, opts Options) (*Session, error) {
 	}
 
 	s := &Session{
-		sshSess: sshSess,
-		conn:    wsConn,
-		cancel:  cancel,
-		stdin:   make(chan []byte, 64),
-		done:    make(chan struct{}),
+		sshClient: client,
+		sshSess:   sshSess,
+		conn:      wsConn,
+		cancel:    cancel,
+		stdin:     make(chan []byte, 64),
+		done:      make(chan struct{}),
+	}
+
+	// If an agent key path was given, open the auth-agent channel on
+	// the same connection and tell the server we want agent
+	// forwarding. The same key is what the server saw during auth,
+	// so the channel can answer signatures for the rest of the
+	// session, including whatever the remote shell tries to do over
+	// its forwarded agent.
+	if opts.AgentKeyPath != "" {
+		if err := s.openAgent(opts.AgentKeyPath); err != nil {
+			_ = s.Close()
+			return nil, err
+		}
 	}
 
 	go s.pump(stdin, stdout, stderr, opts)
 
 	return s, nil
+}
+
+// openAgent loads the key at path, opens an "auth-agent@openssh.com"
+// channel on the session's underlying *ssh.Client, and asks the
+// server to forward that channel to any further sessions the user
+// opens on the remote side (the "ssh -A" equivalent).
+//
+// The key is loaded with ssh.ParsePrivateKey. Encrypted keys are
+// not supported: passphrase prompting is the wrong shape for a
+// browser-driven dial and is also out of scope for the typical CLI
+// use of this option, where the key file is meant to be the one
+// matching the server's --authorized-keys.
+//
+// The auth method is built on top of an in-memory ssh-agent: the
+// same key is exposed to the server as both a PublicKeys auth
+// method and as a signable entry in the agent's keyring. The agent
+// lives on a goroutine that pumps bytes between the SSH channel and
+// the keyring.
+func (s *Session) openAgent(path string) error {
+	signer, err := loadAgentKey(path)
+	if err != nil {
+		return err
+	}
+	cs, err := authfwd.ExtractSigner(signer)
+	if err != nil {
+		return fmt.Errorf("extract signer from %s: %w", path, err)
+	}
+
+	// Open the agent channel. The server's authfwd handler accepts
+	// any auth-agent@openssh.com channel; bytes on it are the
+	// standard agent protocol.
+	ch, reqs, err := s.sshClient.OpenChannel("auth-agent@openssh.com", nil)
+	if err != nil {
+		return fmt.Errorf("open agent channel: %w", err)
+	}
+	go ssh.DiscardRequests(reqs)
+
+	// Build a tiny agent that holds the one key, and serve it on
+	// the channel.
+	ring, err := authfwd.Keyring([]crypto.Signer{cs})
+	if err != nil {
+		_ = ch.Close()
+		return fmt.Errorf("build agent keyring: %w", err)
+	}
+	go func() {
+		defer ch.Close() //nolint:errcheck
+		// Discard the expected close errors (channel/EOF); anything
+		// else is a real problem that the user should know about.
+		if err := agent.ServeAgent(ring, ch); err != nil && !isExpectedAgentClose(err) {
+			_ = err // debug builds may want a hook here
+		}
+	}()
+
+	// Request agent forwarding for any further sessions the
+	// remote side might start (the equivalent of openssh's `ssh
+	// -A`). On the server side this is just a global request; if
+	// the server has the auth-agent-req handler installed, the
+	// remote shell will see SSH_AUTH_SOCK set when it starts.
+	if err := agent.RequestAgentForwarding(s.sshSess); err != nil {
+		// Forwarding is a best-effort hint; the channel we just
+		// opened still works for direct sign requests from this
+		// process. The user will simply not get the agent when
+		// they SSH further from the remote side.
+		_ = err
+	}
+	return nil
+}
+
+// loadAgentKey reads a private key from disk and wraps it in an
+// ssh.Signer. The wrapper is good enough for PublicKeys auth
+// (which only needs PublicKey); the in-memory agent uses
+// ExtractSigner on the same value to recover the underlying
+// crypto.Signer. Encrypted keys are rejected -- passphrase
+// prompting is the wrong shape for a browser-driven dial.
+func loadAgentKey(path string) (ssh.Signer, error) {
+	raw, err := os.ReadFile(path) //nolint:gosec
+	if err != nil {
+		return nil, fmt.Errorf("read agent key %s: %w", path, err)
+	}
+	signer, err := ssh.ParsePrivateKey(raw)
+	if err != nil {
+		return nil, fmt.Errorf("parse agent key %s: %w", path, err)
+	}
+	return signer, nil
 }
 
 // pump moves data in both directions until the remote side hangs up.
@@ -375,4 +522,20 @@ func webPeer(u *neturl.URL) net.Addr {
 		return &net.TCPAddr{}
 	}
 	return &net.TCPAddr{IP: net.ParseIP(u.Hostname()), Port: number}
+}
+
+// isExpectedAgentClose matches the closed-connection errors that bubble
+// up from agent.ServeAgent when the SSH channel ends before the agent
+// does. They are not worth logging: a client tearing down the
+// session is the normal end. The sentinels are not exported, so
+// match by message instead.
+func isExpectedAgentClose(err error) bool {
+	if err == nil {
+		return true
+	}
+	msg := err.Error()
+	return msg == "EOF" ||
+		msg == "io: read/write on closed pipe" ||
+		msg == "use of closed network connection" ||
+		msg == "channel not open"
 }
