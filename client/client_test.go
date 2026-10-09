@@ -244,3 +244,45 @@ func TestWriteAfterRemoteExitDoesNotPanic(t *testing.T) {
 		}
 	}
 }
+
+// A session has to start with a PATH that its child processes can see, not
+// just one the shell can look commands up with.
+//
+// The distinction is the whole bug: macOS /etc/profile does set PATH, but as
+// an unexported shell variable, so the shell finds ls while everything it
+// spawns - a python that shells out, a Makefile that calls git - sees nothing.
+// `env` is an external binary, so it reads the exported environment and is the
+// only thing here that can tell the two cases apart.
+func TestSessionExportsPathToChildProcesses(t *testing.T) {
+	url, srvLog := startServer(t)
+	col := newCollector()
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	sess, err := client.Dial(ctx, client.Options{
+		URL:     url,
+		User:    "tester",
+		Command: "env | grep -q '^PATH=' && echo PATH_EXPORTED",
+		OnData:  col.onData,
+		OnClose: col.onClose,
+	})
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer sess.Close() //nolint:errcheck
+
+	select {
+	case err := <-col.done:
+		if err != nil {
+			t.Fatalf("session ended with error: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatalf("timed out; output=%q server log=%s", col.String(), srvLog.String())
+	}
+
+	if got := col.String(); !strings.Contains(got, "PATH_EXPORTED") {
+		t.Fatalf("child process cannot see PATH; output=%q server log=%s",
+			got, srvLog.String())
+	}
+}

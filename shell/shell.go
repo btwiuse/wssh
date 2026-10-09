@@ -25,6 +25,20 @@ import (
 // consult TERM still get a sensible terminal type.
 const defaultTerm = "xterm-256color"
 
+// defaultPath is the PATH a session starts from: the standard tool
+// directories and nothing else.
+//
+// It is close to what sshd compiles in (_PATH_STDPATH), with /usr/local/bin
+// in front of the rest because that is where hand-installed tools and the
+// older Homebrew prefix live, and a session that cannot see them is a
+// tedious thing to debug. The ordering follows /etc/paths.
+//
+// It is deliberately not read from the environment wssh itself was started
+// with. Inheriting that would make every session a copy of however the
+// operator happened to launch the server; sshd refuses the same thing for
+// the same reason.
+const defaultPath = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
 // Middleware runs the local user's shell for the session.
 func Middleware() wish.Middleware {
 	return func(next ssh.Handler) ssh.Handler {
@@ -153,6 +167,24 @@ func path() string {
 	return "/bin/sh"
 }
 
+// systemPath returns the PATH a session starts from when the client did not
+// send one. Windows gets the conventional system directories instead: a
+// POSIX-style PATH there would break every command lookup.
+func systemPath() string {
+	if runtime.GOOS != "windows" {
+		return defaultPath
+	}
+	root := os.Getenv("SystemRoot")
+	if root == "" {
+		root = `C:\Windows`
+	}
+	return strings.Join([]string{
+		filepath.Join(root, "system32"),
+		root,
+		filepath.Join(root, "System32", "Wbem"),
+	}, ";")
+}
+
 // loginArgs returns the arguments that make the shell a login shell.
 func loginArgs() []string {
 	if runtime.GOOS == "windows" {
@@ -188,7 +220,33 @@ func environ(s ssh.Session, term string) []string {
 		env = set(env, "PWD", pwd)
 	}
 
+	// PATH is filled in only when the session did not already carry one, so a
+	// client that sent PATH keeps it. Narrowing what a client is allowed to
+	// send is a separate decision from giving every session a PATH at all.
+	//
+	// The fill is what fixes the case where the login shell alone is not
+	// enough. macOS /etc/profile does set PATH, but as an unexported shell
+	// variable: the shell finds ls, and everything it spawns - a python that
+	// shells out, a Makefile that calls git - sees no PATH whatsoever. Putting
+	// it in the child environment is the difference.
+	if !hasEnv(env, "PATH") {
+		env = append(env, "PATH="+systemPath())
+	}
+
 	return env
+}
+
+// hasEnv reports whether env already carries key. The comparison folds case
+// because Windows treats environment names that way, and matching
+// case-sensitively there would append a second PATH beside the first.
+func hasEnv(env []string, key string) bool {
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		if strings.EqualFold(name, key) {
+			return true
+		}
+	}
+	return false
 }
 
 // set replaces key in env, or appends it when absent.
