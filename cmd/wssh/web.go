@@ -6,13 +6,20 @@ import (
 	"embed"
 	"io/fs"
 
+	"charm.land/log/v2"
 	"github.com/spf13/cobra"
 )
 
 // The front end is compiled into the binary so that deploying wssh is
-// deploying one file. The wasm binary itself is not committed; build it with
-// client/build.sh.
+// deploying one file. The wasm binary itself is not committed: build it with
+// client/build.sh, or let go:generate / make do it.
 //
+// The embed covers the directory rather than a list of files, so a build made
+// before the wasm exists still compiles and still runs; the page loads, and
+// then fails in the worker with a 404. Nothing here can turn that into a
+// compile error, which is why the warning below exists.
+//
+//go:generate bash ../../client/build.sh
 //go:embed all:static
 var embedded embed.FS
 
@@ -25,6 +32,14 @@ func webAssets() fs.FS {
 		panic(err)
 	}
 	return assets
+}
+
+// wasmClientMissing reports whether the browser client is absent from the
+// embedded assets. The embed succeeds either way, so this is the only place
+// the mistake is still visible before someone opens a terminal.
+func wasmClientMissing(assets fs.FS) bool {
+	_, err := fs.Stat(assets, "ssh.wasm")
+	return err != nil
 }
 
 func newWebCmd() *cobra.Command {
@@ -71,6 +86,10 @@ the toolbar is editable.`,
 				opts.Description = "websocket + web"
 			}
 			opts.Assets = webAssets()
+			if wasmClientMissing(opts.Assets) {
+				log.Warn("no ssh.wasm in the front end: the page will load but " +
+					"cannot connect. Build it with 'go generate ./...' or 'make'")
+			}
 			return serve(opts)
 		},
 	}
