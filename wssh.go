@@ -280,37 +280,21 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// ListenAndServe accepts plain TCP connections on addr and serves each one as
-// an SSH session, the way `ssh -p PORT host` would reach the same server the
-// browser reaches over a WebSocket.
+// ServeTCP drives raw TCP connections on ln as SSH sessions, the same way
+// ssh -p PORT host reaches the same server the browser reaches over a
+// WebSocket. The wish Server carries the host key, channel handlers, and
+// wish middleware - NewServer installs them all - so HandleConn on a raw
+// conn is enough to share the configuration without rebuilding it.
 //
-// The wish Server is built once with the host key, channel handlers and
-// middleware already in place (NewServer does that), so HandleConn on a raw
-// TCP conn is enough to drive the same handshake the WebSocket path runs. The
-// advantage is sharing one configuration with the WebSocket listener: a TCP
-// session and a ws:// session reach the same shell with the same auth.
-//
-// The function blocks until ctx is cancelled or the listener errors. Closing
-// the listener is the caller's job, since this Server may have any number of
-// listeners attached to it.
-func (s *Server) ListenAndServeTCP(ctx context.Context, addr string) error {
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return fmt.Errorf("listen tcp %s: %w", addr, err)
-	}
-	defer ln.Close() //nolint:errcheck
-
-	s.opts.Logger.Info("listening", "address", ln.Addr().String(), "scheme", "tcp/ssh")
-
-	go func() {
-		<-ctx.Done()
-		_ = ln.Close() //nolint:errcheck
-	}()
-
+// The function blocks until ln is closed or Accept fails for another reason.
+// A closed listener returns immediately with no error, since that is how
+// this Server is shut down; per-connection errors stay on the goroutines
+// that ran HandleConn.
+func (s *Server) ServeTCP(ln net.Listener) error {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			if ctx.Err() != nil {
+			if errors.Is(err, net.ErrClosed) {
 				return nil
 			}
 			return fmt.Errorf("accept: %w", err)

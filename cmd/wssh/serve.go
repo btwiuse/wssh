@@ -287,20 +287,17 @@ func serve(opts serveOptions) error {
 	// key, the same auth, the same wish middleware - only the framing differs.
 	// UIOnly runs without a sessions server, in which case there is nothing
 	// to put behind the extra port and the flag is just a footgun.
-	var (
-		tcpCancel context.CancelFunc
-		tcpErr    chan error
-	)
+	var tcpListener net.Listener
 	if opts.TCPAddr != "" {
 		if sessions == nil {
 			return errors.New("--tcp-addr has no effect with --ui-only: there are no sessions to serve")
 		}
-		var tcpCtx context.Context
-		tcpCtx, tcpCancel = context.WithCancel(context.Background())
-		tcpErr = make(chan error, 1)
-		go func() {
-			tcpErr <- sessions.ListenAndServeTCP(tcpCtx, opts.TCPAddr)
-		}()
+		ln, err := net.Listen("tcp", opts.TCPAddr)
+		if err != nil {
+			return fmt.Errorf("listen tcp %s: %w", opts.TCPAddr, err) //nolint:wrapcheck
+		}
+		tcpListener = ln
+		log.Info("listening", "address", ln.Addr().String(), "scheme", "tcp/ssh")
 	}
 
 	if opts.OpenBrowser {
@@ -315,6 +312,17 @@ func serve(opts serveOptions) error {
 	signal.Notify(signals, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(signals)
 
+	// Spin up the TCP accept loop alongside the WS one. Closing the listener
+	// is the select exit's job - see below - so a single signal tears both
+	// listeners down without the goroutines racing over the same channel.
+	if tcpListener != nil {
+		go func() {
+			if err := sessions.ServeTCP(tcpListener); err != nil {
+				log.Warn("tcp listener stopped", "error", err)
+			}
+		}()
+	}
+
 	select {
 	case sig := <-signals:
 		log.Info("shutting down", "signal", sig.String(), "grace", opts.ShutdownTimeout)
@@ -322,22 +330,15 @@ func serve(opts serveOptions) error {
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return err //nolint:wrapcheck
 		}
-	case err := <-tcpErr:
-		if err != nil {
-			return err //nolint:wrapcheck
-		}
 	}
 
-	// The TCP listener runs with its own context, so cancel it here even on
-	// paths where the WS listener was the one that broke (its err was wrapped
-	// in serveErr already).
-	if tcpCancel != nil {
-		tcpCancel()
-	}
-
-	// Stop accepting before draining, so no session starts while we shut down.
+	// Stop accepting from both listeners before draining, so no session
+	// starts while we shut down.
 	if err := listener.Close(); err != nil {
-		log.Debug("could not close listener", "error", err)
+		log.Debug("could not close websocket listener", "error", err)
+	}
+	if tcpListener != nil {
+		_ = tcpListener.Close() //nolint:errcheck
 	}
 
 	if sessions == nil {
