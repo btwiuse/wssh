@@ -269,6 +269,13 @@ function App() {
   // has to be yes or no rather than text.
   const [signature, setSignature] = useState(null);
 
+  // A connected browser wallet. The address is all this page ever learns: the
+  // private half stays in the extension, and the only thing that comes back
+  // from a signature request is the signature.
+  const [wallet, setWallet] = useState(null);
+  const walletRef = useRef(null);
+  const walletBusy = useRef(false);
+
   // Agent forwarding is the browser's ssh -A. Off unless asked for: with it
   // on, anything in the session can ask the page to sign, which is why every
   // signature still stops and asks here.
@@ -291,6 +298,72 @@ function App() {
     setPrompts(rest);
     if (current) current.resolve(value);
   }, []);
+
+  const connectWallet = useCallback(async () => {
+    const provider = window.solana;
+    if (!provider) {
+      setError('No Solana wallet found. Install one and reload.');
+      return;
+    }
+    if (walletBusy.current) return;
+    walletBusy.current = true;
+    setError('');
+    try {
+      const response = await provider.connect();
+      const address = response?.publicKey?.toBase58?.() || provider.publicKey?.toBase58?.();
+      if (!address) throw new Error('the wallet connected but reported no address');
+      // Hex rather than the address: it is what the Go side needs, and it
+      // avoids teaching the bridge a base58 alphabet.
+      const publicKeyHex = bytesToHex(provider.publicKey.toBytes());
+      walletRef.current = publicKeyHex;
+      setWallet({ address, publicKeyHex });
+    } catch (err) {
+      setError(`could not connect the wallet: ${err?.message || err}`);
+    } finally {
+      walletBusy.current = false;
+    }
+  }, []);
+
+  const disconnectWallet = useCallback(async () => {
+    try {
+      await window.solana?.disconnect?.();
+    } catch {
+      /* the wallet is being discarded either way */
+    }
+    walletRef.current = null;
+    setWallet(null);
+  }, []);
+
+  const bytesToHex = (bytes) =>
+    Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+
+  // Put the request to the extension. No confirmation here: the signer that
+  // leads to this has already shown the same summary and waited for a yes, and
+  // asking again would put the same question on screen twice in a row. The
+  // extension's own approval is the second gate, and it is the real one.
+  //
+  // Refusing, or there being no wallet, answers with nothing: Go treats that
+  // as a refusal and tells the far end, rather than leaving it waiting.
+  const askWalletToSign = useCallback(async (id, _summary, dataHex) => {
+    const provider = window.solana;
+    if (!provider?.publicKey || !dataHex) return '';
+    try {
+      const bytes = hexToBytes(dataHex);
+      const { signature } = await provider.signMessage(bytes);
+      return bytesToHex(signature);
+    } catch (err) {
+      setError(`the wallet did not sign: ${err?.message || err}`);
+      return '';
+    }
+  }, []);
+
+  const hexToBytes = (hex) => {
+    const out = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < out.length; i += 1) {
+      out[i] = parseInt(hex.substr(i * 2, 2), 16);
+    }
+    return out;
+  };
 
   // Refusing is an answer, not a failure: the far end is told the signature
   // was declined and can report that. Anything else - a closed tab, a dead
@@ -450,6 +523,16 @@ function App() {
         return;
       }
 
+      // The wallet answers this one itself: it has to show what is being
+      // signed and then put it to the extension, which is a round trip rather
+      // than a yes or no.
+      if (kind === 'walletsign') {
+        askWalletToSign(id, detail, event.data.extra).then((hex) => {
+          worker.postMessage({ type: 'promptAnswer', id, value: hex });
+        });
+        return;
+      }
+
       const label = kind === 'passphrase' ? `passphrase for ${name}` : 'password';
       ask(label, kind === 'passphrase').then((value) => {
         worker.postMessage({ type: 'promptAnswer', id, value });
@@ -503,9 +586,9 @@ function App() {
       cols: term?.cols ?? 80,
       rows: term?.rows ?? 24,
       command: command.trim(),
-      credentials: credentialsForConnect(forwardAgent),
+      credentials: credentialsForConnect(forwardAgent, walletRef.current, wallet?.address),
     });
-  }, [endpoint, user, command, forwardAgent]);
+  }, [endpoint, user, command, forwardAgent, wallet]);
 
   // The address key handler runs before connect is declared, so it calls
   // through this.
@@ -672,6 +755,24 @@ function App() {
           onInput=${(e) => setCommand(e.target.value)}
           onKeyDown=${(e) => { if (e.key === 'Enter' && !connected) connect(); }}
         />
+        ${wallet
+          ? html`<button
+              class="flex items-center gap-1 text-xs rounded px-2 py-1 shrink-0
+                     bg-slate-800 border border-slate-700 hover:bg-slate-700
+                     ${connected ? 'opacity-50' : ''}"
+              disabled=${connected || status === 'connecting'}
+              title="Sign for this session with the connected wallet. The key stays in the extension."
+              onClick=${disconnectWallet}>
+              ${wallet.address.slice(0, 4)}…${wallet.address.slice(-4)}
+            </button>`
+          : html`<button
+              class="px-2 py-1 text-xs rounded bg-slate-800 border border-slate-700
+                     hover:bg-slate-700 shrink-0"
+              disabled=${connected || status === 'connecting'}
+              title="Use a browser wallet's key for this session. It signs on request; the key itself never leaves the extension."
+              onClick=${connectWallet}>
+              connect wallet
+            </button>`}
         <label
           class="flex items-center gap-1 text-xs text-slate-400 shrink-0 select-none
                  ${connected ? 'opacity-50' : ''}"

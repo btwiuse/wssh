@@ -28,6 +28,17 @@ type credentials struct {
 	// Passwords are offered after the keys, if the user has any.
 	Passwords []string `json:"passwords"`
 
+	// WalletPublicKey is the connected browser wallet's ed25519 public key as
+	// hex. When set, the wallet is offered alongside the keys above: the
+	// private half stays in the wallet extension and only signatures come
+	// back.
+	WalletPublicKey string `json:"walletPublicKey"`
+
+	// WalletAddress is the connected wallet's account address, used to name
+	// the key in a signing question. Optional: without it the question falls
+	// back to the key's fingerprint.
+	WalletAddress string `json:"walletAddress"`
+
 	// ForwardAgent turns the keys above into an agent the session can ask to
 	// sign with. It is the browser's `ssh -A`: the keys stay here, and only
 	// signatures come back. Off unless the user asked for it.

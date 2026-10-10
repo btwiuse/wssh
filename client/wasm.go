@@ -133,7 +133,7 @@ func jsConnect(_ js.Value, args []js.Value) any {
 	if creds.ForwardAgent {
 		hook := js.Global().Get(askSignatureHook)
 		confirmSignature = func(summary string) (bool, error) {
-			answer, err := awaitStringTimeout(hook, summary, signatureTimeout)
+			answer, err := awaitStringTimeout(hook, []string{summary}, signatureTimeout)
 			if err != nil {
 				return false, err
 			}
@@ -146,6 +146,20 @@ func jsConnect(_ js.Value, args []js.Value) any {
 		if err != nil {
 			post(map[string]any{"type": "error", "message": err.Error()})
 			return
+		}
+
+		// A connected wallet joins the same keyring. It is a signer like any
+		// other here; what makes it different is where the private half
+		// lives, which is entirely on the other side of the bridge.
+		if creds.WalletPublicKey != "" {
+			wallet, err := walletSigner(creds.WalletPublicKey, creds.WalletAddress)
+			if err != nil {
+				post(map[string]any{"type": "error",
+					"message": "the connected wallet could not be used: " + err.Error()})
+				return
+			}
+			auth = append(auth, gossh.PublicKeys(wallet))
+			signers = append(signers, wallet)
 		}
 
 		sess, err := Dial(context.Background(), Options{

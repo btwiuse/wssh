@@ -57,7 +57,7 @@ func keyLabel(signer gossh.Signer) string {
 // declaring deadlock, and both are here, so a timeout is safe. What is not safe
 // is adding a second parking goroutine per call, so the timer is the select's
 // other arm rather than something of its own.
-func awaitStringTimeout(fn js.Value, arg string, limit time.Duration) (string, error) {
+func awaitStringTimeout(fn js.Value, args []string, limit time.Duration) (string, error) {
 	if fn.Type() != js.TypeFunction {
 		return "", errNoFunction
 	}
@@ -84,7 +84,11 @@ func awaitStringTimeout(fn js.Value, arg string, limit time.Duration) (string, e
 	})
 	defer reject.Release()
 
-	fn.Invoke(arg).Call("then", resolve, reject)
+	incoming := make([]any, 0, len(args))
+	for _, arg := range args {
+		incoming = append(incoming, arg)
+	}
+	fn.Invoke(incoming...).Call("then", resolve, reject)
 
 	timer := time.NewTimer(limit)
 	defer timer.Stop()

@@ -1,11 +1,9 @@
 package client
 
 import (
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 
 	gossh "golang.org/x/crypto/ssh"
 )
@@ -58,7 +56,7 @@ func (c *ConfirmingSigner) Sign(rand io.Reader, data []byte) (*gossh.Signature, 
 		return nil, errors.New("no way to ask before signing")
 	}
 
-	ok, err := c.ask(c.summary(data))
+	ok, err := c.ask(summarizeSignature(c.name, data))
 	if err != nil {
 		return nil, fmt.Errorf("ask before signing: %w", err)
 	}
@@ -66,46 +64,4 @@ func (c *ConfirmingSigner) Sign(rand io.Reader, data []byte) (*gossh.Signature, 
 		return nil, ErrSignatureDeclined
 	}
 	return c.inner.Sign(rand, data)
-}
-
-// summary describes what is about to be signed. It never includes the key, and
-// the data itself is only shown when it looks like something a person would
-// recognise; a hex prefix is the honest answer for everything else.
-func (c *ConfirmingSigner) summary(data []byte) string {
-	what := printable(data)
-	if what == "" {
-		what = hex.EncodeToString(head(data, 24))
-		if len(data) > 24 {
-			what += "..."
-		}
-	}
-	return fmt.Sprintf("%s wants to sign %d bytes: %s", c.name, len(data), what)
-}
-
-// head returns at most n bytes of b.
-func head(b []byte, n int) []byte {
-	if len(b) < n {
-		return b
-	}
-	return b[:n]
-}
-
-// printable returns data as text if it is short and mostly printable, and the
-// empty string otherwise. Guessing wrong here would be worse than showing
-// nothing, because the guess is what the user is asked to approve.
-func printable(data []byte) string {
-	const max = 120
-	if len(data) == 0 || len(data) > max {
-		return ""
-	}
-	for _, b := range data {
-		if b != '\n' && b != '\t' && (b < 0x20 || b > 0x7e) {
-			return ""
-		}
-	}
-	text := strings.TrimSpace(string(data))
-	if text == "" {
-		return ""
-	}
-	return text
 }

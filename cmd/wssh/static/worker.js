@@ -86,11 +86,14 @@ function flushInput() {
 let nextPromptId = 0;
 const pendingPrompts = new Map();
 
-function askPage(kind, name, detail) {
+function askPage(kind, name, detail, extra) {
   const id = ++nextPromptId;
   return new Promise((resolve) => {
     pendingPrompts.set(id, resolve);
-    postMessage({ type: 'prompt', id, kind, name: name || '', detail: detail || '' });
+    postMessage({
+      type: 'prompt', id, kind,
+      name: name || '', detail: detail || '', extra: extra || '',
+    });
   });
 }
 
@@ -104,6 +107,13 @@ globalThis.__websshAskPassphraseFn = (name) => askPage('passphrase', name);
 // rather than a key name. The answer is yes or no, and "no" is a real answer
 // rather than a failure.
 globalThis.__websshAskSignature = (summary) => askPage('signature', '', summary);
+
+// Asking the wallet to sign. The wallet lives on the page, so this is the same
+// round trip: the page shows the request, calls the wallet extension, and
+// answers with the signature in hex. An empty answer is a refusal, which is an
+// answer rather than a failure.
+globalThis.__websshSignWithWallet = (summary, dataHex) =>
+  askPage('walletsign', '', summary, dataHex);
 
 // Answering a prompt the page has shown.
 function answerPrompt(id, value) {

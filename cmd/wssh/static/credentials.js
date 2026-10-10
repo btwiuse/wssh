@@ -136,11 +136,19 @@ export const noHooks = { install: installHooks };
 
 // credentialsForConnect bundles what to offer the server, in the order a
 // person would try them: keys first, then the password.
-export function credentialsForConnect(forwardAgent = false) {
+export function credentialsForConnect(forwardAgent = false, walletPublicKey = '', walletAddress = '') {
   return {
     // Whether the session may ask these keys to sign. The keys stay in the
     // page either way: only signatures come back over the connection.
     forwardAgent: !!forwardAgent,
+    // The connected wallet's public key as hex. The private half never comes
+    // near this page or the connection; the extension signs and we forward
+    // what it returns.
+    walletPublicKey: walletPublicKey || '',
+    // The address only ever names the key in a signing question. It is the
+    // same 32 bytes as the public key in a different alphabet, so nothing
+    // secret travels with it.
+    walletAddress: walletAddress || '',
     keys: readKeys()
       .filter((k) => k.enabled !== false)
       .map((k) => ({
