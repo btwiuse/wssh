@@ -12,7 +12,8 @@ import htm from 'htm';
 
 // Building a transaction is deliberately elsewhere: it is arithmetic, not a
 // component, and keeping it separate lets the selftest use the real thing.
-export { signSolanaTransaction, bytesToHex } from './solana.js';
+import { signSolanaTransaction, bytesToHex } from './solana.js';
+export { signSolanaTransaction, bytesToHex };
 
 const html = htm.bind(React.createElement);
 
