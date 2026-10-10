@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/btwiuse/wssh/auth/agentkey"
 	"github.com/btwiuse/wssh/auth/siws"
 	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
@@ -182,4 +183,50 @@ func ListAgentKeysAt(ctx context.Context, sockPath string) ([]AgentKey, error) {
 	}
 
 	return ListAgentKeys(agent.NewClient(conn))
+}
+
+// SignerCandidate is one key that could sign a Solana transaction.
+type SignerCandidate struct {
+	// Address is the base58 account, which is the key itself.
+	Address string
+
+	// Comment is the label the agent carries for the key: what ssh-add
+	// prints after it, and the only thing on the wire that says where the
+	// key came from.
+	Comment string
+
+	// Wallet is true when the agent labels this key as the connected
+	// wallet's. Read from the label rather than asked for, because there is
+	// no agent operation that answers it - and with a wallet there is
+	// nothing to answer: which account signs is the person's choice in the
+	// popup, so it is not settled until they make it.
+	Wallet bool
+}
+
+// SignerCandidates lists the keys in the agent that could sign, with the
+// labels that say where each came from.
+//
+// For a command to print before it asks anything to sign. That is the only
+// point at which the list is useful: afterwards the signature has been given,
+// and what actually happened is in the bytes that came back.
+func SignerCandidates(ctx context.Context, sockPath string) ([]SignerCandidate, error) {
+	keys, err := ListAgentKeysAt(ctx, sockPath)
+	if err != nil {
+		return nil, err //nolint:wrapcheck
+	}
+
+	candidates := make([]SignerCandidate, 0, len(keys))
+	for _, key := range keys {
+		if key.Address == "" {
+			// Not an ed25519 key, so not a Solana account and not a
+			// candidate. Listing it would suggest otherwise.
+			continue
+		}
+		candidates = append(candidates, SignerCandidate{
+			Address: key.Address,
+			Comment: key.Comment,
+			Wallet:  agentkey.IsWalletComment(key.Comment),
+		})
+	}
+	return candidates, nil
 }

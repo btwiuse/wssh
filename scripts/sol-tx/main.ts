@@ -166,6 +166,16 @@ const parsed = parseArgs(argv.slice(1), {
   boolean: ["send", "verbose"],
   collect: ["account"],
   default: { network: "mainnet", send: false, verbose: false },
+  // An unknown flag is an error rather than silence. `--payer` used to keep
+  // being accepted here long after it was renamed to `--signer`: no error, no
+  // warning, and the transaction went out with the signer nobody named. A
+  // typo has to fail, and a flag that has been renamed has to stop working
+  // loudly rather than quietly changing what gets signed.
+  unknown: (arg) => {
+    throw new Error(
+      `unknown flag ${arg}: this command answers to --signer, not --payer; try --help`,
+    );
+  },
 });
 
 const global: GlobalArgs = {
@@ -232,6 +242,60 @@ if (global.verbose) {
   console.error(`[sol-tx] agent=${sockPath}`);
   console.error(`[sol-tx] rpc=${endpoint}`);
   console.error(`[sol-tx] mode=${modeArgs.mode}`);
+}
+
+// -- Say who is going to sign, before anything is built ---------------------
+
+// The same lines Go's sol-tx prints, from the same agent listing. Three
+// cases, and none of them is a prediction: a named signer is settled; a key
+// labelled as the wallet's means the wallet will be asked, and which of its
+// accounts signs is the person's choice at the popup, so it is not knowable
+// before then; otherwise one key settles it and more than one means the agent
+// will refuse and ask for --signer.
+//
+// A guess would be wrong exactly when it mattered, so every line is either
+// read from the agent or derived from a count.
+const WALLET_PREFIX = "solana:";
+
+async function signerPlan(sockPath: string, named?: string): Promise<string[]> {
+  if (named) return [`signer=${named}`];
+
+  let held: agent.AgentKey[];
+  try {
+    held = await agent.list(sockPath, true);
+  } catch (err) {
+    // Best effort. An agent that will not say what it holds is not a reason
+    // to refuse; whatever comes back is still checked against the bytes.
+    return [`signer=(not named; the agent did not say what it holds: ${err})`];
+  }
+
+  // An rsa key is not a Solana account, so it is not a candidate.
+  const keys = held.filter((k) => k.address !== "");
+  if (keys.length === 0) {
+    return ["signer=(not named, and no key in the agent is an ed25519 key)"];
+  }
+
+  const wallet = keys.find((k) => k.comment.startsWith(WALLET_PREFIX));
+  const head = wallet
+    ? "signer=(not named; the wallet will sign; the account is whichever one its prompt has selected)"
+    : keys.length === 1
+    ? "signer=(not named; the agent holds one key, so that is the one)"
+    : `signer=(not named; the agent holds ${keys.length} keys, so it will refuse without --signer)`;
+
+  return [head, ...keys.map((k) => {
+    const note = k === wallet
+      ? "  <- the wallet"
+      : keys.length > 1
+      ? "  <- unused unless --signer names it"
+      : "";
+    return `  ${k.address}  ${k.comment}${note}`;
+  })];
+}
+
+if (global.verbose) {
+  for (const line of await signerPlan(sockPath, modeArgs.signer)) {
+    console.error(`[sol-tx] ${line}`);
+  }
 }
 
 // -- Build the instruction set -----------------------------------------------

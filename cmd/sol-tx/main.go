@@ -141,8 +141,14 @@ Output:
 			logf(verbose, "[sol-tx] rpc=%s", endpoint)
 			logf(verbose, "[sol-tx] mode=%s", mode)
 
+			// Who is going to sign, said before anything is built or sent.
+			// A named signer is settled: the agent routes on it. An unnamed
+			// one is not - the wallet picks its own account - so what can be
+			// said this early is what is on offer, which is the question a
+			// person actually has at this point.
 			ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 			defer cancel()
+			logSignerPlan(ctx, verbose, sockPath, signer)
 
 			req, err := buildSolTxRequest(solTxRequest{
 				mode:     mode,
@@ -412,4 +418,89 @@ func buildSolTxRequest(in solTxRequest) (agentkey.SolanaTxRequest, error) {
 // what was asked for rather than about anything that went wrong.
 func errUsage(msg string) error {
 	return errors.New(msg)
+}
+
+// signerPlan is what --verbose prints before anything is built: the lines, and
+// nothing else. Kept separate from printing so it can be tested against a
+// real agent without capturing a stream.
+type signerPlan struct {
+	lines []string
+	err   error
+}
+
+// planSigner works out what is going to sign, before the transaction exists.
+//
+// Three cases, and none of them is a prediction:
+//
+//   - A named signer is settled. The agent routes on it, and a payer that is
+//     not a key in the agent is refused rather than signed by something else.
+//   - The agent holds a key labelled as the wallet's, so the wallet will be
+//     asked. Which of the wallet's accounts signs is the person's choice in
+//     the popup, and is not knowable before then - so what this says is
+//     which key will be asked, not which account will sign.
+//   - Otherwise one key means that key, and more than one means the agent will
+//     refuse and ask for --signer. Which is said here rather than after a
+//     request that was built and then refused.
+//
+// A guess would be wrong exactly when it mattered, so every line is either
+// read from the agent or derived from a count.
+func planSigner(ctx context.Context, sockPath, named string) signerPlan {
+	if named != "" {
+		return signerPlan{lines: []string{"signer=" + named}}
+	}
+
+	candidates, err := solana.SignerCandidates(ctx, sockPath)
+	if err != nil {
+		// Best effort. An agent that will not say what it holds is not a
+		// reason to refuse; whatever comes back is still verified against
+		// the bytes that were signed.
+		return signerPlan{lines: []string{"signer=(not named; the agent did not say what it holds: " + err.Error() + ")"}}
+	}
+	if len(candidates) == 0 {
+		return signerPlan{lines: []string{"signer=(not named, and no key in the agent is an ed25519 key)"}}
+	}
+
+	var wallet *solana.SignerCandidate
+	for i := range candidates {
+		if candidates[i].Wallet {
+			wallet = &candidates[i]
+		}
+	}
+
+	var head string
+	switch {
+	case wallet != nil:
+		head = "signer=(not named; the wallet will sign; the account is whichever one its prompt has selected)"
+	case len(candidates) == 1:
+		head = "signer=(not named; the agent holds one key, so that is the one)"
+	default:
+		head = fmt.Sprintf("signer=(not named; the agent holds %d keys, so it will refuse without --signer)", len(candidates))
+	}
+
+	lines := make([]string, 0, len(candidates)+1)
+	lines = append(lines, head)
+	for _, key := range candidates {
+		note := ""
+		switch {
+		case key.Wallet:
+			note = "  <- the wallet"
+		case len(candidates) > 1:
+			// Every key that is not the one about to sign is marked as
+			// such. Without this the rows are indistinguishable and the
+			// wallet's marker is the only thing telling them apart, which
+			// is a question the reader then has to answer themselves.
+			note = "  <- unused unless --signer names it"
+		}
+		lines = append(lines, "  "+key.Address+"  "+key.Comment+note)
+	}
+	return signerPlan{lines: lines}
+}
+
+func logSignerPlan(ctx context.Context, verbose bool, sockPath, signer string) {
+	if !verbose {
+		return
+	}
+	for _, line := range planSigner(ctx, sockPath, signer).lines {
+		logf(true, "[sol-tx] %s", line)
+	}
 }

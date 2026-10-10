@@ -11,6 +11,7 @@
 // Every byte on the wire is annotated in verbose mode, which is what makes
 // this script useful for debugging a wallet connection that is misbehaving.
 
+import { encodeBase58 } from "./base58.ts";
 
 export interface SolanaAccount {
   address: string;
@@ -52,6 +53,8 @@ const EXTENSION_NAME = "solana-tx@wssh";
 
 // ssh-agent message types, from PROTOCOL.agent.
 const SSH_AGENT_FAILURE = 5;
+const SSH_AGENTC_REQUEST_IDENTITIES = 11;
+const SSH_AGENT_IDENTITIES_ANSWER = 12;
 const SSH_AGENT_SUCCESS = 6;
 const SSH_AGENT_EXTENSION = 27; // not used by us, kept for completeness
 const SSH_AGENT_EXTENSION_FAILURE = 28;
@@ -208,6 +211,124 @@ export async function ask(
 }
 
 // -- low-level framing ------------------------------------------------------
+
+/** One key the agent holds, in the form both scripts name it in. */
+export interface AgentKey {
+  type: string;
+  /** base58, for an ed25519 key; empty for anything that cannot sign Solana */
+  address: string;
+  comment: string;
+}
+
+/**
+ * List the keys the agent holds.
+ *
+ * The same question the Go side answers with solana.ListAgentKeysAt, asked
+ * the same way: SSH_AGENTC_REQUEST_IDENTITIES, whose answer is a type, a key
+ * blob and a comment per key. It exists so a command can say what is on offer
+ * *before* it asks anything to sign, which is the only point at which that is
+ * useful - afterwards the signature has already been given.
+ */
+export async function list(sockPath: string, verbose = false): Promise<AgentKey[]> {
+  const conn = await Deno.connect({ path: sockPath, transport: "unix" });
+  try {
+    if (verbose) {
+      console.error(`[agent] listing the keys it holds`);
+    }
+    await writeFramed(conn, new Uint8Array([SSH_AGENTC_REQUEST_IDENTITIES]));
+
+    const reply = await readFramed(conn);
+    if (reply === null || reply.length === 0) {
+      throw new Error("the agent closed without listing its keys");
+    }
+    if (reply[0] === SSH_AGENT_FAILURE) {
+      throw new Error("the agent refused to say what it holds");
+    }
+    if (reply[0] !== SSH_AGENT_IDENTITIES_ANSWER) {
+      throw new Error(`the agent answered the key listing with ${reply[0]}, not an identities answer`);
+    }
+    return parseIdentities(reply);
+  } finally {
+    conn.close();
+  }
+}
+
+/**
+ * Read the keys out of a complete identities answer, type byte and all.
+ *
+ * After the type byte comes a uint32 count, and then that many records of
+ * **two** fields: the key blob and a comment. There is no separate type field,
+ * which is the part worth writing down - the algorithm name is inside the blob
+ * rather than beside it, so a reader that expects `type, blob, comment` reads
+ * the blob as the type and then walks off the end of the message. That is what
+ * x/crypto/ssh/agent's marshalKey writes, and therefore what OpenSSH writes.
+ *
+ * The blob of an ed25519 key is `[4][ssh-ed25519][4][32 bytes]`, so the
+ * address is those 32 bytes - the same reading solana/keys.go does, and for
+ * the same reason: an ed25519 public key *is* a Solana account.
+ */
+function parseIdentities(buf: Uint8Array): AgentKey[] {
+  if (buf.length < 5 || buf[0] !== SSH_AGENT_IDENTITIES_ANSWER) {
+    throw new Error(
+      `expected an identities answer, got message type ${buf[0] ?? "nothing"}`,
+    );
+  }
+  const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  let at = 1;
+
+  const readString = (): Uint8Array => {
+    if (at + 4 > buf.length) throw new Error("the identities answer ended mid-string");
+    const len = view.getUint32(at, false);
+    at += 4;
+    if (at + len > buf.length) throw new Error("the identities answer claimed a string past its end");
+    const out = buf.subarray(at, at + len);
+    at += len;
+    return out;
+  };
+
+  if (at + 4 > buf.length) {
+    throw new Error("the identities answer carried no key count");
+  }
+  const count = view.getUint32(at, false);
+  at += 4;
+
+  const decoder = new TextDecoder();
+  const keys: AgentKey[] = [];
+  for (let i = 0; i < count; i++) {
+    const blob = readString();
+    // A comment is optional: an agent with none to give may leave it off
+    // rather than send an empty string, and treating a missing one as a
+    // length prefix is how the rest of the answer gets misread.
+    const comment = at < buf.length ? decoder.decode(readString()) : "";
+    keys.push({ type: keyType(blob), address: ed25519Address(blob), comment });
+  }
+  return keys;
+}
+
+// Exported for the test, which parses captured bytes rather than talking to
+// an agent: the shape of this message is the thing being pinned, and a live
+// agent would change the fixture every time somebody's key did.
+export { parseIdentities as parseIdentitiesForTest };
+
+/** The algorithm an ssh wire-format key blob names, or "" when unreadable. */
+function keyType(blob: Uint8Array): string {
+  if (blob.length < 8) return "";
+  const len = new DataView(blob.buffer, blob.byteOffset, blob.byteLength).getUint32(0, false);
+  if (4 + len > blob.length) return "";
+  return new TextDecoder().decode(blob.subarray(4, 4 + len));
+}
+
+/** The Solana account an ed25519 key blob names, or "" when it is not one. */
+function ed25519Address(blob: Uint8Array): string {
+  const view = new DataView(blob.buffer, blob.byteOffset, blob.byteLength);
+  const algo = "ssh-ed25519";
+  const need = 4 + algo.length + 4 + 32;
+  if (blob.length !== need) return "";
+  if (view.getUint32(0, false) !== algo.length) return "";
+  if (new TextDecoder().decode(blob.subarray(4, 4 + algo.length)) !== algo) return "";
+  if (view.getUint32(4 + algo.length, false) !== 32) return "";
+  return encodeBase58(blob.subarray(need - 32));
+}
 
 async function writeFramed(conn: Deno.UnixConn, payload: Uint8Array): Promise<void> {
   const header = new Uint8Array(4);
