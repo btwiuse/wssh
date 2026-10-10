@@ -90,6 +90,7 @@ export async function signSolanaTransaction(serialised, buildOnly = false) {
   // The caller signs with a key it holds, so hand back the built transaction
   // as it stands, with its signature slots still empty.
   if (buildOnly) {
+    lastBuilt = tx.message.compiledInstructions.map((ix) => ix.data);
     return { unsigned: bytesToHex(tx.serialize()) };
   }
 
@@ -195,7 +196,10 @@ function buildTransaction(request, web3, provider, payer) {
 
     let data;
     try {
-      data = hexToBytes(instruction.data || '');
+      // Base58, because that is what the field carries. Read as hex it came
+      // out as eight bytes of nonsense instead of twelve - and a signature over
+      // nonsense verifies just as well as one over a transfer.
+      data = base58ToBytes(instruction.data || '');
     } catch (err) {
       throw new Error(`instruction ${i} has data that is not hex: ${err?.message || err}`);
     }
@@ -336,6 +340,13 @@ function keyName(keys, index) {
 // actually runs.
 const WEB3_URL = 'https://esm.sh/@solana/web3.js@3.0.2';
 
+// What the last built transaction's instruction data actually was, so a
+// mismatch with what comes back says which side lost the bytes.
+let lastBuilt = null;
+export function lastBuiltData() {
+  return lastBuilt;
+}
+
 let web3Promise = null;
 
 function loadWeb3() {
@@ -410,4 +421,10 @@ export function bytesToHex(bytes) {
  */
 export function warmUp() {
   return loadWeb3();
+}
+
+/** Base58 to bytes. The selftest needs to read a signed transaction back, and
+ *  the decoder that understands one already exists. */
+export function base58Decode(text) {
+  return base58ToBytes(text);
 }

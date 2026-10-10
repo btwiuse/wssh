@@ -92,12 +92,6 @@ type SolanaTxResponse struct {
 	// Empty means the answer is yes.
 	Refusal string `json:"refusal,omitempty"`
 
-	// Unsigned is what comes back when there is no wallet behind this agent:
-	// a transaction built and ready to be signed, with empty signature slots.
-	// An ed25519 key is an ed25519 key whatever it was made for, so a key the
-	// page already holds signs this exactly as it signs an SSH challenge.
-	Unsigned []byte `json:"unsigned,omitempty"`
-
 	// message is the part the signature covers, kept so a fixture can be read
 	// apart in a test. It is not on the wire.
 	message           []byte `json:"-"`
