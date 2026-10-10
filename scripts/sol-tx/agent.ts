@@ -47,7 +47,7 @@ export function signedTransactionBytes(resp: SolanaTxResponse): Uint8Array {
   if (!resp.signedTransaction) {
     throw new Error("the agent returned no signed transaction");
   }
-  return hexToBytes(resp.signedTransaction, "signed transaction");
+  return base64ToBytes(resp.signedTransaction, "signed transaction");
 }
 
 const EXTENSION_NAME = "solana-tx@wssh";
@@ -265,33 +265,41 @@ export interface AgentKey {
 }
 
 /**
- * Hex to bytes.
+ * Base64 to bytes.
  *
- * The response fields are hex - the page writes them with bytesToHex and the
- * Go client reads them with a hex decoder - and reading them as base64 was
- * quietly wrong: every character of a hex string also happens to be a legal
- * base64 character, so nothing failed. It produced roughly half again as many
- * bytes, and everything downstream then read a transaction that was not one:
- * a plausible address of the right length, naming an account nobody holds.
+ * The answer carries base64, and that is not a choice this script made: the
+ * response is a Go value whose transaction is a []byte, and encoding/json
+ * writes a []byte as base64. Hex appears one hop further in, between the page
+ * and the wasm module that decodes it by hand, and never reaches a client of
+ * the agent.
+ *
+ * Reading it as hex was wrong in a way that only showed up with a browser
+ * agent: every base64 character is also a hex character, so the characters
+ * parsed, the byte count came out right, and the result was a transaction that
+ * was not one.
  */
-function hexToBytes(hex: string, what: string): Uint8Array {
-  if (hex.length % 2 !== 0) {
-    throw new Error(`the ${what} is ${hex.length} hex characters, which is not a whole number of bytes`);
+function base64ToBytes(b64: string, what: string): Uint8Array {
+  const cleaned = b64.replace(/\s+/g, "");
+  if (cleaned.length % 4 !== 0) {
+    throw new Error(`the ${what} is ${cleaned.length} base64 characters, which is not a whole number of bytes`);
   }
-  const out = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < out.length; i++) {
-    const byte = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-    if (Number.isNaN(byte)) {
-      throw new Error(`the ${what} has something that is not hex at character ${i * 2}`);
-    }
-    out[i] = byte;
+  let binary: string;
+  try {
+    binary = atob(cleaned);
+  } catch (err) {
+    throw new Error(`the ${what} is not base64: ${err}`);
   }
-  return out;
+  return Uint8Array.from(binary, (c) => c.charCodeAt(0));
 }
 
-/** Hex without separators, which is what the response fields carry. */
+/** Hex without separators, for the logs: a human reads hex, not base64. */
 function bytesToHex(b: Uint8Array): string {
   return Array.from(b).map((x) => x.toString(16).padStart(2, "0")).join("");
+}
+
+/** Base64 without separators, which is what the response fields carry. */
+function bytesToBase64(b: Uint8Array): string {
+  return btoa(String.fromCharCode(...b));
 }
 
 /**
@@ -407,9 +415,11 @@ export async function signWithPlainAgent(
   if (verbose) {
     console.error(`[agent] signed   ${signed.length} bytes, by an ordinary signature`);
   }
+  // Base64, like every other answer: the field is a byte slice on the other
+  // side of the protocol and encoding/json writes it as base64.
   return {
-    signature: bytesToHex(signature),
-    signedTransaction: bytesToHex(signed),
+    signature: bytesToBase64(signature),
+    signedTransaction: bytesToBase64(signed),
   };
 }
 
