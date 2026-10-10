@@ -56,9 +56,24 @@ Examples:
 
   # Any instruction at all
   wssh sol-tx call --program 9xQe... --account 5cyy... --data 3Bxs...`,
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
+		// "transfer" and "call" are read as a leading word rather than
+		// subcommands, because both share every flag and a person should
+		// not have to say which. The help has always shown them this way, so
+		// making them real would only be catching up with the examples.
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			mode := "transfer"
+			if len(args) == 1 && args[0] != "" {
+				mode = args[0]
+			}
+			if mode != "transfer" && mode != "call" {
+				return fmt.Errorf(
+					"unknown instruction %q: this asks for a transfer (--to, --sol or --lamports) "+
+						"or a call (--program, --account, --data)", mode)
+			}
+
 			req, err := buildSolTxRequest(solTxRequest{
+				mode:     mode,
 				sockPath: sockPath, rpcURL: rpcURL, blockhash: blockhash, label: label,
 				to: to, sol: sol, lamports: lamports,
 				program: program, accounts: accounts, data: data, payer: payer,
@@ -109,6 +124,7 @@ Examples:
 }
 
 type solTxRequest struct {
+	mode                                      string
 	sockPath, rpcURL, blockhash, label, payer string
 	to, sol                                   string
 	lamports                                  uint64
@@ -128,7 +144,7 @@ func buildSolTxRequest(in solTxRequest) (agentkey.SolanaTxRequest, error) {
 	}
 
 	switch {
-	case in.program != "":
+	case in.mode == "call":
 		// A raw call. The account list and data are passed through as given:
 		// deciding what they mean is the browser's job, and it is the one that
 		// shows them to a person.
