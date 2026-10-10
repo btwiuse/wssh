@@ -12,6 +12,7 @@ package client
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"io"
@@ -19,6 +20,7 @@ import (
 	neturl "net/url"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/btwiuse/wssh/auth/agentkey"
@@ -87,6 +89,22 @@ type Options struct {
 	// with what it sees in the channel, and the channel can hand
 	// out signatures for things the user does on the remote side.
 	AgentKeyPath string
+
+	// SIWSKey, when set, signs in to the server with a Solana account before
+	// the session starts, instead of authenticating over SSH.
+	//
+	// The key signs a short readable message the server asked for. It never
+	// crosses, and SSH's own authentication is not involved: the signature
+	// proves control of an account, and the server lets the connection
+	// through on the strength of that.
+	//
+	// Overrides nothing. If the server also wants a key or a password, those
+	// are still offered.
+	SIWSKey ed25519.PrivateKey
+
+	// SIWSChallengePath is where to fetch the sign-in request. Empty means
+	// the conventional path, which is what a wssh server publishes.
+	SIWSChallengePath string
 
 	// AgentSigners are offered to the server as a keyring for the session,
 	// and for anything it runs, to sign with.
@@ -157,7 +175,24 @@ func Dial(ctx context.Context, opts Options) (*Session, error) {
 	// Bound by the caller's context, and cancelled when the session ends.
 	ctx, cancel := context.WithCancel(ctx)
 
-	wsConn, _, err := websocket.Dial(ctx, opts.URL, nil)
+	// A wallet sign-in has to be in the URL that is dialled, not applied
+	// afterwards: the server reads it from the request that opens the socket,
+	// and a browser cannot set headers on a WebSocket.
+	dialURL := opts.URL
+	if len(opts.SIWSKey) > 0 {
+		token, err := SIWSSignIn(opts.URL, opts.SIWSChallengePath, opts.SIWSKey)
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+		sep := "?"
+		if strings.Contains(dialURL, "?") {
+			sep = "&"
+		}
+		dialURL += sep + "auth=" + neturl.QueryEscape(token)
+	}
+
+	wsConn, _, err := websocket.Dial(ctx, dialURL, nil)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("dial websocket: %w", err)

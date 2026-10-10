@@ -34,6 +34,7 @@ func newClientCmd() *cobra.Command {
 		knownHosts      string
 		insecureHostKey bool
 		agentKey        string
+		signInKey       string
 		cols, rows      int
 	)
 
@@ -79,7 +80,7 @@ SSH window-change request.`,
 				args = args[1:]
 			}
 			opts, err := clientOptions(url, username, identities, passwordAuth,
-				passphraseFile, knownHosts, insecureHostKey, agentKey, cols, rows)
+				passphraseFile, knownHosts, insecureHostKey, agentKey, signInKey, cols, rows)
 			if err != nil {
 				return err
 			}
@@ -104,6 +105,10 @@ SSH window-change request.`,
 			"channel; the same key is offered for pubkey auth and as the "+
 			"agent's signing key, so the remote side can use it for further "+
 			"hops. Encrypted keys are not supported.")
+	cmd.Flags().StringVar(&signInKey, "sign-in", "",
+		"ed25519 private key to sign in with a Solana account, as a raw "+
+			"key, a PEM file or a key array; the key never leaves this "+
+			"process and SSH's own authentication is not used")
 	cmd.Flags().IntVar(&cols, "cols", 0, "terminal columns to start with (default: detect)")
 	cmd.Flags().IntVar(&rows, "rows", 0, "terminal rows to start with (default: detect)")
 
@@ -113,7 +118,7 @@ SSH window-change request.`,
 // clientOptions resolves everything that has to be settled before a session
 // starts: who to log in as, what to offer, and what to trust.
 func clientOptions(url, username string, identities []string, passwordAuth bool,
-	passphraseFile, knownHostsPath string, insecureHostKey bool, agentKey string, cols, rows int,
+	passphraseFile, knownHostsPath string, insecureHostKey bool, agentKey, signInKey string, cols, rows int,
 ) (*client.Options, error) {
 
 	if !strings.HasPrefix(url, "ws://") && !strings.HasPrefix(url, "wss://") {
@@ -149,6 +154,14 @@ func clientOptions(url, username string, identities []string, passwordAuth bool,
 	}
 	opts.Auth = auth
 	opts.AgentKeyPath = agentKey
+
+	if signInKey != "" {
+		key, err := client.LoadSignInKey(signInKey)
+		if err != nil {
+			return nil, err
+		}
+		opts.SIWSKey = key
+	}
 
 	opts.HostKeyCallback, err = clientHostKeyCallback(knownHostsPath, insecureHostKey)
 	if err != nil {

@@ -21,13 +21,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 
 	"charm.land/log/v2"
 	"charm.land/ssh"
 	"charm.land/wish/v2"
 	"github.com/btwiuse/wssh/auth/agentkey"
+	"github.com/btwiuse/wssh/auth/siws"
 	"github.com/coder/websocket"
+	gossh "golang.org/x/crypto/ssh"
 )
 
 // Options configures a Server.
@@ -80,6 +83,11 @@ type Options struct {
 	// them, so the same authentication rule that applies to
 	// --authorized-keys applies here.
 	Agent agentkey.Agent
+
+	// WalletAuth lets a browser that owns a Solana account connect by signing
+	// a short readable message, rather than the binary blob SSH authentication
+	// requires. Nil, or an empty allow list, leaves it off.
+	WalletAuth *siws.SIWSAuth
 
 	// ForwardAgent makes the *client's* agent available to sessions on
 	// the same connection, which is what `ssh -A` does: the client keeps
@@ -170,6 +178,10 @@ func NewServer(opts Options) (*Server, error) {
 		agentkey.InstallForwarding(sessions)
 	}
 
+	if opts.WalletAuth != nil && opts.WalletAuth.Enabled() {
+		installWalletAuth(sessions, opts.WalletAuth, opts.Logger)
+	}
+
 	if opts.Agent != nil {
 		// The agent's agentkey.Forwarding option mutates ChannelHandlers
 		// and RequestHandlers on the server, but we reset ChannelHandlers
@@ -212,7 +224,20 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	netConn := websocket.NetConn(ctx, conn, websocket.MessageBinary)
+	// A wallet sign-in arrives in the query string, because a browser cannot
+	// set headers on a WebSocket. It rides along on the connection rather than
+	// being checked here: this handler is the one place that can see the HTTP
+	// request, and the SSH server has already started by the time it returns.
+	var netConn net.Conn = websocket.NetConn(ctx, conn, websocket.MessageBinary)
+	if s.opts.WalletAuth != nil && s.opts.WalletAuth.Enabled() {
+		netConn = &walletConn{
+			Conn:  netConn,
+			token: r.URL.Query().Get(walletAuthQuery),
+			// The domain a wallet will be asked to name is the one this
+			// client reached, not one fixed at startup.
+			host: r.Host,
+		}
+	}
 	defer netConn.Close() //nolint:errcheck
 
 	s.opts.Logger.Debug("session starting", "remote", r.RemoteAddr)
@@ -226,4 +251,95 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		return fmt.Errorf("shutdown: %w", err)
 	}
 	return nil
+}
+
+// walletAuthQuery is the query parameter a wallet sign-in arrives in.
+const walletAuthQuery = "auth"
+
+// walletAddressKey marks a connection that arrived with a verified wallet
+// sign-in. It is read by the config hook below, and by nothing else.
+const walletAddressKey = "wssh.wallet-address"
+
+// walletConn carries a sign-in token to the point where it can be checked.
+//
+// The SSH server builds its own context per connection and never sees the HTTP
+// request, so anything from the request has to travel on the connection itself.
+type walletConn struct {
+	net.Conn
+	token string
+	host  string
+}
+
+// installWalletAuth makes a verified wallet sign-in into a completed SSH
+// authentication.
+//
+// The trick is that SSH's own authentication cannot be satisfied by a wallet:
+// its challenge is binary and the wallet will not sign it. So the check happens
+// before the handshake, and the handshake is then told not to ask. Nothing
+// about the SSH protocol changes; a connection that arrives with a valid
+// sign-in is simply allowed through the way an unauthenticated server allows
+// everything, except that here it had to prove something first.
+func installWalletAuth(srv *ssh.Server, cfg *siws.SIWSAuth, logger *log.Logger) {
+	prevConn := srv.ConnCallback
+	srv.ConnCallback = func(ctx ssh.Context, conn net.Conn) net.Conn {
+		if prevConn != nil {
+			if conn = prevConn(ctx, conn); conn == nil {
+				return nil
+			}
+		}
+		carrier, ok := conn.(*walletConn)
+		if !ok || carrier.token == "" {
+			// No sign-in offered. Whatever else this server accepts, it
+			// accepts on its own terms.
+			return conn
+		}
+
+		message, signature, err := siws.DecodeSIWS(carrier.token)
+		if err != nil {
+			logger.Debug("wallet sign-in unreadable", "error", err)
+			return nil
+		}
+		_, address, err := cfg.Verify(message, signature, carrier.host)
+		if err != nil {
+			logger.Debug("wallet sign-in refused", "error", err)
+			// A sign-in that was offered and did not check out ends the
+			// connection rather than falling through. Falling through would
+			// turn a failed wallet sign-in into an ordinary connection on
+			// any server that is not otherwise locked, which is the opposite
+			// of what offering one means.
+			return nil
+		}
+
+		ctx.SetValue(walletAddressKey, address)
+		logger.Debug("wallet sign-in accepted", "address", address)
+		return conn
+	}
+
+	// Configuring wallet sign-in has to mean the server requires something.
+	// With no SSH handler installed, wish allows every connection, so an
+	// operator who set --authorized-addresses and nothing else would be running
+	// an open server while believing the opposite. Installing a handler that
+	// refuses everything closes that: a verified connection is let through by
+	// the config hook below, and everyone else has nothing that works.
+	if srv.PublicKeyHandler == nil && srv.PasswordHandler == nil &&
+		srv.KeyboardInteractiveHandler == nil {
+		srv.PublicKeyHandler = func(ssh.Context, ssh.PublicKey) bool { return false }
+	}
+
+	// A connection that proved itself needs no further authentication. This is
+	// per connection, which is why it works at all: the flag lives on the
+	// config this hook builds, not on the server.
+	prevConfig := srv.ServerConfigCallback
+	srv.ServerConfigCallback = func(ctx ssh.Context) *gossh.ServerConfig {
+		var config *gossh.ServerConfig
+		if prevConfig != nil {
+			config = prevConfig(ctx)
+		} else {
+			config = &gossh.ServerConfig{}
+		}
+		if ctx.Value(walletAddressKey) != nil {
+			config.NoClientAuth = true
+		}
+		return config
+	}
 }

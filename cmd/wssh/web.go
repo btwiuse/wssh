@@ -116,6 +116,7 @@ the toolbar is editable.`,
 
 	addAuthFlags(cmd, &opts.Auth)
 	addAgentFlags(cmd, &opts.AgentKeys)
+	addWalletFlags(cmd, &opts)
 	addForwardFlags(cmd, &opts.ForwardAgent)
 
 	return cmd

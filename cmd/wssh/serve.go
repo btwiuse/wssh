@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -22,6 +23,7 @@ import (
 	"github.com/btwiuse/wssh"
 	"github.com/btwiuse/wssh/auth"
 	"github.com/btwiuse/wssh/auth/agentkey"
+	"github.com/btwiuse/wssh/auth/siws"
 	"github.com/btwiuse/wssh/shell"
 	"github.com/spf13/cobra"
 	"github.com/webteleport/wtf"
@@ -76,6 +78,14 @@ type serveOptions struct {
 	// supported). The same keys are not used for authentication here;
 	// they are exposed to clients so they can sign with them.
 	AgentKeys []string
+
+	// AuthorizedAddresses are Solana accounts allowed to sign in, as SSH
+	// public keys or as the hex of the same 32 bytes.
+	AuthorizedAddresses []string
+
+	// WalletStatement is the one line of text a wallet shows above the
+	// sign-in request.
+	WalletStatement string
 
 	// ForwardAgent lets sessions on a connection ask the client to sign.
 	// The client keeps its keys; nothing but signatures crosses.
@@ -155,6 +165,11 @@ func serve(opts serveOptions) error {
 			return err //nolint:wrapcheck
 		}
 
+		walletAuth, err := buildWalletAuth(opts)
+		if err != nil {
+			return err
+		}
+
 		agentRing, err := buildAgent(opts.AgentKeys)
 		if err != nil {
 			return err
@@ -180,6 +195,7 @@ func serve(opts serveOptions) error {
 			AllowTcpForwarding: opts.AllowTcpForwarding,
 			OriginPatterns:     opts.Origins,
 			Agent:              agentRing,
+			WalletAuth:         walletAuth,
 			SSHOptions:         authOpts,
 		})
 		if err != nil {
@@ -215,6 +231,13 @@ func serve(opts serveOptions) error {
 			pattern = "/"
 		}
 		mux.Handle(pattern, sessions)
+
+		// The challenge has to be reachable without authenticating, or
+		// there would be no way to get the thing you authenticate with. It
+		// carries no secret: it is a nonce and a deadline.
+		if walletAuth != nil {
+			mux.HandleFunc("/auth/siws", walletChallenge(walletAuth))
+		}
 	}
 
 	if opts.Assets != nil {
@@ -322,6 +345,62 @@ func addAuthFlags(cmd *cobra.Command, cfg *auth.Config) {
 		"file of accepted passwords, one per line, plaintext or bcrypt")
 	cmd.Flags().StringSliceVar(&cfg.Passwords, "password", nil,
 		"an accepted password given inline (visible in ps; prefer --password-file)")
+}
+
+// walletChallenge serves the sign-in request a wallet is asked to sign.
+//
+// The domain is taken from the request rather than fixed at startup: it is what
+// the wallet will check against the page it was asked from, so a server
+// reachable under two names has to challenge for the one actually used.
+func walletChallenge(cfg *siws.SIWSAuth) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		input, err := cfg.Challenge(r.Host)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		// No caching: a stale challenge is a challenge that has already
+		// been answered, and one that expires before it is read.
+		w.Header().Set("Cache-Control", "no-store")
+		if err := json.NewEncoder(w).Encode(input); err != nil {
+			log.Debug("could not write the sign-in challenge", "error", err)
+		}
+	}
+}
+
+// addWalletFlags registers the wallet sign-in flags shared by the subcommands.
+func addWalletFlags(cmd *cobra.Command, opts *serveOptions) {
+	cmd.Flags().StringSliceVar(&opts.AuthorizedAddresses, "authorized-addresses", nil,
+		"Solana accounts allowed to sign in, as SSH ed25519 public keys or hex; "+
+			"repeatable")
+	cmd.Flags().StringVar(&opts.WalletStatement, "wallet-statement", "",
+		"one line of text a wallet shows above the sign-in request")
+}
+
+// buildWalletAuth turns the flags into the verifier, or nil when no account is
+// configured. Nothing is enabled by the mere presence of the flag.
+func buildWalletAuth(opts serveOptions) (*siws.SIWSAuth, error) {
+	if len(opts.AuthorizedAddresses) == 0 {
+		return nil, nil
+	}
+	addresses, err := siws.ParseAuthorizedAddresses(opts.AuthorizedAddresses)
+	if err != nil {
+		return nil, err
+	}
+	if len(addresses) == 0 {
+		return nil, nil
+	}
+	statement := opts.WalletStatement
+	if statement == "" {
+		statement = "Sign in to this server"
+	}
+	return &siws.SIWSAuth{Addresses: addresses, Statement: statement}, nil
 }
 
 // addAgentFlags registers the --agent-keys flag shared by the subcommands.
