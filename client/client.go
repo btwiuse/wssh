@@ -193,8 +193,20 @@ func Dial(ctx context.Context, opts Options) (*Session, error) {
 	// exchange out of the way: against an ordinary server this client goes
 	// straight into SSH without waiting to find out whether anyone was going
 	// to ask it anything.
+	// The subprotocol is only offered by a client that means to sign in with a
+	// wallet. Offering it unconditionally made every client - including one
+	// carrying a perfectly good SSH key - announce that it would answer a
+	// wallet challenge, and then refuse it for having no wallet.
+	//
+	// Declaring the intent up front is what lets a server that accepts both
+	// ask only the clients that can answer.
+	var offered []string
+	if opts.SIWSSigner != nil || len(opts.SIWSKey) > 0 {
+		offered = []string{SIWSSubprotocol}
+	}
+
 	wsConn, _, err := websocket.Dial(ctx, opts.URL, &websocket.DialOptions{
-		Subprotocols: []string{SIWSSubprotocol},
+		Subprotocols: offered,
 	})
 	if err != nil {
 		cancel()
@@ -212,7 +224,7 @@ func Dial(ctx context.Context, opts Options) (*Session, error) {
 	// something.
 	if wsConn.Subprotocol() == SIWSSubprotocol {
 		signer := opts.SIWSSigner
-		if signer == nil && len(opts.SIWSKey) > 0 {
+		if signer == nil {
 			signer = SIWSSignIn(opts.SIWSKey)
 		}
 		done, err := doSignIn(ctx, wsConn, signer)

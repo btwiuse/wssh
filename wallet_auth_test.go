@@ -197,6 +197,10 @@ func newAuthorizedAccount(t *testing.T) walletAccount {
 }
 
 func startWalletServer(t *testing.T, authorized [][]byte) *walletServer {
+	return startWalletServerWith(t, authorized, nil)
+}
+
+func startWalletServerWith(t *testing.T, authorized [][]byte, extraKey ed25519.PublicKey) *walletServer {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -221,7 +225,11 @@ func startWalletServer(t *testing.T, authorized [][]byte) *walletServer {
 	if err != nil {
 		t.Fatalf("generate: %v", err)
 	}
-	authOpts, err := (&auth.Config{Keys: []string{keyLine(t, lockout)}}).Options()
+	keys := []string{keyLine(t, lockout)}
+	if extraKey != nil {
+		keys = append(keys, keyLine(t, extraKey))
+	}
+	authOpts, err := (&auth.Config{Keys: keys}).Options()
 	if err != nil {
 		t.Fatalf("auth options: %v", err)
 	}
@@ -291,4 +299,54 @@ func keyLine(t *testing.T, pub ed25519.PublicKey) string {
 		t.Fatalf("wrap public: %v", err)
 	}
 	return string(gossh.MarshalAuthorizedKey(sshPub))
+}
+
+// A server can accept a wallet and a key at once, and a client carrying only a
+// key must get in on it.
+//
+// The wallet sign-in is offered by a subprotocol, and a client used to offer it
+// whether or not it had a wallet - so a client with a perfectly good key
+// announced that it would answer a challenge, then refused it for having no
+// wallet to answer with. The key was never offered a chance.
+func TestKeyClientReachesAServerThatAlsoAcceptsWallets(t *testing.T) {
+	clientPub, clientPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	server := startWalletServerWith(t, [][]byte{newAuthorizedAccount(t).pub}, clientPub)
+
+	signer, err := gossh.NewSignerFromKey(clientPriv)
+	if err != nil {
+		t.Fatalf("signer: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	var out strings.Builder
+	sess, err := client.Dial(ctx, client.Options{
+		URL:     server.url,
+		User:    "tester",
+		Auth:    []gossh.AuthMethod{gossh.PublicKeys(signer)},
+		OnData:  func(p []byte) { out.Write(p) },
+		OnClose: func(error) {},
+	})
+	if err != nil {
+		t.Fatalf("a key-only client should not have been pushed into a wallet sign-in: %v", err)
+	}
+	defer sess.Close() //nolint:errcheck
+
+	if err := sess.Write([]byte("echo KEY_ONLY_OK\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if strings.Contains(out.String(), "KEY_ONLY_OK") {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out; output=%q", out.String())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }

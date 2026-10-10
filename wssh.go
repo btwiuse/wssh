@@ -243,8 +243,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Doing it here rather than in the URL is what keeps the credential out of
 	// proxy logs, browser history and the address bar. It also means there is
 	// no second endpoint and no separate protocol on the side.
+	// Asked only of clients that asked to be asked. Sending the challenge to
+	// everyone put the bytes of a sign-in request in front of a client that
+	// came with a key and never wanted one, which is functionally the same as
+	// refusing it.
 	var authorized bool
-	if s.opts.WalletAuth != nil && s.opts.WalletAuth.Enabled() {
+	if conn.Subprotocol() == SIWSSubprotocol {
 		authorized = s.exchangeSignIn(ctx, conn, r.Host)
 		if !authorized {
 			// The reason has already gone back over the socket, in full.
