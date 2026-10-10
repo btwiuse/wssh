@@ -14,6 +14,7 @@
 // Usage:
 //   deno task start --agent $SSH_AUTH_SOCK transfer --to <addr> --sol 0.001 --send
 //   deno task start --rpc https://api.devnet.solana.com call --program <id> --account <addr> --data <base58>
+//   deno task start memo --memo "hello from wssh" --send
 //
 // The agent socket defaults to $SSH_AUTH_SOCK, the RPC defaults to
 // mainnet-beta, --network {mainnet,testnet,devnet} flips it.
@@ -45,7 +46,15 @@ interface CallArgs {
   label?: string;
 }
 
-type Mode = TransferArgs | CallArgs;
+interface MemoArgs {
+  mode: "memo";
+  memo: string;
+  blockhash?: string;
+  payer?: string;
+  label?: string;
+}
+
+type Mode = TransferArgs | CallArgs | MemoArgs;
 
 interface GlobalArgs {
   agent?: string;
@@ -63,6 +72,7 @@ Usage:
   deno task start transfer --to <addr> --lamports <n> [--send]
   deno task start call    --program <id> --account <addr> [--account <addr>...]
                             --data <base58> [--send]
+  deno task start memo    --memo <text> [--send]
 
 Options:
   --agent <path>     SSH agent socket; default $SSH_AUTH_SOCK
@@ -118,9 +128,16 @@ const argv = Deno.args;
 if (argv.length === 0 || argv[0] === "--help" || argv[0] === "-h") usage();
 
 const mode = argv[0];
-if (mode !== "transfer" && mode !== "call") {
-  console.error(`unknown mode ${JSON.stringify(mode)}: must be "transfer" or "call"`);
+if (mode !== "transfer" && mode !== "call" && mode !== "memo") {
+  console.error(`unknown mode ${JSON.stringify(mode)}: must be "transfer", "call", or "memo"`);
   Deno.exit(2);
+}
+
+// Help is a special case for any sub-mode: `--help` and `-h` should print
+// usage rather than be parsed as a flag value. parseArgs does not see
+// `--help` once it is after the mode, so this catches it before parsing.
+if (argv.includes("--help") || argv.includes("-h")) {
+  usage();
 }
 
 const parsed = parseArgs(argv.slice(1), {
@@ -136,6 +153,7 @@ const parsed = parseArgs(argv.slice(1), {
     "lamports",
     "program",
     "data",
+    "memo",
   ],
   boolean: ["send", "verbose"],
   collect: ["account"],
@@ -168,7 +186,7 @@ if (mode === "transfer") {
     payer: parsed.payer,
     label: parsed.label,
   };
-} else {
+} else if (mode === "call") {
   if (!parsed.program) throw new Error("a call needs --program");
   if (!parsed.data) throw new Error("a call needs --data");
   if (!parsed.account || parsed.account.length === 0) {
@@ -179,6 +197,16 @@ if (mode === "transfer") {
     program: parsed.program,
     accounts: parsed.account as string[],
     data: parsed.data,
+    blockhash: parsed.blockhash,
+    payer: parsed.payer,
+    label: parsed.label,
+  };
+} else {
+  // memo mode
+  if (parsed.memo === undefined) throw new Error("a memo needs --memo <text>");
+  modeArgs = {
+    mode: "memo",
+    memo: parsed.memo,
     blockhash: parsed.blockhash,
     payer: parsed.payer,
     label: parsed.label,
@@ -202,9 +230,18 @@ if (global.verbose) {
 
 // The wssh agent protocol sends raw instructions; the wallet builds and
 // signs the transaction. Mirrors Go's client.NewSolanaTransfer.
-const instructions: agent.SolanaInstruction[] = modeArgs.mode === "transfer"
-  ? [instruction.transferLamports(modeArgs.to, modeArgs.lamports)]
-  : [instruction.rawCall(modeArgs.program, modeArgs.accounts, modeArgs.data)];
+//
+// For memo we send an empty accounts list: the wssh agent protocol
+// accepts it for the memo program (because the memo program only takes
+// a signer and the wallet fills the signer itself), and the browser-side
+// transaction builder has the same carve-out. --payer is left empty so
+// the wallet decides.
+const instructions: agent.SolanaInstruction[] =
+  modeArgs.mode === "transfer"
+    ? [instruction.transferLamports(modeArgs.to, modeArgs.lamports)]
+    : modeArgs.mode === "memo"
+    ? [instruction.memo(modeArgs.memo)]
+    : [instruction.rawCall(modeArgs.program, modeArgs.accounts, modeArgs.data)];
 
 // -- Fetch blockhash when needed --------------------------------------------
 
@@ -247,7 +284,12 @@ if (global.verbose) console.error("[sol-tx] sending via RPC");
 const txBytes = agent.signedTransactionBytes(resp);
 const sig = await rpc.sendTransaction(endpoint, txBytes, global.verbose);
 console.log(sig);
-await rpc.confirmTransaction(endpoint, sig, global.verbose);
+const status = await rpc.confirmTransaction(endpoint, sig, global.verbose);
+if (global.verbose) {
+  console.error(
+    `[sol-tx] confirmed: status=${status.confirmationStatus} slot=${status.slot}`,
+  );
+}
 Deno.exit(0);
 
 // ---------------------------------------------------------------------------

@@ -92,6 +92,14 @@ type SolanaTxResponse struct {
 	// Empty means the answer is yes.
 	Refusal string `json:"refusal,omitempty"`
 
+	// Payer is the base58 wallet public key that holds the signing key.
+	// Returned on every response so a caller that did not already know
+	// which pubkey the agent represents can ask once and pass it back
+	// on later requests (the memo program, for example, needs the signer
+	// listed in accounts and the wallet fills the signer itself only
+	// when the request already names it).
+	Payer string `json:"payer,omitempty"`
+
 	// message is the part the signature covers, kept so a fixture can be read
 	// apart in a test. It is not on the wire.
 	message           []byte `json:"-"`
@@ -111,6 +119,17 @@ func ownPublicKey(signer gossh.Signer) ed25519.PublicKey {
 	}
 	pub, _ := crypto.CryptoPublicKey().(ed25519.PublicKey)
 	return pub
+}
+
+// walletPayer is the base58 wallet public key, or empty when no signer is
+// attached. The response carries it on every path - refusal, success, or
+// missing-input - so a caller that did not already know which pubkey the
+// agent represents can ask once and pass it back on later requests.
+func walletPayer(signer gossh.Signer) string {
+	if pub := ownPublicKey(signer); pub != nil {
+		return siws.Base58Encode(pub)
+	}
+	return ""
 }
 
 // SolanaBuild asks for a transaction to be built without being signed, for an
@@ -168,6 +187,20 @@ func (t *SolanaTx) maxInstructions() int {
 // is safe: every field is checked to be well formed and within bounds, and the
 // judgement about whether the transaction should be signed is left to the
 // wallet, which is the one party that can show it to a person.
+// SolanaMemoProgramV2 is the address of the SPL Memo v2 program. The
+// only thing it does is log the data it is invoked with, and the only
+// account it takes is the signer - which the wallet always adds itself,
+// so the request can carry an empty accounts list without losing
+// information about who is signing.
+const SolanaMemoProgramV2 = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"
+
+// isNoAccountProgram reports whether a program ID names an instruction
+// the wallet fills the signer for, so an empty accounts list on the wire
+// does not mean the wallet does not know who is signing.
+func isNoAccountProgram(programID string) bool {
+	return programID == SolanaMemoProgramV2
+}
+
 func ParseSolanaTxRequest(contents []byte) (SolanaTxRequest, error) {
 	var req SolanaTxRequest
 
@@ -195,7 +228,12 @@ func ParseSolanaTxRequest(contents []byte) (SolanaTxRequest, error) {
 		if _, err := siws.Base58Decode(in.ProgramID); err != nil {
 			return req, fmt.Errorf("instruction %d names a program that is not base58", i)
 		}
-		if len(in.Accounts) == 0 {
+		// Programs that take only the signer (Memo v2 today) accept an empty
+		// accounts list because the wallet fills the signer itself. Anything
+		// else still has to name its accounts up front, since a missing one
+		// is a regression of the request shape rather than something the
+		// wallet can recover from.
+		if len(in.Accounts) == 0 && !isNoAccountProgram(in.ProgramID) {
 			return req, fmt.Errorf("instruction %d names no accounts", i)
 		}
 		if len(in.Accounts) > solanaMaxAccounts {
@@ -326,6 +364,7 @@ func (t *SolanaTx) ExtensionHandler(signer gossh.Signer) func(name string, conte
 			return json.Marshal(SolanaTxResponse{
 				Refusal: fmt.Sprintf("a transaction request carries %d instructions, the limit is %d",
 					len(req.Instructions), t.maxInstructions()),
+				Payer:   walletPayer(signer),
 			})
 		}
 
@@ -339,15 +378,20 @@ func (t *SolanaTx) ExtensionHandler(signer gossh.Signer) func(name string, conte
 			if err != nil {
 				return json.Marshal(SolanaTxResponse{
 					Refusal: fmt.Sprintf("the wallet did not sign: %v", err),
+					Payer:   walletPayer(signer),
 				})
 			}
 			if used == nil || !bytes.Equal(used, ownPublicKey(signer)) {
 				return json.Marshal(SolanaTxResponse{
 					Refusal: "the answer was signed by a key this agent does not hold",
+					Payer:   walletPayer(signer),
 				})
 			}
 			if err := VerifySolanaTx(resp, ownPublicKey(signer)); err != nil {
-				return json.Marshal(SolanaTxResponse{Refusal: err.Error()})
+				return json.Marshal(SolanaTxResponse{Refusal: err.Error(), Payer: walletPayer(signer)})
+			}
+			if resp.Payer == "" {
+				resp.Payer = walletPayer(signer)
 			}
 			return json.Marshal(resp)
 		}
@@ -356,6 +400,7 @@ func (t *SolanaTx) ExtensionHandler(signer gossh.Signer) func(name string, conte
 			return json.Marshal(SolanaTxResponse{
 				Refusal: "this session has nothing that can sign a transaction: " +
 					"connect a wallet, or give the session a key",
+				Payer:   walletPayer(signer),
 			})
 		}
 
@@ -374,22 +419,24 @@ func (t *SolanaTx) ExtensionHandler(signer gossh.Signer) func(name string, conte
 		// the signature belongs here because the key is here.
 		built, err := t.Build(req)
 		if err != nil {
-			return json.Marshal(SolanaTxResponse{Refusal: err.Error()})
+			return json.Marshal(SolanaTxResponse{Refusal: err.Error(), Payer: walletPayer(signer)})
 		}
 		signatures, message, err := splitSolanaTransaction(built)
 		if err != nil {
-			return json.Marshal(SolanaTxResponse{Refusal: err.Error()})
+			return json.Marshal(SolanaTxResponse{Refusal: err.Error(), Payer: walletPayer(signer)})
 		}
 
 		signed, err := signer.Sign(rand.Reader, message)
 		if err != nil {
 			return json.Marshal(SolanaTxResponse{
 				Refusal: "the session key could not sign: " + err.Error(),
+				Payer:   walletPayer(signer),
 			})
 		}
 
 		out := append([]byte{byte(len(signatures))}, signed.Blob...)
 		return json.Marshal(SolanaTxResponse{
+			Payer:            walletPayer(signer),
 			Signature:         signed.Blob,
 			SignedTransaction: append(out, message...),
 		})

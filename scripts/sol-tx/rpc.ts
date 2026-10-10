@@ -96,13 +96,53 @@ export async function sendTransaction(
   return r;
 }
 
+export interface SignatureStatus {
+  confirmationStatus?: "processed" | "confirmed" | "finalized";
+  confirmations: number | null;
+  err: unknown;
+  slot: number;
+}
+
+interface SignatureStatusesResult {
+  context: { slot: number };
+  value: (SignatureStatus | null)[];
+}
+
+/**
+ * Polls the cluster for the status of a transaction signature until it
+ * reaches a terminal state (confirmed/finalized, or an error). Returns the
+ * final status so the caller can read the err field; a non-nil err means
+ * the transaction was included in a block but its instructions failed.
+ *
+ * sendTransaction followed by getSignatureStatuses is the post-1.10
+ * confirmation flow. The older confirmTransaction helper exists on some
+ * clusters (notably local validators) but not on mainnet-beta, where it
+ * answers -32601 "Method not found".
+ */
 export async function confirmTransaction(
   endpoint: string,
   signature: string,
   verbose = false,
-): Promise<void> {
-  // Solana RPC since 1.10 returns the same response whether confirmTransaction
-  // is polling or just recording; older clusters exposed it as a polling
-  // helper. Both shape the same way for our purposes: nil result means yes.
-  await call<unknown>(endpoint, "confirmTransaction", [signature, { commitment: "confirmed" }], verbose);
+): Promise<SignatureStatus> {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const deadline = Date.now() + 90_000; // 90s is generous; mainnet finalizes in seconds
+  while (Date.now() < deadline) {
+    const r = await call<SignatureStatusesResult>(
+      endpoint,
+      "getSignatureStatuses",
+      [[signature], { searchTransactionHistory: true }],
+      verbose,
+    );
+    const status = r.value[0];
+    if (status !== null) {
+      if (status.err) {
+        throw new Error(`the transaction failed: ${JSON.stringify(status.err)}`);
+      }
+      if (status.confirmationStatus === "confirmed" || status.confirmationStatus === "finalized") {
+        return status;
+      }
+    }
+    await sleep(2_000);
+  }
+  throw new Error(`signature ${signature} did not confirm within 90s`);
 }

@@ -22,6 +22,14 @@
 // half is a session and the reason is the most useful thing it will be told.
 // buildOnly says the caller will sign with a key of its own, so the
 // transaction goes back unsigned instead of being put to a wallet.
+
+// SPL Memo v2 program id. The memo program only takes the fee payer as a
+// signer and does not change any account, which is what makes it the
+// cheapest possible transaction. The wallet does not add the fee payer
+// as a signer automatically when the request carries an empty accounts
+// list, so buildTransaction fills it in itself.
+const MEMO_PROGRAM_ID = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
+
 export async function signSolanaTransaction(serialised, buildOnly = false) {
   const provider = window.solana || window.phantom?.solana;
   if (buildOnly && !provider?.publicKey) {
@@ -177,28 +185,38 @@ function buildTransaction(request, web3, provider, payer) {
 
   const instructions = [];
   for (const [i, instruction] of request.instructions.entries()) {
-    if (!instruction?.accounts?.length) {
-      throw new Error(`instruction ${i} names no accounts`);
+    // The memo program takes only the signer; the wallet does not add
+    // itself as a signer automatically, so the request can carry an
+    // empty accounts list and we fill it with the fee payer. Every other
+    // program still has to name its accounts up front - a missing one
+    // there is a regression of the request shape rather than something
+    // we can recover from.
+    const isMemo = instruction?.programId === MEMO_PROGRAM_ID;
+    if (!instruction?.accounts?.length && !isMemo) {
+     throw new Error(`instruction ${i} names no accounts`);
     }
 
     let programId;
     try {
-      programId = key(`program for instruction ${i}`, instruction.programId);
+     programId = key(`program for instruction ${i}`, instruction.programId);
     } catch (err) {
-      throw err;
+     throw err;
     }
 
     const keys = [];
     for (const [j, account] of instruction.accounts.entries()) {
-      try {
-        keys.push({
-          pubkey: key(`account ${j} of instruction ${i}`, account.address),
-          isSigner: !!account.isSigner,
-          isWritable: !!account.isWritable,
-        });
-      } catch (err) {
-        throw err;
-      }
+     try {
+      keys.push({
+       pubkey: key(`account ${j} of instruction ${i}`, account.address),
+       isSigner: !!account.isSigner,
+       isWritable: !!account.isWritable,
+      });
+     } catch (err) {
+      throw err;
+     }
+    }
+    if (isMemo && keys.length === 0) {
+     keys.push({ pubkey: feePayer, isSigner: true, isWritable: true });
     }
 
     let data;

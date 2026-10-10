@@ -37,6 +37,42 @@ import (
 // gets wrong, and every transfer goes through it.
 const SystemProgramID = "11111111111111111111111111111111"
 
+// MemoProgramID is the SPL Memo v2 program. It logs the string it is given
+// and writes no state, so a memo costs one signature fee and moves nothing.
+//
+// The address is not obvious and the wrong one does not decode to 32 bytes,
+// so it is worth having as a constant: a memo built with a mistyped program
+// id reaches the wallet and comes back as "not a Solana address", which is
+// legible once but not twice.
+const MemoProgramID = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"
+
+// NewMemo builds the instruction that attaches a note to a transaction.
+//
+// The accounts list is empty. The memo program's only account is the signer,
+// and the wallet is the signer, so naming one here would be saying nothing
+// the far side does not already know - and the agent protocol's parser is
+// taught to let this program through with an empty list for that reason.
+func NewMemo(text string) ([]agentkey.SolanaInstruction, error) {
+	if text == "" {
+		return nil, errors.New("a memo of nothing is not worth asking for")
+	}
+	// The program rejects anything longer as "Memo too long", and the
+	// transaction lands as a fee-burning error. Checking here means the
+	// limit is something a person reads before signing rather than after.
+	if len(text) > memoMaxBytes {
+		return nil, fmt.Errorf("a memo is limited to %d bytes, this one is %d", memoMaxBytes, len(text))
+	}
+	return []agentkey.SolanaInstruction{{
+		ProgramID:  MemoProgramID,
+		Accounts:   []agentkey.SolanaAccount{},
+		DataBase58: siws.Base58Encode([]byte(text)),
+	}}, nil
+}
+
+// memoMaxBytes is the program limit on the note itself, in bytes of UTF-8
+// rather than of the base58 the request carries it in.
+const memoMaxBytes = 566
+
 // TransferInstruction describes a transfer in the terms a person would use:
 // an amount and a destination. Everything else is what the far side is for.
 type TransferInstruction struct {
@@ -374,57 +410,120 @@ func trimForLog(b []byte, n int) string {
 	return string(b[:n]) + "…"
 }
 
-// ConfirmTransaction asks the cluster whether a transaction it accepted has
-// been recorded. nil err means confirmed; the signature itself is the only
-// useful thing to print.
+// SignatureStatus is what a cluster says about a signature it has seen.
+type SignatureStatus struct {
+	ConfirmationStatus string `json:"confirmationStatus"`
+	Confirmations      *int   `json:"confirmations"`
+	Err                any    `json:"err"`
+	Slot               uint64 `json:"slot"`
+}
+
+// Confirmed is whether the transaction reached a state a sender can rely on.
+// A transaction that landed and failed its instructions is not confirmed: the
+// signature exists, the money did not move.
+func (s SignatureStatus) Confirmed() bool {
+	return s.Err == nil &&
+		(s.ConfirmationStatus == "confirmed" || s.ConfirmationStatus == "finalized")
+}
+
+// ConfirmTransaction waits for the cluster to say a signature has been
+// recorded, and reports what it found.
+//
+// The method is getSignatureStatuses rather than confirmTransaction. The
+// latter answers -32601 "Method not found" on a public cluster, which made
+// every --send against mainnet fail after a broadcast that had in fact
+// succeeded: the transaction was on chain and the command said it was not.
+// getSignatureStatuses is the method that exists everywhere, and it answers
+// for a signature the cluster has not seen yet by returning null, which is
+// what makes polling possible.
+//
+// A transaction that landed but failed its instructions is an error, not a
+// success. Reporting it as sent is the one wrong answer available here: the
+// fee is spent and nothing else happened, and a person reading the output
+// has to be told that.
 func ConfirmTransaction(ctx context.Context, rpcURL, signature string) error {
+	deadline := time.Now().Add(90 * time.Second)
+	for {
+		status, err := signatureStatus(ctx, rpcURL, signature)
+		if err != nil {
+			return err
+		}
+		// A null value means the cluster has not seen the signature yet,
+		// which is the normal state immediately after a broadcast.
+		if status != nil {
+			if status.Err != nil {
+				return fmt.Errorf("the transaction failed on chain: %v", status.Err)
+			}
+			if status.Confirmed() {
+				return nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("signature %s did not confirm within %s", signature, 90*time.Second)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+// signatureStatus asks the cluster about one signature. A nil status with a
+// nil error means the cluster has not seen it yet.
+func signatureStatus(ctx context.Context, rpcURL, signature string) (*SignatureStatus, error) {
 	body := []byte(fmt.Sprintf(
-		`{"jsonrpc":"2.0","id":1,"method":"confirmTransaction","params":["%s",{"commitment":"confirmed"}]}`,
+		`{"jsonrpc":"2.0","id":1,"method":"getSignatureStatuses","params":[["%s"],{"searchTransactionHistory":true}]}`,
 		signature,
 	))
 
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rpcURL, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("build the confirm request: %w", err)
+		return nil, fmt.Errorf("build the confirm request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("confirm at %s: %w", hostOf(rpcURL), err)
+		return nil, fmt.Errorf("confirm at %s: %w", hostOf(rpcURL), err)
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("%s answered the confirm request with %s", hostOf(rpcURL), resp.Status)
+		return nil, fmt.Errorf("%s answered the confirm request with %s", hostOf(rpcURL), resp.Status)
 	}
 
 	var answer struct {
-		Result *struct{} `json:"result"`
-		Error  *struct {
+		Result struct {
+			Value []*SignatureStatus `json:"value"`
+		} `json:"result"`
+		Error *struct {
 			Code    int    `json:"code"`
 			Message string `json:"message"`
 		} `json:"error"`
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return fmt.Errorf("read the confirm answer: %w", err)
+		return nil, fmt.Errorf("read the confirm answer: %w", err)
 	}
 	if err := json.Unmarshal(raw, &answer); err != nil {
-		return fmt.Errorf("%s answered with a non-JSON body (%d bytes): %q",
+		return nil, fmt.Errorf("%s answered with a non-JSON body (%d bytes): %q",
 			hostOf(rpcURL), len(raw), trimForLog(raw, 120))
 	}
 	if answer.Error != nil {
 		if answer.Error.Code != 0 {
-			return fmt.Errorf("%s (code %d): %s",
+			return nil, fmt.Errorf("%s (code %d): %s",
 				hostOf(rpcURL), answer.Error.Code, answer.Error.Message)
 		}
-		return fmt.Errorf("%s: %s", hostOf(rpcURL), answer.Error.Message)
+		return nil, fmt.Errorf("%s: %s", hostOf(rpcURL), answer.Error.Message)
 	}
-	return nil
+	if len(answer.Result.Value) == 0 {
+		return nil, nil
+	}
+	return answer.Result.Value[0], nil
 }
 
 func ParseLamports(sol string) (uint64, error) {

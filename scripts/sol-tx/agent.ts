@@ -33,6 +33,11 @@ export interface SolanaTxRequest {
 
 export interface SolanaTxResponse {
   refusal?: string;
+  /** base58 wallet public key; present on every response so callers that
+   * did not already know which pubkey the agent represents can ask once
+   * and pass it back on later requests (the memo program, for example,
+   * needs the signer listed in accounts). */
+  payer?: string;
   signature?: string; // hex of the 64-byte ed25519 signature
   /** base64 of the wire-format signed transaction */
   signedTransaction?: string;

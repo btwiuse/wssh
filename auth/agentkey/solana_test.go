@@ -265,6 +265,18 @@ func TestParseSolanaTxRequestRefusesWhatItCannotRead(t *testing.T) {
 	}
 }
 
+// A request whose only instruction is the SPL Memo v2 program does not need
+// to list its signer in accounts: the wallet fills the signer itself, and
+// the memo program has no other role. Anything else still has to name its
+// accounts up front, which is what the previous test confirms.
+func TestParseSolanaTxRequestAcceptsEmptyAccountsForMemo(t *testing.T) {
+	body := []byte(`{"blockhash":"2","instructions":[{"programId":"MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr","accounts":[],"data":"2"}]}`)
+
+	if _, err := ParseSolanaTxRequest(body); err != nil {
+		t.Errorf("a memo request with no accounts should have parsed: %v", err)
+	}
+}
+
 // A request is bounded on size, so a session cannot make the browser hold an
 // arbitrarily large message while it waits for someone to read it.
 func TestParseSolanaTxRequestBoundsSize(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -448,14 +449,24 @@ func TestSendTransaction(t *testing.T) {
 // error from the cluster keeps its wording so the person running this can
 // read what actually went wrong.
 func TestConfirmTransaction(t *testing.T) {
-	t.Run("confirmed", func(t *testing.T) {
+	// What used to be here asserted that an empty result meant confirmed.
+	// That was true only of confirmTransaction, the method a public cluster
+	// does not have - so the test passed against a fixture shaped like a
+	// protocol nobody serves, and the command it covered failed in
+	// production. The cases below are the ones that describe the method
+	// actually used, and the ones where being wrong costs money.
+
+	t.Run("a signature the cluster has not seen yet is not a confirmation", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			_, _ = io.WriteString(w, `{"jsonrpc":"2.0","result":{},"id":1}`)
+			_, _ = io.WriteString(w, `{"jsonrpc":"2.0","result":{"context":{"slot":1},"value":[null]},"id":1}`)
 		}))
 		defer server.Close()
 
-		if err := client.ConfirmTransaction(context.Background(), server.URL, "sig"); err != nil {
-			t.Errorf("nil result should mean confirmed, got %v", err)
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+
+		if err := client.ConfirmTransaction(ctx, server.URL, "sig"); err == nil {
+			t.Fatal("a signature that never arrives should not read as confirmed")
 		}
 	})
 
@@ -471,4 +482,114 @@ func TestConfirmTransaction(t *testing.T) {
 			t.Errorf("the endpoint's own wording should survive, got %v", err)
 		}
 	})
+}
+
+// A memo carries its text as base58 and names no accounts. The empty
+// accounts list is the point rather than an oversight: the memo program's
+// only account is the signer, and the wallet is the signer.
+func TestNewMemo(t *testing.T) {
+	got, err := client.NewMemo("deployed")
+	if err != nil {
+		t.Fatalf("a memo was refused: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d instructions, want 1", len(got))
+	}
+	if got[0].ProgramID != client.MemoProgramID {
+		t.Errorf("program %q, want the memo program %q", got[0].ProgramID, client.MemoProgramID)
+	}
+	if len(got[0].Accounts) != 0 {
+		t.Errorf("a memo names %d accounts, want none", len(got[0].Accounts))
+	}
+	if text, err := siws.Base58Decode(got[0].DataBase58); err != nil || string(text) != "deployed" {
+		t.Errorf("data decoded to %q (%v), want %q", text, err, "deployed")
+	}
+
+	// The program id has to be a real address or every memo is refused by
+	// the wallet for a reason that reads like a typo.
+	if _, err := siws.Base58Decode(client.MemoProgramID); err != nil {
+		t.Errorf("the memo program id is not base58: %v", err)
+	}
+}
+
+func TestNewMemoRefusesWhatTheProgramWouldRefuse(t *testing.T) {
+	if _, err := client.NewMemo(""); err == nil {
+		t.Error("an empty memo should have been refused")
+	}
+	// The program rejects anything longer as "Memo too long", and the
+	// transaction lands as a fee-burning error, so the limit has to be
+	// something a person reads before signing.
+	if _, err := client.NewMemo(strings.Repeat("x", 567)); err == nil {
+		t.Error("a memo over the program's limit should have been refused")
+	}
+	if _, err := client.NewMemo(strings.Repeat("x", 566)); err != nil {
+		t.Errorf("a memo at the limit should be accepted, got %v", err)
+	}
+}
+
+// confirmTransaction does not exist on a public cluster; it answers -32601.
+// Asking for it made every --send against mainnet fail after a broadcast
+// that had already succeeded. The test is on the method actually used.
+func TestConfirmTransactionUsesGetSignatureStatuses(t *testing.T) {
+	var method string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			Method string `json:"method"`
+		}
+		_ = json.Unmarshal(body, &req)
+		method = req.Method
+		_, _ = io.WriteString(w,
+			`{"jsonrpc":"2.0","result":{"context":{"slot":5},"value":[{"confirmationStatus":"confirmed","confirmations":1,"err":null,"slot":5}]},"id":1}`)
+	}))
+	defer server.Close()
+
+	if err := client.ConfirmTransaction(context.Background(), server.URL, "sig"); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+	if method != "getSignatureStatuses" {
+		t.Errorf("asked for %q, want getSignatureStatuses", method)
+	}
+}
+
+// A signature the cluster has not seen yet comes back as null. Reading that
+// as confirmed would report a transaction as sent before it landed.
+func TestConfirmTransactionWaitsForASignatureItCannotSeeYet(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			_, _ = io.WriteString(w,
+				`{"jsonrpc":"2.0","result":{"context":{"slot":1},"value":[null]},"id":1}`)
+			return
+		}
+		_, _ = io.WriteString(w,
+			`{"jsonrpc":"2.0","result":{"context":{"slot":5},"value":[{"confirmationStatus":"confirmed","confirmations":1,"err":null,"slot":5}]},"id":1}`)
+	}))
+	defer server.Close()
+
+	if err := client.ConfirmTransaction(context.Background(), server.URL, "sig"); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+	if calls < 2 {
+		t.Errorf("asked %d times, want at least 2: a null status is not a confirmation", calls)
+	}
+}
+
+// A transaction that landed and failed its instructions is the one wrong
+// answer available here: the fee is spent and nothing else happened.
+func TestConfirmTransactionReportsAnOnChainFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w,
+			`{"jsonrpc":"2.0","result":{"context":{"slot":5},"value":[{"confirmationStatus":"confirmed","confirmations":1,"err":{"InstructionError":[0,"MissingAccount"]},"slot":5}]},"id":1}`)
+	}))
+	defer server.Close()
+
+	err := client.ConfirmTransaction(context.Background(), server.URL, "sig")
+	if err == nil {
+		t.Fatal("a transaction that failed on chain should not read as sent")
+	}
+	if !strings.Contains(err.Error(), "MissingAccount") {
+		t.Errorf("the cluster's own reason should survive, got %v", err)
+	}
 }

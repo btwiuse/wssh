@@ -6,7 +6,7 @@
 
 import { assertEquals, assertThrows } from "jsr:@std/assert";
 import { decodeBase58, encodeBase58, isBase58 } from "./base58.ts";
-import { rawCall, transferLamports } from "./instruction.ts";
+import { memo, rawCall, transferLamports } from "./instruction.ts";
 
 Deno.test("base58 roundtrip survives a Solana-shaped byte sequence", () => {
   // 32-byte public key with leading zeros - the kind of thing Solana
@@ -83,4 +83,32 @@ Deno.test("rawCall passes accounts through as non-signer writable", () => {
     assertEquals(a.isSigner, false);
     assertEquals(a.isWritable, true);
   }
+});
+
+Deno.test("memo encodes text as UTF-8 base58 data with empty accounts", () => {
+  const ix = memo("hello from wssh");
+  assertEquals(ix.programId, "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
+  // The accounts list is empty on the wire: the agent protocol's
+  // isNoAccountProgram carve-out for memo lets it through, and the
+  // wallet fills the signer itself.
+  assertEquals(ix.accounts.length, 0);
+  // The data is the UTF-8 bytes of the memo, base58-encoded.
+  assertEquals(decodeBase58(ix.data), new TextEncoder().encode("hello from wssh"));
+});
+
+Deno.test("memo refuses an empty string", () => {
+  assertThrows(
+    () => memo(""),
+    Error,
+    "nothing",
+  );
+});
+
+Deno.test("memo refuses text longer than 566 bytes", () => {
+  const longText = "x".repeat(600);
+  assertThrows(
+    () => memo(longText),
+    Error,
+    "566 bytes",
+  );
 });

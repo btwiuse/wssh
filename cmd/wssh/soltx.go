@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -28,6 +29,7 @@ func newSolTxCmd() *cobra.Command {
 		program   string
 		accounts  []string
 		data      string
+		memo      string
 		send      bool
 	)
 
@@ -69,7 +71,10 @@ Examples:
   wssh sol-tx call --program 9xQe... --account 5cyy... --data 3Bxs... --rpc https://my-rpc.example.com
 
   # Any instruction at all
-  wssh sol-tx call --program 9xQe... --account 5cyy... --data 3Bxs...`,
+  wssh sol-tx call --program 9xQe... --account 5cyy... --data 3Bxs...
+
+  # Attach a note and reach a block, without moving anything
+  wssh sol-tx memo --memo "deployed" --send`,
 		// "transfer" and "call" are read as a leading word rather than
 		// subcommands, because both share every flag and a person should
 		// not have to say which. The help has always shown them this way, so
@@ -80,10 +85,10 @@ Examples:
 			if len(args) == 1 && args[0] != "" {
 				mode = args[0]
 			}
-			if mode != "transfer" && mode != "call" {
+			if mode != "transfer" && mode != "call" && mode != "memo" {
 				return fmt.Errorf(
-					"unknown instruction %q: this asks for a transfer (--to, --sol or --lamports) "+
-						"or a call (--program, --account, --data)", mode)
+					"unknown instruction %q: this asks for a transfer (--to, --sol or --lamports), "+
+						"a memo (--memo), or a call (--program, --account, --data)", mode)
 			}
 
 			req, err := buildSolTxRequest(solTxRequest{
@@ -91,6 +96,7 @@ Examples:
 				sockPath: sockPath, rpcURL: effectiveRPC(rpcURL, network), blockhash: blockhash, label: label,
 				to: to, sol: sol, lamports: lamports,
 				program: program, accounts: accounts, data: data, payer: payer,
+				memo: memo,
 			})
 			if err != nil {
 				return err //nolint:wrapcheck
@@ -119,9 +125,20 @@ Examples:
 				if err != nil {
 					return err //nolint:wrapcheck
 				}
+				// The signature goes to stdout on its own so that
+				// `SIG=$(wssh sol-tx ... --send)` yields exactly one line.
+				// Everything meant for a person reading the terminal goes to
+				// stderr, including the link to look the transaction up in.
 				fmt.Println(sig)
 				if err := client.ConfirmTransaction(ctx, endpoint, sig); err != nil {
 					return err //nolint:wrapcheck
+				}
+				// Only after the confirmation lands: a signature on its own says
+				// the cluster accepted the bytes, not that the instructions ran,
+				// and a link to a failed transaction is a worse thing to print
+				// than no link at all.
+				if url := explorerTxURL(endpoint, sig); url != "" {
+					fmt.Fprintln(os.Stderr, url)
 				}
 				return nil
 			}
@@ -152,6 +169,8 @@ Examples:
 	cmd.Flags().StringVar(&program, "program", "", "program to call, for call")
 	cmd.Flags().StringArrayVar(&accounts, "account", nil, "an account to pass, repeatable")
 	cmd.Flags().StringVar(&data, "data", "", "instruction data in base58, for call")
+	cmd.Flags().StringVar(&memo, "memo", "",
+		"text to attach to the transaction, for memo; costs one signature fee and moves nothing")
 	cmd.Flags().BoolVar(&send, "send", false,
 		"broadcast the signed transaction through --rpc and wait for confirmation, "+
 			"instead of printing it")
@@ -160,14 +179,14 @@ Examples:
 }
 
 type solTxRequest struct {
-	mode                                      string
+	mode                                               string
 	sockPath, rpcURL, network, blockhash, label, payer string
-	to, sol                                   string
-	lamports                                  uint64
-	program                                   string
-	accounts                                  []string
-	data                                      string
-	send                                      bool
+	to, sol, memo                                      string
+	lamports                                           uint64
+	program                                            string
+	accounts                                           []string
+	data                                               string
+	send                                               bool
 }
 
 // resolveNetwork turns the friendly --network name into an RPC URL. The
@@ -193,6 +212,39 @@ func effectiveRPC(rpcURL, network string) string {
 	return resolveNetwork(network)
 }
 
+// explorerTxURL is the block explorer's link to a confirmed transaction, or
+// "" when the cluster behind the endpoint cannot be named.
+//
+// Only the public Solana endpoints are recognised. Someone's own RPC carries no
+// cluster in its URL, and calling that mainnet would print a link to a page
+// that says the transaction does not exist, which is worse than printing no
+// link at all.
+//
+// solscan picks the cluster with a query parameter rather than a path, so
+// mainnet is the bare URL and the other two carry ?cluster=.
+func explorerTxURL(endpoint, signature string) string {
+	var query string
+	switch hostOfURL(endpoint) {
+	case "api.mainnet-beta.solana.com":
+		query = ""
+	case "api.devnet.solana.com":
+		query = "?cluster=devnet"
+	case "api.testnet.solana.com":
+		query = "?cluster=testnet"
+	default:
+		return ""
+	}
+	return "https://solscan.io/tx/" + signature + query
+}
+
+func hostOfURL(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(parsed.Hostname())
+}
+
 func buildSolTxRequest(in solTxRequest) (agentkey.SolanaTxRequest, error) {
 	// Naming the payer is what lets the session sign for itself: with no wallet
 	// behind it, the account that authenticated the session is the one that can
@@ -204,6 +256,16 @@ func buildSolTxRequest(in solTxRequest) (agentkey.SolanaTxRequest, error) {
 	}
 
 	switch {
+	case in.mode == "memo":
+		// A note, not a transfer. The instruction carries no accounts at
+		// all, which is the one shape both the agent and the wallet have
+		// to be told to expect.
+		instructions, err := client.NewMemo(in.memo)
+		if err != nil {
+			return req, err //nolint:wrapcheck
+		}
+		req.Instructions = instructions
+
 	case in.mode == "call":
 		// A raw call. The account list and data are passed through as given:
 		// deciding what they mean is the browser's job, and it is the one that
