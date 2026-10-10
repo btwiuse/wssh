@@ -407,7 +407,12 @@ function App() {
     if (!worker) return undefined;
 
     const onPrompt = (event) => {
-      const { id, kind, name } = event.data || {};
+      // Only prompts. This listener sees every message the worker posts, and
+      // anything else - keyInfo, data, closed - has no kind, so without this
+      // line it renders as a password dialog the user never asked for. That
+      // is how importing a key used to pop an empty password prompt.
+      if (event.data?.type !== 'prompt') return;
+      const { id, kind, name } = event.data;
       // One dialog per question. Anything that re-delivers the same message
       // would otherwise stack prompts nobody asked for.
       if (seenPrompts.current.has(id)) return;
