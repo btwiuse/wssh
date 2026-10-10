@@ -143,7 +143,7 @@ func jsConnect(_ js.Value, args []js.Value) any {
 	}
 
 	go func() {
-		auth, signers, err := buildAuth(creds, askPassword, askKeyPassphrase)
+		auth, keys, err := buildAuth(creds, askPassword, askKeyPassphrase)
 		if err != nil {
 			post(map[string]any{"type": "error", "message": err.Error()})
 			return
@@ -173,10 +173,15 @@ func jsConnect(_ js.Value, args []js.Value) any {
 				return
 			}
 			auth = append(auth, gossh.PublicKeys(wallet))
-			signers = append(signers, wallet)
+			// Marked as the wallet so that a session holding both it and an
+			// imported SSH key can say which is which. Every ed25519 key in
+			// an agent is a Solana account, so the address alone would not
+			// distinguish them - the point is that this one is the connected
+			// wallet and not a key the user imported.
+			keys = append(keys, agentkey.Key{Signer: wallet, Comment: walletComment(creds)})
 		}
 
-		if len(signers) > 0 {
+		if len(keys) > 0 {
 			// The keyring answers Solana transactions, so anything in the
 			// session can ask the wallet to sign one. There is no switch for
 			// this: forwarding a wallet is already the decision, and a
@@ -186,7 +191,7 @@ func jsConnect(_ js.Value, args []js.Value) any {
 			// Without a wallet the extension is attached with nothing behind
 			// it, so the refusal names that rather than looking like an agent
 			// that has never heard of transactions.
-			ring, err := agentkey.Keyring(signers)
+			ring, err := agentkey.KeyringWithComments(keys)
 			if err != nil {
 				post(map[string]any{"type": "error",
 					"message": "could not prepare the signing keyring: " + err.Error()})
@@ -202,6 +207,13 @@ func jsConnect(_ js.Value, args []js.Value) any {
 				return
 			}
 			walletRing = ring
+		}
+
+		// The comments travel in the keyring above; Options takes the
+		// signers on their own.
+		signers := make([]gossh.Signer, 0, len(keys))
+		for _, k := range keys {
+			signers = append(signers, k.Signer)
 		}
 
 		sess, err := Dial(context.Background(), Options{

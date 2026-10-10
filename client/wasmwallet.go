@@ -37,6 +37,9 @@ func walletSigner(publicKeyHex, address string) (gossh.Signer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("wallet public key is not hex: %w", err)
 	}
+	if len(raw) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("wallet public key is %d bytes, want %d", len(raw), ed25519.PublicKeySize)
+	}
 
 	hook := js.Global().Get(walletSignHook)
 	if hook.Type() != js.TypeFunction {

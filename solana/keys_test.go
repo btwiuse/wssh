@@ -185,6 +185,64 @@ func TestListAgentKeysNamesEveryKeyTheAgentHolds(t *testing.T) {
 	}
 }
 
+// The comment the agent carries comes back verbatim, because it is the only
+// thing on the line that says where the key came from and only the agent
+// knows. A label the agent was given - a key file's name, a wallet's address -
+// has to survive the trip or the listing says nothing about any of them.
+func TestListAgentKeysKeepsTheAgentsComment(t *testing.T) {
+	const comment = "wallet@FRucBU2bikra3LVBGfuxgwrtHka7qiQUCUWH4A2kHFRz"
+
+	_, priv := mustEdKey(t)
+	ring, err := agentkey.KeyringWithComments([]agentkey.Key{{
+		Signer:  mustSigner(t, priv),
+		Comment: comment,
+	}})
+	if err != nil {
+		t.Fatalf("keyring: %v", err)
+	}
+
+	keys, err := ListAgentKeysAt(context.Background(), serveForTest(t, ring))
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("got %d keys, want 1", len(keys))
+	}
+	if keys[0].Comment != comment {
+		t.Errorf("comment is %q, want %q", keys[0].Comment, comment)
+	}
+	// And it lands where a reader will see it: at the end of the line.
+	if !strings.HasSuffix(keys[0].AuthorizedKey(), comment) {
+		t.Errorf("the line does not end in the comment: %q", keys[0].AuthorizedKey())
+	}
+}
+
+// An agent that says nothing gets nothing added. This repository's keyring
+// used to fill the field with the algorithm name, which made every line read
+// `ssh-ed25519 AAAA... ssh-ed25519` and told a session nothing it could not
+// already see from the type.
+func TestListAgentKeysInventsNoComment(t *testing.T) {
+	_, priv := mustEdKey(t)
+	ring, err := agentkey.Keyring([]gossh.Signer{mustSigner(t, priv)})
+	if err != nil {
+		t.Fatalf("keyring: %v", err)
+	}
+
+	keys, err := ListAgentKeysAt(context.Background(), serveForTest(t, ring))
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("got %d keys, want 1", len(keys))
+	}
+	if keys[0].Comment != "" {
+		t.Errorf("comment is %q, want nothing rather than an invented label", keys[0].Comment)
+	}
+	if line := keys[0].AuthorizedKey(); strings.HasSuffix(line, keys[0].Type()) {
+		t.Errorf("the algorithm name is standing in for a comment: %q", line)
+	}
+}
+
 // An empty agent is an answer, not a failure: the agent worked and holds
 // nothing. Treating that as an error would make a script fail on the machine
 // where the key simply has not been added yet.

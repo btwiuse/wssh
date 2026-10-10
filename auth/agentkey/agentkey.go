@@ -67,21 +67,48 @@ var errFixed = errors.New("agentkey: the keyring is fixed at startup")
 // precisely that, so digging the inner value out of the library's wrapper
 // would buy nothing but a dependency on its private layout.
 func Keyring(signers []gossh.Signer) (Agent, error) {
-	if len(signers) == 0 {
+	keys := make([]Key, len(signers))
+	for i, s := range signers {
+		keys[i] = Key{Signer: s}
+	}
+	return KeyringWithComments(keys)
+}
+
+// Key is one signing key and the label the agent will carry for it.
+//
+// The comment is the end of the line in `ssh-add -L` and `ssh-add -l`, and
+// it is the only place either can say where a key came from. Whoever builds
+// the keyring is the only party that knows: it read the key off a disk, or
+// off a page, or out of a wallet. So the comment is supplied here rather
+// than guessed at later, and an empty one is honest - it means the builder
+// did not know, and nothing is invented in its place.
+//
+// What must not go in it is the algorithm name. `ssh-add -l` already prints
+// that in parentheses after the comment, so a comment that repeats it turns
+// every line into the same word twice and tells the reader nothing.
+type Key struct {
+	Signer  gossh.Signer
+	Comment string
+}
+
+// KeyringWithComments is Keyring with a label per key, for a caller that
+// knows where its keys came from.
+func KeyringWithComments(keys []Key) (Agent, error) {
+	if len(keys) == 0 {
 		return nil, nil //nolint:nilnil
 	}
-	for i, s := range signers {
-		if s == nil {
+	for i, k := range keys {
+		if k.Signer == nil {
 			return nil, fmt.Errorf("agentkey: signer %d is nil", i)
 		}
 	}
-	return &keyring{signers: slices.Clone(signers)}, nil
+	return &keyring{keys: slices.Clone(keys)}, nil
 }
 
-// keyring is an agent.Agent over a fixed list of signers.
+// keyring is an agent.Agent over a fixed list of keys.
 type keyring struct {
-	mu      sync.RWMutex
-	signers []gossh.Signer
+	mu   sync.RWMutex
+	keys []Key
 
 	// solana, when set, answers the transaction extension. It is nil on a
 	// keyring that cannot sign one, which is the ordinary case and not an
@@ -93,15 +120,13 @@ func (r *keyring) List() ([]*agent.Key, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	keys := make([]*agent.Key, 0, len(r.signers))
-	for _, s := range r.signers {
-		pub := s.PublicKey()
+	keys := make([]*agent.Key, 0, len(r.keys))
+	for _, k := range r.keys {
+		pub := k.Signer.PublicKey()
 		keys = append(keys, &agent.Key{
-			Format: pub.Type(),
-			Blob:   pub.Marshal(),
-			// The comment is what `ssh-add -l` shows, so the key type is
-			// more use to a human than nothing.
-			Comment: pub.Type(),
+			Format:  pub.Type(),
+			Blob:    pub.Marshal(),
+			Comment: k.Comment,
 		})
 	}
 	return keys, nil
@@ -111,9 +136,9 @@ func (r *keyring) Sign(key gossh.PublicKey, data []byte) (*gossh.Signature, erro
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	for _, s := range r.signers {
-		if bytes.Equal(s.PublicKey().Marshal(), key.Marshal()) {
-			return s.Sign(rand.Reader, data)
+	for _, k := range r.keys {
+		if bytes.Equal(k.Signer.PublicKey().Marshal(), key.Marshal()) {
+			return k.Signer.Sign(rand.Reader, data)
 		}
 	}
 	return nil, fmt.Errorf("agentkey: no key matches the requested %s key", key.Type())
@@ -123,7 +148,11 @@ func (r *keyring) Signers() ([]gossh.Signer, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	return slices.Clone(r.signers), nil
+	signers := make([]gossh.Signer, 0, len(r.keys))
+	for _, k := range r.keys {
+		signers = append(signers, k.Signer)
+	}
+	return signers, nil
 }
 
 // Extension answers the extensions this agent knows about and refuses the rest.
@@ -138,12 +167,12 @@ func (r *keyring) Extension(name string, contents []byte) ([]byte, error) {
 	}
 
 	r.mu.RLock()
-	signers := slices.Clone(r.signers)
+	signers := make([]gossh.Signer, 0, len(r.keys))
+	for _, k := range r.keys {
+		signers = append(signers, k.Signer)
+	}
 	r.mu.RUnlock()
 
-	if len(signers) == 0 {
-		return r.solana.ExtensionHandler(nil)(name, contents)
-	}
 	// One wallet is one key, so the extension is answered by the only key
 	// there is. With several there is nothing to disambiguate with and
 	// guessing would be worse than refusing.

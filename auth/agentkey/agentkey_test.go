@@ -93,6 +93,58 @@ func TestKeyringRoundTrip(t *testing.T) {
 	}
 }
 
+// The comment is the only thing a session has to go on to tell two keys
+// apart, so what the caller supplied has to arrive exactly. It used to be
+// filled in with the algorithm name instead, which is information nothing
+// can use: ssh-add prints the type in parentheses after the comment anyway,
+// and sol-keys reports it as a field of its own.
+func TestListCarriesTheSuppliedComment(t *testing.T) {
+	signer, _ := makeKey(t)
+	ring, err := KeyringWithComments([]Key{{
+		Signer:  signer,
+		Comment: "wallet@FRucBU2bikra3LVBGfuxgwrtHka7qiQUCUWH4A2kHFRz",
+	}})
+	if err != nil {
+		t.Fatalf("keyring: %v", err)
+	}
+
+	keys, err := ring.List()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key, got %d", len(keys))
+	}
+	if got, want := keys[0].Comment, "wallet@FRucBU2bikra3LVBGfuxgwrtHka7qiQUCUWH4A2kHFRz"; got != want {
+		t.Errorf("comment is %q, want %q", got, want)
+	}
+}
+
+// A keyring built without comments says nothing rather than guessing. An
+// invented label is worse than an absent one: it looks like the agent knows
+// where the key came from, and a person reading it believes it.
+func TestListSaysNothingWhenNoCommentWasGiven(t *testing.T) {
+	signer, _ := makeKey(t)
+	ring, err := Keyring([]ssh.Signer{signer})
+	if err != nil {
+		t.Fatalf("keyring: %v", err)
+	}
+
+	keys, err := ring.List()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key, got %d", len(keys))
+	}
+	if keys[0].Comment != "" {
+		t.Errorf("comment is %q, want nothing rather than an invented label", keys[0].Comment)
+	}
+	if got, want := keys[0].Comment, keys[0].Type(); got == want {
+		t.Errorf("the algorithm name is being used as a comment; that is the defect this replaces")
+	}
+}
+
 // A key the server was not configured with must not be signable, or the
 // keyring would be signing for identities it never agreed to hold.
 func TestSignRejectsUnknownKey(t *testing.T) {

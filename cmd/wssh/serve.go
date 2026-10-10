@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -447,7 +448,7 @@ func buildAgent(paths []string) (agentkey.Agent, error) {
 	if len(paths) == 0 {
 		return nil, nil
 	}
-	signers := make([]gossh.Signer, 0, len(paths))
+	keys := make([]agentkey.Key, 0, len(paths))
 	for _, p := range paths {
 		raw, err := os.ReadFile(p) //nolint:gosec
 		if err != nil {
@@ -461,9 +462,15 @@ func buildAgent(paths []string) (agentkey.Agent, error) {
 			}
 			return nil, fmt.Errorf("parse %s: %w", p, err)
 		}
-		signers = append(signers, signer)
+		// The file's name is the one thing that says where this key came
+		// from, and it is what ssh-add itself prints for a key in ~/.ssh.
+		// It lands at the end of every `ssh-add -l` line in the session and
+		// in sol-keys, which is the only place a session can find out that
+		// the key it is holding is the one from /etc/wssh/solana.ed25519 and
+		// not some other.
+		keys = append(keys, agentkey.Key{Signer: signer, Comment: filepath.Base(p)})
 	}
-	return agentkey.Keyring(signers)
+	return agentkey.KeyringWithComments(keys)
 }
 
 // browserURL turns a listen address into something worth pasting into a bar.

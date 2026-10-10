@@ -10,6 +10,8 @@ import (
 
 	"github.com/charmbracelet/keygen"
 	gossh "golang.org/x/crypto/ssh"
+
+	"github.com/btwiuse/wssh/auth/agentkey"
 )
 
 // errNoPassword is returned when the page declines to supply a password. It
@@ -69,9 +71,9 @@ type keyMaterial struct {
 // something else - forwarding an agent - and parsing a key twice to get at
 // them twice would mean asking for a passphrase twice.
 func buildAuth(creds credentials, askPassword func() (string, error),
-	askKeyPassphrase func(name string) (string, error)) ([]gossh.AuthMethod, []gossh.Signer, error) {
+	askKeyPassphrase func(name string) (string, error)) ([]gossh.AuthMethod, []agentkey.Key, error) {
 	var auth []gossh.AuthMethod
-	var signers []gossh.Signer
+	var keys []agentkey.Key
 
 	for _, key := range creds.Keys {
 		signer, err := signerFor(key, askKeyPassphrase)
@@ -80,7 +82,13 @@ func buildAuth(creds credentials, askPassword func() (string, error),
 		}
 		if signer != nil {
 			auth = append(auth, gossh.PublicKeys(signer))
-			signers = append(signers, signer)
+			// The name the page gave this key is what a session will see
+			// at the end of every `ssh-add -l` line and in sol-keys. It is
+			// the only description of the key that exists anywhere: the
+			// private key is a blob with nothing in it to read, and without
+			// the name two imported keys are indistinguishable in a listing
+			// that cannot tell them apart any other way.
+			keys = append(keys, agentkey.Key{Signer: signer, Comment: keyComment(key)})
 		}
 	}
 
@@ -103,7 +111,49 @@ func buildAuth(creds credentials, askPassword func() (string, error),
 			return askPassword()
 		}))
 	}
-	return auth, signers, nil
+	return auth, keys, nil
+}
+
+// SolanaComment labels a key as the Solana account it is.
+//
+// The prefix carries information precisely because ed25519 is not Solana's:
+// Sui and Near wallets are on the same curve, so a 32-byte key and a base58
+// string of it are what any of them looks like. The address alone therefore
+// does not say which chain's encoding it is, and saying so is the whole
+// reason this is a prefix and not just the address.
+const SolanaComment = "solana:"
+
+// walletComment is what the connected wallet is called in a session.
+//
+// The address goes in the comment, and so does the fact that it is a Solana
+// address: a key pasted into authorized_keys keeps its comment and loses
+// everything else this listing knows, so the part worth keeping has to be in
+// the comment.
+//
+// With no address there is nothing to name and a bare prefix would say
+// nothing, so the source is what is left.
+func walletComment(creds credentials) string {
+	if addr := strings.TrimSpace(creds.WalletAddress); addr != "" {
+		// SolanaComment is duplicated from auth/agentkey's
+		// WalletCommentPrefix until the routing that reads it lands.
+		return "solana:" + addr
+	}
+	return "wallet"
+}
+
+// keyComment is what an imported key is called in a session.
+//
+// The page names every key it stores, so the name is used when there is one.
+// When there is not, the fallback is the algorithm rather than nothing: a
+// label of `ssh-ed25519` at the end of a line is harmless, whereas an empty
+// one leaves two keys in a listing with nothing to tell them apart. It is not
+// this package's job to invent a better name, because only the page knows
+// what the user called it.
+func keyComment(key keyMaterial) string {
+	if name := strings.TrimSpace(key.Name); name != "" {
+		return name
+	}
+	return gossh.KeyAlgoED25519
 }
 
 // signerFor opens one private key, asking the page for a passphrase if it needs
