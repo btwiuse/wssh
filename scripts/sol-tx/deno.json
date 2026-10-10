@@ -1,0 +1,15 @@
+{
+  "tasks": {
+    "start": "deno run --allow-net --allow-read --allow-env --allow-sys --allow-write main.ts",
+    "test": "deno test --allow-net --allow-read --allow-env --allow-sys --allow-write"
+  },
+  "imports": {
+    "@std/cli/parse-args": "jsr:@std/cli@^1.0.0/parse-args",
+    "@scure/base": "npm:@scure/base@^2.4.0",
+    "@solana/web3.js": "npm:@solana/web3.js@^1.95.0"
+  },
+  "compilerOptions": {
+    "strict": true,
+    "noImplicitAny": true
+  }
+}
