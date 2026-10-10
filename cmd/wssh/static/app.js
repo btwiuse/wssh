@@ -6,7 +6,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import htm from 'htm';
-import { CredentialsPanel, credentialsForConnect, installHooks } from './credentials.js';
+import {
+  CredentialsPanel, credentialsForConnect, installHooks, signInWithTheWallet, signSolanaTransaction,
+} from './credentials.js';
 
 const html = htm.bind(React.createElement);
 
@@ -479,6 +481,12 @@ function App() {
           setStatus('closed');
           setConnected(false);
           break;
+        case 'notice':
+          // Something that did not work but does not stop the session, such
+          // as a signing key the server would not accept. Shown, not fatal:
+          // silently doing less than was asked for is worse.
+          setError(msg.message);
+          break;
         default:
           break;
       }
@@ -533,6 +541,32 @@ function App() {
         return;
       }
 
+      // A transaction the session wants signed. The page builds it and shows
+      // it, so whoever holds the wallet approves something legible rather than
+      // a blob, and the answer comes back as JSON rather than a yes or no.
+      if (kind === 'soltx') {
+        signSolanaTransaction(detail).then((answer) => {
+          worker.postMessage({ type: 'promptAnswer', id, value: JSON.stringify(answer) });
+        }).catch((err) => {
+          worker.postMessage({
+            type: 'promptAnswer', id,
+            value: JSON.stringify({ refusal: String(err?.message || err) }),
+          });
+        });
+        return;
+      }
+
+      // The sign-in request: the message the server wants signed, verbatim.
+      if (kind === 'walletsignin') {
+        signInWithTheWallet(detail).then((answer) => {
+          worker.postMessage({ type: 'promptAnswer', id, value: answer });
+        }).catch((err) => {
+          setError(`could not sign in with the wallet: ${err?.message || err}`);
+          worker.postMessage({ type: 'promptAnswer', id, value: '' });
+        });
+        return;
+      }
+
       const label = kind === 'passphrase' ? `passphrase for ${name}` : 'password';
       ask(label, kind === 'passphrase').then((value) => {
         worker.postMessage({ type: 'promptAnswer', id, value });
@@ -565,7 +599,7 @@ function App() {
   // Clicking anywhere in the terminal should focus it, the way a real one does.
   const focusTerminal = useCallback(() => termRef.current?.focus(), []);
 
-  const connect = useCallback(() => {
+  const connect = useCallback(async () => {
     const url = endpoint.trim();
     // A mistyped address otherwise fails deep inside the WebSocket handshake,
     // where the message is about the connection rather than the typing.
@@ -575,18 +609,23 @@ function App() {
       return;
     }
     setError('');
+
     setStatus('connecting');
     setCredsOpen(false);
     syncQuery(url, command.trim());
     const term = termRef.current;
     workerRef.current?.postMessage({
       type: 'connect',
+      // Ask for the session to be authenticated by the wallet, if one is
+      // connected. The server's message arrives over the socket and comes back
+      // here to be signed, so nothing sensitive travels in this URL.
+      signIn: !!walletRef.current,
       url,
       user: user.trim() || 'root',
       cols: term?.cols ?? 80,
       rows: term?.rows ?? 24,
       command: command.trim(),
-      credentials: credentialsForConnect(forwardAgent, walletRef.current, wallet?.address),
+      credentials: credentialsForConnect(forwardAgent, walletRef.current, wallet?.address, !!walletRef.current),
     });
   }, [endpoint, user, command, forwardAgent, wallet]);
 

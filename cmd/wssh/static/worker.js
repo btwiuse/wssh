@@ -108,6 +108,19 @@ globalThis.__websshAskPassphraseFn = (name) => askPage('passphrase', name);
 // rather than a failure.
 globalThis.__websshAskSignature = (summary) => askPage('signature', '', summary);
 
+// Asking the page to sign a Solana transaction. The transaction is built
+// there, by the library meant to keep up with Solana's format, and shown to
+// whoever holds the wallet before they approve it. The answer comes back as
+// JSON: either a refusal in words, or the signature and the signed
+// transaction, both hex. An empty answer is a refusal.
+globalThis.__websshSolanaTx = (request) => askPage('soltx', '', request);
+
+// Asking the page's wallet to sign a sign-in request. Go sends the exact text
+// the server produced and takes back "messageHex:signatureHex", so the message
+// that gets signed cannot drift from the one that was asked for. An empty
+// answer is a refusal, which is an answer rather than a failure.
+globalThis.__websshWalletSignIn = (message) => askPage('walletsignin', '', message);
+
 // Asking the wallet to sign. The wallet lives on the page, so this is the same
 // round trip: the page shows the request, calls the wallet extension, and
 // answers with the signature in hex. An empty answer is a refusal, which is an
@@ -153,6 +166,9 @@ self.onmessage = async (event) => {
         // this worker as data. The optional command is forwarded verbatim:
         // empty means an interactive shell, anything else is run on the far
         // side and the session ends when it does.
+        // A wallet sign-in, when there is one, rides inside the credentials
+        // blob. Go owns the encoding of it, so it is passed as the message and
+        // signature the wallet returned rather than as a finished token.
         const credentials = JSON.stringify(msg.credentials || { keys: [], passwords: [] });
         api.connect(msg.url, msg.user, msg.cols, msg.rows, credentials,
                    globalThis.__websshAskPassword, msg.command || '');
