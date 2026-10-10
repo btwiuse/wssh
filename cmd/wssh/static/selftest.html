@@ -8,76 +8,371 @@
     pre { white-space: pre-wrap; }
     .pass { color:#34d399; font-weight:bold; }
     .fail { color:#f87171; font-weight:bold; }
+    .skip { color:#fbbf24; font-weight:bold; }
+    h2 { font-size:1rem; color:#94a3b8; margin:1rem 0 .25rem; }
   </style>
 </head>
 <body>
 <h1>webssh selftest</h1>
 <pre id="out">starting…</pre>
-<script>
-// Exercises worker + Go/WASM + SSH end to end by sending real key events, one
-// per character, exactly as a terminal does. It deliberately does not go
-// through xterm: this is about the transport, and synthesising keystrokes adds
-// a variable that has nothing to do with it.
+<script type="module">
+// A module that does not load leaves the page reading "starting…" for ever,
+// which looks like a hang instead of an error. Said once, plainly.
+addEventListener('error', (e) => {
+  const el = document.getElementById('out');
+  if (el.textContent.trim() === 'starting…') {
+    el.innerHTML = '<span class="fail">SELFTEST FAIL</span>\n\n'
+      + 'the page itself failed to load: ' + (e.message || e.type) + '\n'
+      + (e.filename ? 'at ' + e.lineno + ':' + e.colno + ' of ' + e.filename.split('/').pop() : '');
+  }
+});
+
+// The transaction is built by the same code the real page uses. Reimplementing
+// it here would test a copy, and the bugs this exists to catch were all about
+// the real one disagreeing with the server.
+import { signSolanaTransaction, warmUp } from './solana.js';
+
+// Exercises worker + Go/WASM + SSH end to end, in two phases.
+//
+//   1. the transport: real key events, one per character, through the
+//      WebSocket and into a shell
+//   2. the Solana seam: a key made here, used to sign a transaction the
+//      browser builds, checked by the Go side
+//
+// The second phase is the one that has no other coverage. Everything
+// about how the browser builds a transaction and how the server reads it
+// has to agree, and every disagreement so far looked fine until a
+// signature failed to arrive in a terminal. A wallet is not needed for
+// it: an ed25519 key generated here is the same kind of key, which is
+// the whole reason a session can sign without one.
+//
+// ?bin=   path to the wssh binary in the session (default: wssh on PATH)
+// ?rpc=   endpoint to fetch a live blockhash from. None is needed by default:
+//          nothing here is broadcast, so the blockhash only has to be
+//          well-formed, and the public RPCs refuse browser requests for CORS
+//          reasons that have nothing to do with this test.
 const out = document.getElementById('out');
 const lines = [];
-const say = (s) => { lines.push(s); out.textContent = lines.join('\n'); };
+const say = (s) => { lines.push(s); out.innerHTML = lines.join('\n'); };
 const enc = new TextEncoder();
+const dec = new TextDecoder();
+
+// The confirmation is the whole point of building a transaction in the page, so
+// it stays. What is skipped is only the click: nobody is there to make it, and
+// a test that waits for a person is not a test.
+//
+// What it says is captured and checked afterwards, which is worth more than the
+// click would have been: a confirmation that says nothing useful is the failure
+// this is here to catch.
+// A terminal wraps its output in escape sequences and bracketed-paste markers,
+// and they arrive glued to the line they precede. Stripped before anything is
+// matched against, or a perfectly good transaction reads as noise.
+const CLEAN = /\u001b\[[0-9;?]*[a-zA-Z]|\u001b\][^\u0007]*\u0007|\[\?\d+[hl]|\u001b[=>]/g;
+const clean = (line) => line.replace(CLEAN, '').trim();
+
+let confirmation = '';
+window.confirm = (text) => { confirmation = String(text); return true; };
+
+const params = new URLSearchParams(location.search);
+const BIN = params.get('bin') || 'wssh';
+const RPC = params.get('rpc') || '';
+
+// A real blockhash, used because nothing here is sent anywhere and only the
+// shape matters. It has to parse as a 32-byte base58 value, because that is
+// what the transaction is built from.
+const FIXED_BLOCKHASH = '2QaBotLgbzXTfMJH11nTp8KzsQKiejR3C7odjYvkd83Z';
+
+// --- small helpers, kept here so the production page carries no test code ---
+
+const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+
+function base58(bytes) {
+  let n = 0n;
+  for (const b of bytes) n = n * 256n + BigInt(b);
+  let out = '';
+  while (n > 0n) { out = B58[Number(n % 58n)] + out; n /= 58n; }
+  for (const b of bytes) { if (b !== 0) break; out = B58[0] + out; }
+  return out;
+}
+
+const b64 = (bytes) => btoa(String.fromCharCode(...bytes));
+
+function pem(der, label) {
+  const body = (b64(new Uint8Array(der)).match(/.{1,64}/g) || []).join('\n');
+  return `-----BEGIN ${label}-----\n${body}\n-----END ${label}-----\n`;
+}
+
+async function newKey() {
+  const pair = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify']);
+  return {
+    pem: pem(await crypto.subtle.exportKey('pkcs8', pair.privateKey), 'PRIVATE KEY'),
+    address: base58(new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey))),
+  };
+}
+
+async function blockhash() {
+  if (!RPC) return FIXED_BLOCKHASH;
+
+  const res = await fetch(RPC, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getLatestBlockhash', params: [{ commitment: 'finalized' }] }),
+  });
+  const raw = await res.text();
+  let body;
+  try {
+    body = JSON.parse(raw);
+  } catch {
+    throw new Error(`${RPC} answered with something that is not JSON (${res.status}): ${raw.slice(0, 120)}`);
+  }
+  if (body?.error) {
+    throw new Error(`${RPC}: ${body.error.message}`);
+  }
+  const hash = body?.result?.value?.blockhash;
+  if (!hash) {
+    throw new Error(`${RPC} answered without a blockhash: ${raw.slice(0, 120)}`);
+  }
+  return hash;
+}
+
+// --- phase 1: the transport ---
 
 const w = new Worker('./worker.js');
-let phase = 'prompt';
+let phase = 'connect';
+let selfKey = null;
+let txStartedAt = 0;
 let acc = '';
-const results = [];
+const failures = [];
+let transportDone = false;
 
 function typeToShell(text) {
   for (const ch of text) w.postMessage({ type: 'input', data: enc.encode(ch) });
   w.postMessage({ type: 'input', data: enc.encode('\n') });
 }
 
-const CMD = 'echo ORDERING_CANARY_12345';
-const EXPECT = 'ORDERING_CANARY_12345';
+const CANARY = 'ORDERING_CANARY_12345';
 
-w.onmessage = (e) => {
+async function start() {
+  let credentials = { keys: [], passwords: [] };
+
+  // The Solana library is fetched while phase 1 runs. It is large enough that
+  // a cold fetch outlives the wait a caller would sit through, so the test
+  // spends that time on the transport instead.
+  const warm = warmUp().then((w) => typeof w === 'string' ? w : 'ready');
+  warm.then((note) => say('solana library: ' + note));
+
+  try {
+    selfKey = await newKey();
+    say('made an ed25519 key in the page: ' + selfKey.address);
+    // The key is offered for authentication and exposed as an agent, so the
+    // transaction phase has something to sign with. No wallet is involved:
+    // this is the path a session with a key takes.
+    credentials = {
+      keys: [{ name: 'selftest', privateKey: selfKey.pem }],
+      passwords: [],
+      // Inside the blob, not beside it: the worker forwards only credentials.
+      // Without this there is no agent, and the transaction phase below would
+      // be testing a socket nothing is listening on.
+      forwardAgent: true,
+    };
+  } catch (err) {
+    say('<span class="skip">could not make a key (' + err.message + '); the transaction phase will be skipped</span>');
+    selfKey = null;
+  }
+
+  w.postMessage({
+    type: 'connect',
+    url: `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`,
+    user: 'selftest', cols: 80, rows: 24,
+    credentials,
+  });
+}
+
+async function phase2() {
+  say('');
+  say('<h2>phase 2 — the Solana seam</h2>');
+
+  if (!selfKey) {
+    say('<span class="skip">SKIP — no key to sign with</span>');
+    finish();
+    return;
+  }
+  const key = selfKey;
+
+  let bh = '';
+  try {
+    bh = await blockhash();
+  } catch (err) {
+    say('<span class="skip">SKIP — no blockhash (' + err.message + '); pass ?rpc= to a reachable endpoint</span>');
+    finish();
+    return;
+  }
+  if (!bh) {
+    say('<span class="skip">SKIP — no blockhash</span>');
+    finish();
+    return;
+  }
+  say('blockhash ' + bh + (RPC ? ' (live)' : ' (fixed; nothing is broadcast)'));
+
+  // To and payer are both this key: a transaction whose fee payer it is not
+  // will not send, and the point here is the shape not the money.
+  const cmd = `${BIN} sol-tx transfer --to ${key.address} --lamports 1 ` +
+              `--blockhash ${bh} --payer ${key.address}`;
+  say('$ ' + cmd);
+
+  acc = '';
+  phase = 'tx';
+  txStartedAt = Date.now();
+  typeToShell(cmd);
+}
+
+w.onmessage = async (e) => {
   const m = e.data;
+
   if (m.type === 'data') {
-    acc += new TextDecoder().decode(new Uint8Array(m.payload));
-    if (phase === 'prompt') {
-      typeToShell(CMD);
-      phase = 'output';
-    } else if (phase === 'output') {
+    acc += dec.decode(new Uint8Array(m.payload));
+
+    if (phase === 'connected') {
+      typeToShell(`echo ${CANARY}\n`);
+      phase = 'transport';
+
+    } else if (phase === 'transport') {
       // The typed line is echoed as it is entered, so the command text itself
       // already contains the token. The real output is a second, standalone
       // occurrence on a line of its own.
-      const first = acc.indexOf(EXPECT);
-      if (first !== -1 && acc.indexOf(EXPECT, first + EXPECT.length) !== -1) {
-        results.push('typed ' + CMD.length + ' chars one message each');
-        results.push('output matched: ' + EXPECT);
-        say('PASS — browser → WebSocket → SSH → shell round trip is intact');
-        out.innerHTML = '<span class="pass">SELFTEST PASS</span>\n\n' + results.join('\n');
-        w.postMessage({ type: 'input', data: enc.encode('exit\n') });
+      const first = acc.indexOf(CANARY);
+      if (first !== -1 && acc.indexOf(CANARY, first + CANARY.length) !== -1) {
+        // phase moves before the await: every later chunk carries the same
+        // canary, and without this the whole of phase 2 runs once per chunk.
+        phase = 'handover';
+        say('<span class="pass">PASS — browser → WebSocket → SSH → shell</span>');
+        transportDone = true;
+        await phase2();
+      }
+
+    } else if (phase === 'tx') {
+      // Wait for the command rather than judging the first chunk: the shell
+      // echoes its prompt before anything runs, and a signed transaction is
+      // only the last line of several.
+      // A terminal interleaves prompts and escape sequences with what a command
+      // prints, so the answer is somewhere in the output rather than at the end
+      // of it. Judging the last line alone reads the next prompt and misses a
+      // transaction that arrived perfectly well.
+      const plain = acc.split(/\r?\n/).map(clean).filter(Boolean);
+      const last = plain[plain.length - 1] || '';
+      const signed = plain.filter((l) => l.length > 100 && /^[1-9A-HJ-NP-Za-km-z]+$/.test(l)).pop() || '';
+
+      if (/^ERROR/i.test(last) || /refused|could not|not authorized|no wallet/i.test(last)) {
         phase = 'done';
+        say('<span class="fail">FAIL — the transaction was refused</span>');
+        say(last);
+        failures.push('transaction');
+        finish();
+        return;
+      }
+
+      if (signed) {
+        phase = 'done';
+
+        // A signature is worthless if the person who approved it was shown
+        // nothing. The transaction went to the server; check the page actually
+        // put the account and the program in front of them first.
+        const SYSTEM = '11111111111111111111111111111111';
+        const named = confirmation.includes(SYSTEM) && confirmation.includes(selfKey.address);
+        if (!named) {
+          say('<span class="fail">FAIL — the confirmation did not name what was being signed</span>');
+          say('showed: ' + (confirmation.slice(0, 300) || '(nothing)'));
+          failures.push('confirmation');
+        } else {
+          say('<span class="pass">PASS — the confirmation named the account and the program</span>');
+          say(confirmation.split('\n').slice(0, 8).join('\n'));
+        }
+
+        say('<span class="pass">PASS — the browser built a transaction and the server signed it</span>');
+        say('signed transaction: ' + signed.slice(0, 60) + '… (' + signed.length + ' base58 chars)');
+        finish();
+        return;
+      }
+
+      if (Date.now() - txStartedAt > 20000) {
+        phase = 'done';
+        say('<span class="fail">FAIL — nothing came back within 20s</span>');
+        say('last line: ' + (last || '(nothing)'));
+        say('everything the session printed:\n' + plain.slice(-6).join('\n'));
+        failures.push('transaction');
+        finish();
       }
     }
-    out.textContent = out.textContent; // keep last render
-  } else if (m.type === 'connected') {
+    return;
+  }
+
+  if (m.type === 'connected') {
+    say('<h2>phase 1 — the transport</h2>');
     say('connected to ' + location.host);
-    phase = 'prompt';
-    typeToShell('true\n');   // a cheap prompt warmer
-  } else if (m.type === 'error') {
+    phase = 'connected';
+    typeToShell('true\n');
+    return;
+  }
+
+  // A transaction request from the agent. Answering it is the whole point of
+  // phase 2: the browser builds, the session's key signs, and what comes back
+  // has to be a transaction Go is willing to verify.
+  if (m.type === 'prompt' && m.kind === 'soltx') {
+    const { id, detail, extra } = m;
+    signSolanaTransaction(detail, extra === 'build')
+      .then((answer) => w.postMessage({ type: 'promptAnswer', id, value: JSON.stringify(answer) }))
+      .catch((err) => w.postMessage({
+        type: 'promptAnswer', id,
+        value: JSON.stringify({ refusal: String(err?.message || err) }),
+      }));
+    return;
+  }
+
+  if (m.type === 'error') {
     say('<span class="fail">ERROR: ' + m.message + '</span>');
-  } else if (m.type === 'closed') {
-    if (phase !== 'done') say('<span class="fail">session closed early</span>');
+    failures.push('transport');
+    finish();
+    return;
+  }
+
+  if (m.type === 'closed' && phase !== 'done') {
+    say('<span class="fail">session closed early</span>');
+    failures.push('transport');
+    finish();
   }
 };
-w.onerror = (e) => say('<span class="fail">WORKER ERROR: ' + e.message + '</span>');
 
+w.onerror = (e) => {
+  say('<span class="fail">WORKER ERROR: ' + e.message + '</span>');
+  failures.push('worker');
+  finish();
+};
+
+function finish() {
+  phase = 'done';
+  out.innerHTML =
+    (failures.length
+      ? '<span class="fail">SELFTEST FAIL</span>'
+      : '<span class="pass">SELFTEST PASS</span>') +
+    '\n\n' + lines.join('\n');
+  w.postMessage({ type: 'input', data: enc.encode('exit\n') });
+}
+
+// A failing run has to say what it managed before it stopped, which is the
+// only thing a selftest is for. Replacing the output here threw away every
+// line above.
 setTimeout(() => {
-  if (phase !== 'done') {
-    out.innerHTML = '<span class="fail">SELFTEST FAIL (phase=' + phase + ')</span>\n\n' + acc.slice(-800);
+  if (phase === 'done') return;
+  say('<span class="fail">SELFTEST FAIL — stopped at phase=' + phase + '</span>');
+  if (acc.trim()) {
+    say('');
+    say('last output from the session:');
+    say(acc.slice(-800));
   }
-}, 20000);
+  finish();
+}, 25000);
 
-const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-w.postMessage({ type: 'connect', url: `${scheme}://${location.host}/ws`, user: 'selftest', cols: 80, rows: 24 });
+start();
 </script>
 </body>
 </html>
