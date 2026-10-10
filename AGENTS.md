@@ -109,6 +109,36 @@ cgo for targets that cannot use it; this only matters for cross-compile.
 `http://localhost:8080/selftest.html` (with the server running) and watch for
 the `SELFTEST PASS` banner. Useful after touching the front end.
 
+### Build sol-tx
+
+`make sol-tx` builds `bin/sol-tx`, which is its own binary - it does not speak
+SSH and is not a wssh subcommand.
+
+```
+./bin/sol-tx memo --memo "hello" --send --verbose
+./bin/sol-tx transfer --to <addr> --lamports 1000 --network devnet --send
+```
+
+With a wallet, the session's agent answers the Solana extension. With a plain
+ssh-agent - `ssh -A` into the server, or `--agent-keys` - it does not, and the
+command builds the transaction itself and asks the agent to sign it. With one
+key in the agent the account is taken from it; with several, `--payer` says
+which.
+
+### Run the selftest
+
+```
+make wssh sol-tx
+./bin/wssh web --forward-agent --hostkey ./hk
+open "http://127.0.0.1:8131/selftest.html?bin=$PWD/bin/sol-tx"
+```
+
+`--forward-agent` is required: without it a session has no agent and the
+transaction phase has nothing to sign with. `?bin=` points at the binary
+because the session does not have one on its PATH by default. Pass `?rpc=` to
+use an endpoint other than devnet; mainnet refuses browser requests with 403,
+which is why devnet is the default even though nothing is broadcast.
+
 ### Run the server
 
 ```
@@ -284,10 +314,10 @@ is real.
 
 | Path | Role |
 |---|---|
-| `Makefile` | Build entry point. `make wssh` is the target that builds a working binary; bare `make` lists targets. |
+| `Makefile` | Build entry point. `make wssh` is the target that builds a working binary; bare `make` lists targets. `make sol-tx` builds the second binary, `make bin` builds both. The wasm dependency list comes from `go list -deps` for the js/wasm target: a hand-kept list silently left the wasm stale when `auth/agentkey` changed, and a stale wasm runs the browser's transaction builder from a build that no longer exists. |
 | `wssh.go`, `wssh_test.go` | `Server` (HTTP handler wrapping wish). Path/origin/auth tests. |
 | `auth/auth.go`, `auth/auth_test.go` | `auth.Config`, key files (re-read each attempt), password file (bcrypt or plaintext). |
-| `auth/agentkey/forward.go` | Client-agent forwarding, the `ssh -A` direction. `InstallForwarding` records `auth-agent-req@openssh.com`; `Forward()` is the middleware that, on session open, dials back over an `auth-agent@openssh.com` channel and relays it to a local socket. `--forward-agent` turns it on. Requests are serialised: `agent.NewClient` is one channel with one sequence number. Must be appended **after** the shell middleware in `Options.Middleware`, because wish composes last-one-outermost. |
+| `auth/agentkey/forward.go` | Client-agent forwarding, the `ssh -A` direction. `Forward()` is the middleware that, on session open, dials back over an `auth-agent@openssh.com` channel and relays it to a local socket. It asks `ssh.AgentRequested(sess)` whether to, not a request handler - see the section on how OpenSSH asks. `--forward-agent` turns it on. Requests are serialised: `agent.NewClient` is one channel with one sequence number. Must be appended **after** the shell middleware in `Options.Middleware`, because wish composes last-one-outermost. |
 | `auth/agentkey/` | Signing keys exposed to sessions as an ssh-agent. `Keyring([]ssh.Signer)` builds it; `Install(*ssh.Server, agent)` registers the auth-agent channel, the global request, and a per-connection local socket on a server already built (install it on a server already built; there is no wish.Option wrapper because wish pulls in bubbletea, which has no js build, and the browser client imports this package). The keyring is fixed: `Add`/`Remove`/`Lock` report that. `--agent-keys` in `cmd/wssh/serve.go` parses key files with `gossh.ParsePrivateKey` and feeds the result. |
 | `client/client.go`, `client/client_test.go` | `Session`, `Dial`, `Write`/`WriteContext`/`Resize`/`Close`/`CloseStdin`. Native tests over loopback. |
 | `client/wasm.go` | `//go:build js && wasm`. JS bridge, parked forever, exports `connect`/`write`/`resize`/`disconnect`/`generateKey`/`keyInfo`. Reads the optional command from arg 6. |
@@ -307,6 +337,13 @@ is real.
 | `cmd/wssh/static/credentials.js` | Key storage, passphrase/password hooks, key generation UI. |
 | `cmd/wssh/static/worker.js` | Hosts the Go/WASM SSH client, batches input, forwards the optional command as `api.connect`'s seventh argument. |
 | `cmd/wssh/static/selftest.html` | End-to-end browser selftest. |
+| `solana/tx.go` | The client half of a Solana transaction: the agent conversation, RPC (`LatestBlockhash`, `SendTransaction`, `ConfirmTransaction`), and the instruction builders. Separate from `auth/agentkey` on purpose: that package is the protocol both sides implement, this is one caller of it. |
+| `solana/build.go` | Assembles an unsigned versioned transaction from raw instructions, for signing with an agent that has never heard of Solana. Measured against `golden_test.go`; see the section on the message layout. |
+| `solana/agentsign.go` | The signing path for a plain ssh-agent: build here, then hand the message over as an ordinary `agent.Sign`. Also the only place that turns an agent key into an account address. |
+| `solana/fee.go` | Reads the fee payer back out of a signed transaction, so what is reported is what was paid rather than what was asked for. |
+| `cmd/sol-tx/` | Its own binary. It does not speak SSH and is not a wssh subcommand - it reads `SSH_AUTH_SOCK` the way any agent-using tool does. |
+| `scripts/sol-tx/` | The same command in Deno, for reading rather than trusting: it logs every byte that crosses the agent socket and every RPC call. `deno task test`. |
+| `harness/main.go` | `//go:build tools`. A local stand-in for the wallet side: a real agent on a real socket, signing with a key it generates. Covers everything up to the browser, which is where the browser's own `selftest.html` takes over. |
 
 ## Naming and style conventions
 
@@ -321,6 +358,76 @@ is real.
   Shared flag wiring goes through helpers in `serve.go`.
 - `Options` structs are configured by the caller, then handed to a single
   `New*` constructor; this is consistent across packages.
+
+## Signing a Solana transaction from a session
+
+There are two ways a session can get a transaction signed, and they are not
+variants of each other - they share no code beyond the wire format.
+
+**With a wallet** (a browser page, or the wasm client). The agent answers the
+`solana-tx@wssh` extension: the wallet builds the transaction, shows it to a
+person, and returns it signed. Nothing is built here.
+
+**With a plain ssh-agent** (`ssh -A`, `--agent-keys`). No ssh-agent has ever
+heard of the extension, and none ever will. The work splits: `solana/build.go`
+builds the transaction, because the format is not something an agent has
+reason to know, and `solana/agentsign.go` hands the message over as an
+ordinary `agent.Sign` request, because that is the one thing an agent is for.
+`Ask` tries the extension first and falls back on `ErrExtensionUnsupported`.
+
+The fallback exists because `ssh -A` into a wssh session used to produce a
+session with an `SSH_AUTH_SOCK` and nothing able to do anything with it.
+
+### How OpenSSH asks for agent forwarding
+
+**As a request on the session channel, not as a global request.**
+`client_channel_request_agent_forwarding(ssh, id)`, with the channel id. It
+has always been this way; it is not a recent change. A handler registered in
+`Server.RequestHandlers` therefore never sees it, and the failure is silent in
+the worst way: charm/ssh answers the session request with success and leaves
+the rest as a `// TODO`, so the client believes it was agreed to and the
+session just has no `SSH_AUTH_SOCK`.
+
+Ask `ssh.AgentRequested(sess)`. That is where charm/ssh records it.
+
+The client asks the same way, on the session it opens, before the shell - the
+agent channel handler goes up first because the server may dial back the moment
+it agrees, but the request that asks goes on the session.
+
+## The versioned transaction message
+
+The layout is fixed, shallow, and easy to get wrong in ways that only show up
+on chain. `solana/golden_test.go` holds bytes a Solana library produced, and
+`TestBuildTransactionMatchesTheLibrary` compares against them byte for byte.
+That test is why the builder is right; do not "fix" it to match intuition
+without changing the fixture too.
+
+- **The blockhash comes before the instructions.** A message that puts it last
+  is rejected as an `invalid transaction discriminator`. It reads oddly and it
+  is not a mistake.
+- **The header is three separate bytes** - required signatures, readonly
+  signed, readonly unsigned - not one packed byte. Reading it as one byte puts
+  everything after it out of position and returns a plausible account that is
+  not the fee payer.
+- **An agent key blob is double length-prefixed**: `[4][name][4][key body]`.
+  The key body for ed25519 is the 32 raw bytes an account address is made of,
+  behind both lengths.
+- **A transaction has one signature region.** The signature fills the empty
+  slot the build left; it does not follow it.
+
+## Errors worth not getting wrong
+
+- **`skipPreflight` must stay off.** With it on, the node accepts a
+  transaction it will never include and hands back a signature that never
+  confirms, so the session polls for ninety seconds and reports a problem with
+  a signature. The cluster's reason for refusing is in the JSON-RPC error's
+  `data`, not in `message` - read it out or the only thing a reader gets is
+  "Transaction simulation failed".
+- **A transfer to your own address cannot be expressed.** SystemProgram's
+  transfer takes a source and a destination and the runtime requires them to
+  differ; a transaction to yourself is one account where two are expected and
+  the chain answers `MissingAccount`. The fee is still charged. The selftest
+  does this deliberately - it is testing shape, not money.
 
 ## Things that look like bugs but are deliberate
 
@@ -348,6 +455,21 @@ is real.
   anyone who skipped the Makefile.
 
 ## Testing approach
+
+- `solana/golden_test.go` holds transaction bytes a Solana library produced, and
+  `TestBuildTransactionMatchesTheLibrary` compares a Go-built message against
+  them byte for byte. Hand-written serialisation is exactly the thing that is
+  right locally and wrong on chain, so the comparison is against real bytes
+  rather than against another hand-written copy.
+- `TestSignWithAPlainSSHAgent` drives a real agent on a real socket, because the
+  thing being tested is a conversation with one.
+- The browser selftest checks the two things no unit test can: that the page's
+  builder and the Go reader agree, and that the fee payer sol-tx reports is
+  the key that actually signed. That second check caught a real bug - the
+  reader had the header one byte out and returned a plausible account that
+  was not the signer - which every fixture had agreed with, because the
+  fixtures were written from the same wrong assumption.
+
 
 - `wssh_test.go`: HTTP-level tests for path handling. `httptest.NewRecorder`
   cannot be hijacked, so a 501 response after the path check is the signal
