@@ -103,6 +103,8 @@ the toolbar is editable.`,
 	cmd.Flags().StringVar(&opts.SessionPath, "path", DefaultSessionPath,
 		"URL path sessions are served on; the page is told where to find them")
 	cmd.Flags().StringVar(&opts.Addr, "addr", "", "address to listen on (default $PORT or :8080)")
+	cmd.Flags().StringVar(&opts.TCPAddr, "tcp-addr", "",
+		"also listen on this address for plain TCP/SSH (ssh -p PORT HOST reaches the same server)")
 	cmd.Flags().StringVar(&opts.HostKeyPath, "hostkey", defaultHostKey(), "path to the ed25519 host key")
 	cmd.Flags().BoolVar(&opts.AllowTcpForwarding, "allow-tcp-forwarding", false,
 		"allow ssh -L/-D port forwarding (an open proxy unless restricted)")

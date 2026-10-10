@@ -53,6 +53,12 @@ type serveOptions struct {
 	// failing that :8080.
 	Addr string
 
+	// TCPAddr, when set, is an additional listen address for plain TCP/SSH.
+	// The WebSocket listener is the HTTP one and stays as Addr; the TCP
+	// listener reaches the same shell with the same auth, so `ssh -p PORT
+	// host` from the WebSocket origin works without a relay.
+	TCPAddr string
+
 	// HostKeyPath is the ed25519 host key, generated on first use.
 	HostKeyPath string
 
@@ -276,6 +282,27 @@ func serve(opts serveOptions) error {
 		serveErr <- server.Serve(listener)
 	}()
 
+	// A second listener for the same shell: plain TCP, so `ssh -p PORT host`
+	// reaches what the browser reaches. Sharing sessions means the same host
+	// key, the same auth, the same wish middleware - only the framing differs.
+	// UIOnly runs without a sessions server, in which case there is nothing
+	// to put behind the extra port and the flag is just a footgun.
+	var (
+		tcpCancel context.CancelFunc
+		tcpErr    chan error
+	)
+	if opts.TCPAddr != "" {
+		if sessions == nil {
+			return errors.New("--tcp-addr has no effect with --ui-only: there are no sessions to serve")
+		}
+		var tcpCtx context.Context
+		tcpCtx, tcpCancel = context.WithCancel(context.Background())
+		tcpErr = make(chan error, 1)
+		go func() {
+			tcpErr <- sessions.ListenAndServeTCP(tcpCtx, opts.TCPAddr)
+		}()
+	}
+
 	if opts.OpenBrowser {
 		// The listener is already bound, so connections queue in the backlog
 		// until Serve picks them up; the browser will not arrive first.
@@ -295,6 +322,17 @@ func serve(opts serveOptions) error {
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return err //nolint:wrapcheck
 		}
+	case err := <-tcpErr:
+		if err != nil {
+			return err //nolint:wrapcheck
+		}
+	}
+
+	// The TCP listener runs with its own context, so cancel it here even on
+	// paths where the WS listener was the one that broke (its err was wrapped
+	// in serveErr already).
+	if tcpCancel != nil {
+		tcpCancel()
 	}
 
 	// Stop accepting before draining, so no session starts while we shut down.
