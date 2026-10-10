@@ -22,13 +22,31 @@ function signedWith(message: number[]): Uint8Array {
 
 Deno.test("feePayer reads a versioned transaction", () => {
   const message = [
-    0x80, // version 0
-    0x00, // header
+    0x80, // version 0, top bit set
+    0x01, // header: required signatures
+    0x00, // header: readonly signed
+    0x00, // header: readonly unsigned
     ...compact(1), // one static account key
     ...PAYER,
   ];
   assertEquals(feePayer(signedWith(message)), encodeBase58(PAYER));
 });
+
+// The two above can both be green and still not mean anything: the first
+// version of the versioned fixture wrote a one-byte header, which is what the
+// reader expected, so the two agreed and the real answer was wrong. This one
+// is bytes Go's own builder produced for a memo, held here so both readers
+// are pinned to a transaction rather than to a fixture written alongside them.
+Deno.test("feePayer reads a transaction Go built", () => {
+  const signed = hexToBytes(
+    "01923ce4dc70fae15fb746adbf6ab5998dd8257e94e932aad17b3314e489882bb4fe9294c5a0505a993b5d10cfe8a12fd2063fd1c315107b283f24b1bcf1cdb00580010001021c497d4515909b72923389c97f7424e9631cf38b7f1a4c9969aea635058d077f054a535a992921064d24e87160da387c7c35b5ddbc92bb81e41fa8404105448d94ade940a9e7622557a136e1d923a513bb7dd43254d6b91fba3f50a26b04176201010006046558672d2f00",
+  );
+  assertEquals(feePayer(signed), "2uRQmq8fQXKLmm8fSdUqkHr8UbwpyEA687Jgut16DJrJ");
+});
+
+function hexToBytes(hex: string): Uint8Array {
+  return new Uint8Array(hex.match(/../g)!.map((h) => parseInt(h, 16)));
+}
 
 Deno.test("feePayer reads a legacy transaction", () => {
   const message = [

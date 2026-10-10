@@ -50,7 +50,12 @@ export function feePayer(signed: Uint8Array): string {
   if (versioned) rest = rest.subarray(1);
 
   if (versioned) {
-    rest = rest.subarray(1); // header
+    // Three separate bytes - required signatures, readonly signatures,
+    // readonly unsigned - and only then a count of the static keys. This
+    // read one byte and the rest of the message came back shifted, which
+    // returned the tail of the header joined to the front of the fee payer:
+    // a base58 address of the right length, naming an account nobody holds.
+    rest = rest.subarray(3); // header
     const [, afterKeys] = compactU16(rest, 0); // number of static keys
     rest = rest.subarray(afterKeys);
   } else {
