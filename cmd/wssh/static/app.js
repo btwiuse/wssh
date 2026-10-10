@@ -545,7 +545,9 @@ function App() {
       // it, so whoever holds the wallet approves something legible rather than
       // a blob, and the answer comes back as JSON rather than a yes or no.
       if (kind === 'soltx') {
-        signSolanaTransaction(detail).then((answer) => {
+        // "build" means the session signs with a key of its own, so the
+        // transaction goes back unsigned rather than being put to a wallet.
+        signSolanaTransaction(detail, event.data.extra === 'build').then((answer) => {
           worker.postMessage({ type: 'promptAnswer', id, value: JSON.stringify(answer) });
         }).catch((err) => {
           worker.postMessage({

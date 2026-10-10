@@ -161,6 +161,9 @@ func jsConnect(_ js.Value, args []js.Value) any {
 		// A connected wallet joins the same keyring. It is a signer like any
 		// other here; what makes it different is where the private half
 		// lives, which is entirely on the other side of the bridge.
+		// The extension is attached whenever the agent is served, wallet or
+		// not, so that "no wallet here" comes back as an answer rather than
+		// as the same refusal a real ssh-agent would give.
 		var walletRing agentkey.Agent
 		if creds.WalletPublicKey != "" {
 			wallet, err := walletSigner(creds.WalletPublicKey, creds.WalletAddress)
@@ -171,23 +174,34 @@ func jsConnect(_ js.Value, args []js.Value) any {
 			}
 			auth = append(auth, gossh.PublicKeys(wallet))
 			signers = append(signers, wallet)
+		}
 
-			// The same keyring answers Solana transactions, so anything in
-			// the session can ask the wallet to sign one. There is no switch
-			// for this: connecting a wallet and forwarding it is already the
-			// decision, and a remembered approval would hand the wallet open
-			// to whatever got as far as a shell.
-			walletRing, err = agentkey.Keyring([]gossh.Signer{wallet})
+		if len(signers) > 0 {
+			// The keyring answers Solana transactions, so anything in the
+			// session can ask the wallet to sign one. There is no switch for
+			// this: forwarding a wallet is already the decision, and a
+			// remembered approval would hand it open to whatever got as far
+			// as a shell.
+			//
+			// Without a wallet the extension is attached with nothing behind
+			// it, so the refusal names that rather than looking like an agent
+			// that has never heard of transactions.
+			ring, err := agentkey.Keyring(signers)
 			if err != nil {
 				post(map[string]any{"type": "error",
-					"message": "could not prepare the wallet for transactions: " + err.Error()})
+					"message": "could not prepare the signing keyring: " + err.Error()})
 				return
 			}
-			if err := agentkey.WithSolana(walletRing, solanaAsker(), 0); err != nil {
+			asker := solanaAsker()
+			if creds.WalletPublicKey == "" {
+				asker = nil
+			}
+			if err := agentkey.WithSolana(ring, asker, solanaBuilder()); err != nil {
 				post(map[string]any{"type": "error",
 					"message": "could not offer Solana transactions: " + err.Error()})
 				return
 			}
+			walletRing = ring
 		}
 
 		sess, err := Dial(context.Background(), Options{

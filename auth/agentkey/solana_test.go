@@ -62,7 +62,7 @@ func TestSolanaExtensionSignsATransaction(t *testing.T) {
 			Signature:         ed25519.Sign(priv, message),
 			SignedTransaction: buildSignedTransaction(pub, priv, message),
 		}, pub, nil
-	}, 0); err != nil {
+	}, nil); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
 
@@ -106,7 +106,7 @@ func TestUnknownExtensionIsRefused(t *testing.T) {
 	if err := WithSolana(ring, func(SolanaTxRequest) (SolanaTxResponse, ed25519.PublicKey, error) {
 		t.Fatal("the wallet should not have been asked about an unknown extension")
 		return SolanaTxResponse{}, nil, nil
-	}, 0); err != nil {
+	}, nil); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
 
@@ -130,7 +130,7 @@ func TestExtensionRejectsASignatureForAnotherMessage(t *testing.T) {
 			Signature:         ed25519.Sign(strangerPriv, other),
 			SignedTransaction: buildSignedTransaction(pub, strangerPriv, other),
 		}, pub, nil
-	}, 0); err != nil {
+	}, nil); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
 
@@ -153,7 +153,7 @@ func TestExtensionRejectsAKeyWeDoNotHold(t *testing.T) {
 			Signature:         ed25519.Sign(otherPriv, message),
 			SignedTransaction: buildSignedTransaction(otherPub, otherPriv, message),
 		}, otherPub, nil
-	}, 0); err != nil {
+	}, nil); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
 
@@ -283,9 +283,12 @@ func TestExtensionBoundsTheInstructionCount(t *testing.T) {
 	if err := WithSolana(ring, func(SolanaTxRequest) (SolanaTxResponse, ed25519.PublicKey, error) {
 		asked = true
 		return SolanaTxResponse{}, nil, nil
-	}, 2); err != nil {
+	}, nil); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
+	// The limit is a sanity bound rather than a knob, so it is set here rather
+	// than configured: sixty-five instructions is more than anything real.
+	ring.solana.MaxInstructions = 2
 
 	req := testRequest(t)
 	req.Instructions = append(req.Instructions, req.Instructions[0], req.Instructions[0])
@@ -354,7 +357,7 @@ func TestExtensionCarriesTheReasonInTheAnswer(t *testing.T) {
 
 	if err := WithSolana(ring, func(SolanaTxRequest) (SolanaTxResponse, ed25519.PublicKey, error) {
 		return SolanaTxResponse{}, nil, errors.New("the user closed the wallet prompt")
-	}, 0); err != nil {
+	}, nil); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
 
@@ -384,7 +387,7 @@ func TestExtensionAnswersAMalformedRequest(t *testing.T) {
 	if err := WithSolana(ring, func(SolanaTxRequest) (SolanaTxResponse, ed25519.PublicKey, error) {
 		t.Error("the wallet should not have been asked about a malformed request")
 		return SolanaTxResponse{}, nil, nil
-	}, 0); err != nil {
+	}, nil); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
 
@@ -425,4 +428,78 @@ func mustRefuse(t *testing.T, ring *keyring, body []byte) string {
 		t.Error("a refusal must not carry a transaction")
 	}
 	return got.Refusal
+}
+
+// An agent whose key is local signs the transaction itself.
+//
+// There is nothing wallet-specific about an ed25519 key: the one an SSH
+// session authenticates with is the same kind of key as the one a Solana
+// wallet holds, and the account that pays the fee is the same thing as the
+// account that signs. Refusing on the grounds that the key did not come from
+// a wallet would be refusing arithmetic.
+func TestLocalKeySignsWithoutAWallet(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	ring, _ := mustKeyring(t, priv)
+
+	message := []byte("a transaction message the page built")
+	unsigned := append([]byte{1}, make([]byte, ed25519.SignatureSize)...)
+	unsigned = append(unsigned, message...)
+
+	// No wallet behind this: the transaction comes back built and is signed
+	// here.
+	if err := WithSolana(ring, nil, func(SolanaTxRequest) ([]byte, error) {
+		return unsigned, nil
+	}); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+
+	raw, err := ring.Extension(SolanaTxExtension, marshalRequest(t, testRequest(t)))
+	if err != nil {
+		t.Fatalf("extension: %v", err)
+	}
+
+	var got SolanaTxResponse
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("answer is not readable: %v", err)
+	}
+	if got.Refusal != "" {
+		t.Fatalf("a local key should have signed, got %q", got.Refusal)
+	}
+	if err := VerifySolanaTx(got, pub); err != nil {
+		t.Fatalf("the locally signed transaction did not verify: %v", err)
+	}
+
+	// And it covers the message the page built, byte for byte.
+	signatures, covered, err := splitSolanaTransaction(got.SignedTransaction)
+	if err != nil {
+		t.Fatalf("split: %v", err)
+	}
+	if string(covered) != string(message) {
+		t.Errorf("the signature covers %q, want %q", covered, message)
+	}
+	if !ed25519.Verify(pub, covered, signatures[0]) {
+		t.Error("the signature does not verify over what it claims to cover")
+	}
+}
+
+// An agent with a key and no way to build a transaction still cannot sign one,
+// and says which of the two it is rather than looking like an agent that has
+// never heard of transactions.
+func TestAgentWithNothingToBuildWithRefuses(t *testing.T) {
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	ring, _ := mustKeyring(t, priv)
+
+	if err := WithSolana(ring, nil, nil); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+
+	// Nothing behind it and nothing here to sign with: that has to come back
+	// as a failure code rather than an answer, because there is nothing this
+	// agent could ever do with the request.
+	if _, err := ring.Extension(SolanaTxExtension, marshalRequest(t, testRequest(t))); err == nil {
+		t.Fatal("an agent that can do neither should not have answered")
+	}
 }

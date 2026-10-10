@@ -471,9 +471,17 @@ export function CredentialsPanel({ workerRef, onClose }) {
 //
 // A refusal is returned as a refusal rather than thrown, because the caller
 // half is a session and the reason is the most useful thing it will be told.
-export async function signSolanaTransaction(serialised) {
+// buildOnly says the caller will sign with a key of its own, so the
+// transaction goes back unsigned instead of being put to a wallet.
+export async function signSolanaTransaction(serialised, buildOnly = false) {
   const provider = window.solana || window.phantom?.solana;
-  if (!provider?.publicKey) return { refusal: 'connect a wallet first' };
+  if (buildOnly && !provider?.publicKey) {
+    // Nothing to sign with here, which is fine: the caller signs. The library
+    // is still needed, because the serialisation is the part that has to be
+    // right.
+  } else if (!provider?.publicKey) {
+    return { refusal: 'connect a wallet first' };
+  }
 
   // What arrives is the JSON Go marshalled, not an object. Treating the string
   // as the request makes every field missing, and the first symptom of that is
@@ -496,9 +504,17 @@ export async function signSolanaTransaction(serialised) {
     return { refusal: `${WEB3_URL} loaded but has no Transaction on it` };
   }
 
+  // Without a wallet there is no fee payer to name, so the session's own key
+  // pays. It is the key that signed in, so it is the one the transaction has
+  // to name as well.
+  const payer = provider?.publicKey?.toBase58?.() || request.payer;
+  if (!payer) {
+    return { refusal: 'no fee payer: connect a wallet, or say which key to pay with' };
+  }
+
   let tx;
   try {
-    tx = buildTransaction(request, web3, provider);
+    tx = buildTransaction(request, web3, provider, payer);
   } catch (err) {
     return { refusal: `the transaction could not be built: ${err.message}` };
   }
@@ -520,6 +536,12 @@ export async function signSolanaTransaction(serialised) {
 
   if (!window.confirm(described)) {
     return { refusal: 'refused' };
+  }
+
+  // The caller signs with a key it holds, so hand back the built transaction
+  // as it stands, with its signature slots still empty.
+  if (buildOnly) {
+    return { unsigned: bytesToHex(tx.serialize()) };
   }
 
   let signed;
@@ -559,7 +581,7 @@ export async function signSolanaTransaction(serialised) {
 // A versioned transaction is what a current wallet expects. The older
 // Transaction type is still built as a fallback, because a wallet that wants
 // it will say so more clearly than "Expected String" does.
-function buildTransaction(request, web3, provider) {
+function buildTransaction(request, web3, provider, payer) {
   const {
     PublicKey, TransactionInstruction, VersionedTransaction, TransactionMessage,
   } = web3;
@@ -594,12 +616,7 @@ function buildTransaction(request, web3, provider) {
     throw new Error('the request carries no instructions');
   }
 
-  const address = provider?.publicKey?.toBase58?.();
-  if (!address) {
-    throw new Error('the connected wallet reported no address');
-  }
-
-  const feePayer = new PublicKey(address);
+  const feePayer = new PublicKey(payer);
 
   const instructions = [];
   for (const [i, instruction] of request.instructions.entries()) {
@@ -671,7 +688,7 @@ function buildTransaction(request, web3, provider) {
   // The count of signature slots is still given rather than left to the
   // default, which is cheap and means the library is not asked to work it out
   // from a form it has already been shown not to handle.
-  const signers = new Set([address]);
+  const signers = new Set([payer]);
   for (const ix of instructions) {
     for (const key of ix.keys) {
       if (key.isSigner) signers.add(key.pubkey.toBase58());

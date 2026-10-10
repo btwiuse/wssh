@@ -113,7 +113,7 @@ globalThis.__websshAskSignature = (summary) => askPage('signature', '', summary)
 // whoever holds the wallet before they approve it. The answer comes back as
 // JSON: either a refusal in words, or the signature and the signed
 // transaction, both hex. An empty answer is a refusal.
-globalThis.__websshSolanaTx = (request) => askPage('soltx', '', request);
+globalThis.__websshSolanaTx = (request, mode) => askPage('soltx', '', request, mode);
 
 // Asking the page's wallet to sign a sign-in request. Go sends the exact text
 // the server produced and takes back "messageHex:signatureHex", so the message

@@ -36,16 +36,54 @@ const solTxTimeout = 5 * time.Minute
 // failure, and the agent protocol has nowhere to put the reason on an error
 // path. PublicKey comes back rather than being assumed, so the Go side can
 // check the signature against the key the page claims to have used.
+//
+// Unsigned is what comes back when the page has no wallet: the transaction is
+// still built here, because that is where the serialisation lives, and it goes
+// back for the session's own key to sign. An ed25519 key is an ed25519 key
+// whatever it was made for.
 type solTxAnswer struct {
 	Refusal string `json:"refusal,omitempty"`
 
 	PublicKey         string `json:"publicKey,omitempty"`
 	Signature         string `json:"signature,omitempty"`
 	SignedTransaction string `json:"signedTransaction,omitempty"`
+
+	Unsigned string `json:"unsigned,omitempty"`
+}
+
+// solanaBuilder returns a way to have the page build a transaction without
+// signing it, for an agent whose key is local.
+//
+// It goes through the page even though the key is not there, because the
+// serialisation belongs to the library that tracks Solana's format and that
+// library is on the page. What comes back is signed here instead.
+func solanaBuilder() agentkey.SolanaBuild {
+	hook := js.Global().Get(walletSolTxHook)
+	if hook.Type() != js.TypeFunction {
+		return nil
+	}
+	return func(req agentkey.SolanaTxRequest) ([]byte, error) {
+		body, err := json.Marshal(req)
+		if err != nil {
+			return nil, fmt.Errorf("pack the request: %w", err)
+		}
+		text, err := awaitStringTimeout(hook, []string{string(body), "build"}, solTxTimeout)
+		if err != nil {
+			return nil, err
+		}
+		var answer solTxAnswer
+		if err := json.Unmarshal([]byte(text), &answer); err != nil {
+			return nil, fmt.Errorf("the answer is not readable: %w", err)
+		}
+		if answer.Refusal != "" {
+			return nil, errors.New(answer.Refusal)
+		}
+		return decodeHex(answer.Unsigned, "transaction")
+	}
 }
 
 // solanaAsker returns a way to reach the page's wallet, or nil if there is not
-// one, which is what the agent uses to refuse the extension.
+// one, in which case the agent signs with the key it already holds.
 func solanaAsker() agentkey.SolanaAsk {
 	hook := js.Global().Get(walletSolTxHook)
 	if hook.Type() != js.TypeFunction {
@@ -58,7 +96,7 @@ func solanaAsker() agentkey.SolanaAsk {
 			return agentkey.SolanaTxResponse{}, nil, fmt.Errorf("pack the request: %w", err)
 		}
 
-		text, err := awaitStringTimeout(hook, []string{string(body)}, solTxTimeout)
+		text, err := awaitStringTimeout(hook, []string{string(body), "sign"}, solTxTimeout)
 		if err != nil {
 			return agentkey.SolanaTxResponse{}, nil, err
 		}
@@ -69,6 +107,13 @@ func solanaAsker() agentkey.SolanaAsk {
 		}
 		if answer.Refusal != "" {
 			return agentkey.SolanaTxResponse{}, nil, errors.New(answer.Refusal)
+		}
+		if answer.Unsigned != "" {
+			raw, err := decodeHex(answer.Unsigned, "transaction")
+			if err != nil {
+				return agentkey.SolanaTxResponse{}, nil, err
+			}
+			return agentkey.SolanaTxResponse{Unsigned: raw}, nil, nil
 		}
 
 		pub, sig, signed, err := decodeSolTxAnswer(answer)

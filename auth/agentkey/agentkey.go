@@ -22,7 +22,6 @@ package agentkey
 
 import (
 	"bytes"
-	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
 	"fmt"
@@ -143,7 +142,7 @@ func (r *keyring) Extension(name string, contents []byte) ([]byte, error) {
 	r.mu.RUnlock()
 
 	if len(signers) == 0 {
-		return nil, agent.ErrExtensionUnsupported
+		return r.solana.ExtensionHandler(nil)(name, contents)
 	}
 	// One wallet is one key, so the extension is answered by the only key
 	// there is. With several there is nothing to disambiguate with and
@@ -152,17 +151,10 @@ func (r *keyring) Extension(name string, contents []byte) ([]byte, error) {
 		return nil, errors.New("this agent holds several keys and cannot tell which one to sign with")
 	}
 
-	// The public key has to come back as raw bytes, because that is what the
-	// signature is checked against, and the ssh wrapper is not that.
-	pub, ok := signers[0].PublicKey().(gossh.CryptoPublicKey)
-	if !ok {
-		return nil, errors.New("the agent's key is not a crypto key")
-	}
-	raw, ok := pub.CryptoPublicKey().(ed25519.PublicKey)
-	if !ok {
-		return nil, errors.New("the agent's key is not ed25519")
-	}
-	return r.solana.ExtensionHandler(raw)(name, contents)
+	// The signer itself, not just its key: an agent holding a local key signs
+	// with it rather than sending the transaction off to a wallet it does not
+	// have.
+	return r.solana.ExtensionHandler(signers[0])(name, contents)
 }
 
 // SignWithFlags is Sign with no flags. The agent protocol's flags carry RSA

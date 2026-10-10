@@ -19,6 +19,7 @@ func newSolTxCmd() *cobra.Command {
 		rpcURL    string
 		blockhash string
 		label     string
+		payer     string
 		to        string
 		sol       string
 		lamports  uint64
@@ -60,7 +61,7 @@ Examples:
 			req, err := buildSolTxRequest(solTxRequest{
 				sockPath: sockPath, rpcURL: rpcURL, blockhash: blockhash, label: label,
 				to: to, sol: sol, lamports: lamports,
-				program: program, accounts: accounts, data: data,
+				program: program, accounts: accounts, data: data, payer: payer,
 			})
 			if err != nil {
 				return err //nolint:wrapcheck
@@ -91,6 +92,8 @@ Examples:
 		"RPC endpoint to fetch a blockhash from when one was not given")
 	cmd.Flags().StringVar(&blockhash, "blockhash", "",
 		"blockhash to build against; fetched from --rpc when absent")
+	cmd.Flags().StringVar(&payer, "payer", "",
+		"base58 account to pay the fee with; defaults to the connected wallet")
 	cmd.Flags().StringVar(&label, "label", "",
 		"one line of text shown beside the transaction; not trusted")
 
@@ -106,16 +109,23 @@ Examples:
 }
 
 type solTxRequest struct {
-	sockPath, rpcURL, blockhash, label string
-	to, sol                            string
-	lamports                           uint64
-	program                            string
-	accounts                           []string
-	data                               string
+	sockPath, rpcURL, blockhash, label, payer string
+	to, sol                                   string
+	lamports                                  uint64
+	program                                   string
+	accounts                                  []string
+	data                                      string
 }
 
 func buildSolTxRequest(in solTxRequest) (agentkey.SolanaTxRequest, error) {
-	req := agentkey.SolanaTxRequest{Blockhash: in.blockhash, Label: in.label}
+	// Naming the payer is what lets the session sign for itself: with no wallet
+	// behind it, the account that authenticated the session is the one that can
+	// pay, and a transaction whose fee payer it is not will not send.
+	req := agentkey.SolanaTxRequest{
+		Blockhash: in.blockhash,
+		Label:     in.label,
+		Payer:     in.payer,
+	}
 
 	switch {
 	case in.program != "":

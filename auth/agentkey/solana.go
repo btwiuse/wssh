@@ -3,10 +3,12 @@ package agentkey
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 
+	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 
 	"github.com/btwiuse/wssh/auth/siws"
@@ -43,6 +45,11 @@ type SolanaTxRequest struct {
 	// Label is free text carried along for the page to show. It is not
 	// trusted: the decoded instructions are shown beside it, not instead.
 	Label string `json:"label,omitempty"`
+
+	// Payer is the account that pays the fee, when the session is signing for
+	// itself rather than handing the transaction to a wallet. Empty means a
+	// connected wallet pays.
+	Payer string `json:"payer,omitempty"`
 
 	Instructions []SolanaInstruction `json:"instructions"`
 }
@@ -85,12 +92,34 @@ type SolanaTxResponse struct {
 	// Empty means the answer is yes.
 	Refusal string `json:"refusal,omitempty"`
 
+	// Unsigned is what comes back when there is no wallet behind this agent:
+	// a transaction built and ready to be signed, with empty signature slots.
+	// An ed25519 key is an ed25519 key whatever it was made for, so a key the
+	// page already holds signs this exactly as it signs an SSH challenge.
+	Unsigned []byte `json:"unsigned,omitempty"`
+
 	Signature         []byte `json:"signature,omitempty"`
 	SignedTransaction []byte `json:"signedTransaction,omitempty"`
 }
 
 // refused reports whether this is an answer of no.
 func (r SolanaTxResponse) refused() bool { return r.Refusal != "" }
+
+// ownPublicKey is the ed25519 key an agent holds, or nil if it is something
+// else. Everything else here is checked against it.
+func ownPublicKey(signer gossh.Signer) ed25519.PublicKey {
+	crypto, ok := signer.PublicKey().(gossh.CryptoPublicKey)
+	if !ok {
+		return nil
+	}
+	pub, _ := crypto.CryptoPublicKey().(ed25519.PublicKey)
+	return pub
+}
+
+// SolanaBuild asks for a transaction to be built without being signed, for an
+// agent whose key is local. The serialisation happens there because the library
+// that tracks Solana's format lives there; the signature comes back here.
+type SolanaBuild func(req SolanaTxRequest) ([]byte, error)
 
 // SolanaAsk carries a request to whoever holds the wallet and brings back what
 // it decided, along with the key it says signed.
@@ -108,9 +137,12 @@ type SolanaAsk func(req SolanaTxRequest) (SolanaTxResponse, ed25519.PublicKey, e
 
 // SolanaTx is the transaction half of the agent.
 type SolanaTx struct {
-	// Ask reaches the wallet. Without it the extension is refused, rather than
-	// answered by anything that could pretend.
+	// Ask reaches a wallet. When it is set the wallet signs.
 	Ask SolanaAsk
+
+	// Build makes an unsigned transaction, for an agent whose key is local.
+	// Used when Ask is nil.
+	Build SolanaBuild
 
 	// MaxInstructions bounds what one request may ask for. It is a sanity
 	// limit on a message size, not a policy: the wallet sees the result
@@ -279,13 +311,14 @@ func readCompactU16(b []byte) (value int, rest []byte, err error) {
 // understand gets a plain failure rather than silence. That matters here: an
 // agent that answered every extension the same way would be indistinguishable
 // from one that had no idea what was being asked.
-func (t *SolanaTx) ExtensionHandler(owns ed25519.PublicKey) func(name string, contents []byte) ([]byte, error) {
+func (t *SolanaTx) ExtensionHandler(signer gossh.Signer) func(name string, contents []byte) ([]byte, error) {
 	return func(name string, contents []byte) ([]byte, error) {
 		if name != SolanaTxExtension {
 			return nil, agent.ErrExtensionUnsupported
 		}
-		if t == nil || t.Ask == nil {
-			return nil, errors.New("this agent cannot sign Solana transactions: no wallet is attached")
+		if t == nil || (t.Ask == nil && t.Build == nil) {
+			return nil, errors.New("this agent cannot sign Solana transactions: " +
+				"there is no wallet behind it and no key here to sign with")
 		}
 
 		req, err := ParseSolanaTxRequest(contents)
@@ -299,21 +332,60 @@ func (t *SolanaTx) ExtensionHandler(owns ed25519.PublicKey) func(name string, co
 			})
 		}
 
-		resp, signer, err := t.Ask(req)
+		// Where the key is decides who signs. A wallet behind the page is
+		// asked; a key this process already holds - the one an SSH session
+		// authenticates with - signs here, because it is the same kind of key
+		// and refusing it on the grounds that it did not come from a wallet
+		// would be refusing arithmetic.
+		if t.Ask != nil {
+			resp, used, err := t.Ask(req)
+			if err != nil {
+				return json.Marshal(SolanaTxResponse{
+					Refusal: fmt.Sprintf("the wallet did not sign: %v", err),
+				})
+			}
+			if used == nil || !bytes.Equal(used, ownPublicKey(signer)) {
+				return json.Marshal(SolanaTxResponse{
+					Refusal: "the answer was signed by a key this agent does not hold",
+				})
+			}
+			if err := VerifySolanaTx(resp, ownPublicKey(signer)); err != nil {
+				return json.Marshal(SolanaTxResponse{Refusal: err.Error()})
+			}
+			return json.Marshal(resp)
+		}
+
+		if signer == nil {
+			return json.Marshal(SolanaTxResponse{
+				Refusal: "this session has nothing that can sign a transaction: " +
+					"connect a wallet, or give the session a key",
+			})
+		}
+
+		// Built elsewhere, signed here. The page builds it because the
+		// serialisation belongs to the library that tracks Solana's format;
+		// the signature belongs here because the key is here.
+		built, err := t.Build(req)
 		if err != nil {
-			return json.Marshal(SolanaTxResponse{
-				Refusal: fmt.Sprintf("the wallet did not sign: %v", err),
-			})
-		}
-		if signer == nil || !bytes.Equal(signer, owns) {
-			return json.Marshal(SolanaTxResponse{
-				Refusal: "the answer was signed by a key this agent does not hold",
-			})
-		}
-		if err := VerifySolanaTx(resp, owns); err != nil {
 			return json.Marshal(SolanaTxResponse{Refusal: err.Error()})
 		}
-		return json.Marshal(resp)
+		signatures, message, err := splitSolanaTransaction(built)
+		if err != nil {
+			return json.Marshal(SolanaTxResponse{Refusal: err.Error()})
+		}
+
+		signed, err := signer.Sign(rand.Reader, message)
+		if err != nil {
+			return json.Marshal(SolanaTxResponse{
+				Refusal: "the session key could not sign: " + err.Error(),
+			})
+		}
+
+		out := append([]byte{byte(len(signatures))}, signed.Blob...)
+		return json.Marshal(SolanaTxResponse{
+			Signature:         signed.Blob,
+			SignedTransaction: append(out, message...),
+		})
 	}
 }
 
@@ -322,14 +394,14 @@ func (t *SolanaTx) ExtensionHandler(owns ed25519.PublicKey) func(name string, co
 // It is separate from Keyring because it needs a way to reach a wallet, and a
 // keyring on its own is just a list of signers. A keyring without it refuses
 // the extension, which is the same thing it would have done anyway.
-func WithSolana(ring Agent, ask SolanaAsk, maxInstructions int) error {
+func WithSolana(ring Agent, ask SolanaAsk, build SolanaBuild) error {
 	kr, ok := ring.(*keyring)
 	if !ok {
 		return errors.New("this agent does not support extensions")
 	}
 	kr.solana = &SolanaTx{
-		Ask:             ask,
-		MaxInstructions: maxInstructions,
+		Ask:   ask,
+		Build: build,
 	}
 	return nil
 }
