@@ -323,6 +323,7 @@ Deno.exit(0);
 // empty and the wallet chose, and which wallet chose is the thing worth
 // being able to see after the fact. Unreadable bytes say nothing rather
 // than naming something that is not there.
+//
 function reportFeePayer(signed: Uint8Array): void {
   try {
     console.error(`fee payer: ${feePayer(signed)}`);

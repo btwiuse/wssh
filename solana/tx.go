@@ -334,7 +334,7 @@ func urlOf(rawURL string) string {
 // pretending to wait for it would just delay the news.
 func SendTransaction(ctx context.Context, rpcURL string, signed []byte) (string, error) {
 	body := []byte(fmt.Sprintf(
-		`{"jsonrpc":"2.0","id":1,"method":"sendTransaction","params":["%s",{"encoding":"base64","skipPreflight":true,"preflightCommitment":"confirmed"}]}`,
+		`{"jsonrpc":"2.0","id":1,"method":"sendTransaction","params":["%s",{"encoding":"base64","preflightCommitment":"confirmed"}]}`,
 		base64.StdEncoding.EncodeToString(signed),
 	))
 

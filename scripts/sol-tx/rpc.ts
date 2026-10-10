@@ -90,7 +90,7 @@ export async function sendTransaction(
   const r = await call<string>(
     endpoint,
     "sendTransaction",
-    [b64, { encoding: "base64", skipPreflight: true, preflightCommitment: "confirmed" }],
+    [b64, { encoding: "base64", preflightCommitment: "confirmed" }],
     verbose,
   );
   return r;

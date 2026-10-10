@@ -593,3 +593,36 @@ func TestConfirmTransactionReportsAnOnChainFailure(t *testing.T) {
 		t.Errorf("the cluster's own reason should survive, got %v", err)
 	}
 }
+
+// The parameters a transaction is sent with are the difference between the
+// cluster answering and the cluster going quiet, so they are pinned here
+// rather than left to whoever edits the call next.
+//
+// skipPreflight:true tells the node not to simulate before accepting. A
+// transaction whose fee payer holds nothing is then accepted, given a
+// signature, and silently dropped: getSignatureStatuses answers null for
+// it for ever, and a session waiting on a confirmation learns nothing for
+// ninety seconds. With preflight left on, the node simulates and answers at
+// once - measured on devnet, an unfunded payer gives "Transaction
+// simulation failed: Attempt to debit an account but found no record of a
+// prior credit" in the first round trip.
+func TestSendTransactionLeavesPreflightOn(t *testing.T) {
+	var got string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		got = string(body)
+		_, _ = io.WriteString(w, `{"jsonrpc":"2.0","result":"sig","id":1}`)
+	}))
+	defer server.Close()
+
+	if _, err := solana.SendTransaction(context.Background(), server.URL, []byte("bytes")); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	if strings.Contains(got, "skipPreflight") {
+		t.Errorf("the request must not skip preflight: %s", got)
+	}
+	if !strings.Contains(got, `"preflightCommitment"`) {
+		t.Errorf("the commitment should still be stated: %s", got)
+	}
+}
