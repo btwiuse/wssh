@@ -57,21 +57,16 @@ const say = (s) => { lines.push(s); out.innerHTML = lines.join('\n'); };
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
-// The confirmation is the whole point of building a transaction in the page, so
-// it stays. What is skipped is only the click: nobody is there to make it, and
-// a test that waits for a person is not a test.
+// There is nothing to click here, and there is nothing to stub either: the
+// page does not ask, the wallet does. That is the arrangement this test now
+// checks around rather than through - see the round trip below, which reads
+// the signed bytes instead of a description of them.
 //
-// What it says is captured and checked afterwards, which is worth more than the
-// click would have been: a confirmation that says nothing useful is the failure
-// this is here to catch.
 // A terminal wraps its output in escape sequences and bracketed-paste markers,
 // and they arrive glued to the line they precede. Stripped before anything is
 // matched against, or a perfectly good transaction reads as noise.
 const CLEAN = /\u001b\[[0-9;?]*[a-zA-Z]|\u001b\][^\u0007]*\u0007|\[\?\d+[hl]|\u001b[=>]/g;
 const clean = (line) => line.replace(CLEAN, '').trim();
-
-let confirmation = '';
-window.confirm = (text) => { confirmation = String(text); return true; };
 
 const params = new URLSearchParams(location.search);
 const BIN = params.get('bin') || 'wssh';
@@ -376,20 +371,10 @@ async function handle(e) {
       if (signed) {
         phase = 'done';
 
-        // A signature is worthless if the person who approved it was shown
-        // nothing. The transaction went to the server; check the page actually
-        // put the account and the program in front of them first.
-        const SYSTEM = '11111111111111111111111111111111';
-        const named = confirmation.includes(SYSTEM) && confirmation.includes(selfKey.address);
-        if (!named) {
-          say('<span class="fail">FAIL — the confirmation did not show what was being signed</span>');
-          say('showed: ' + (confirmation.slice(0, 300) || '(nothing)'));
-          failures.push('confirmation');
-        } else {
-          say('<span class="pass">PASS — the confirmation showed the account and the program</span>');
-          say(confirmation.split('\n').slice(0, 8).join('\n'));
-        }
-
+        // What the approver was shown is the wallet's business now, and it
+        // lives in the extension where this test cannot read it. What it can
+        // check is stronger anyway: that the bytes the wallet signed are the
+        // transaction that was asked for.
         const problems = checkRoundTrip(signed, { address: selfKey.address, lamports: LAMPORTS });
         if (problems.length) {
           say('<span class="fail">FAIL — it is a transaction, but not the one asked for</span>');

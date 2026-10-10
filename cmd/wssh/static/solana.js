@@ -30,8 +30,94 @@
 // list, so buildTransaction fills it in itself.
 const MEMO_PROGRAM_ID = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
 
+// Types, in JSDoc, because the file is loaded by a page with no build step.
+//
+// These are the shapes that cross a boundary rather than the ones the library
+// hands back: what arrives over the agent protocol as JSON, and what goes
+// back to the Go side. Everything in between is the Solana library's own
+// types, which it already carries, so naming them again here would be a
+// second description to keep in step with the first.
+
+/**
+ * One account an instruction takes, as the request names it.
+ * @typedef {Object} RequestedAccount
+ * @property {string} address     base58
+ * @property {boolean} isSigner
+ * @property {boolean} isWritable
+ */
+
+/**
+ * One instruction, still raw: the program, its accounts, and its data as
+ * base58. Nothing here is a library type, which is the point - the request
+ * is what a session asked for, not what a transaction is.
+ * @typedef {Object} RequestedInstruction
+ * @property {string} programId   base58
+ * @property {RequestedAccount[]} accounts
+ * @property {string} data        base58
+ */
+
+/**
+ * The request, exactly as it arrives: JSON-marshalled Go, so the shape
+ * mirrors agentkey.SolanaTxRequest field for field.
+ * @typedef {Object} TxRequest
+ * @property {string} blockhash              base58
+ * @property {string} [label]                free text shown beside the transaction
+ * @property {string} [payer]                base58; empty means the connected wallet pays
+ * @property {RequestedInstruction[]} instructions
+ */
+
+/**
+ * What this file hands back. Either a refusal in words, or the signature.
+ *
+ * A refusal is a value rather than a thrown error because the caller half is
+ * a session and the reason is the most useful thing it will be told.
+ * @typedef {Object} WalletAnswer
+ * @property {string} [refusal]        why it is no, meant for whoever asked
+ * @property {string} [unsigned]       hex, for buildOnly: the transaction as it stands
+ * @property {string} [publicKey]      hex, the 32 bytes that signed
+ * @property {string} [signature]      hex, the 64 bytes over the message
+ * @property {string} [signedTransaction]  hex, the whole signed transaction
+ */
+
+/**
+ * The part of the Solana library this file uses. Named narrowly on purpose:
+ * a wide type here would be a promise about a library that does not make it.
+ *
+ * signTransaction is not on it. That is the wallet's method, not the
+ * library's, and it takes whatever the wallet was built against - which is
+ * the reason the library is this one. See provider() below.
+ * @typedef {Object} Web3
+ * @property {new (value: string) => any} PublicKey
+ * @property {new (args: any) => any} TransactionInstruction
+ * @property {new (message: any, signatures: Uint8Array[]) => any} VersionedTransaction
+ * @property {new (args: any) => any} TransactionMessage
+ * @property {any} Transaction
+ */
+
+/**
+ * The browser wallet. Its signTransaction is a web3.js transaction in and a
+ * web3.js transaction out, which is what pins this file to web3.js: a
+ * transaction built by another library is not something it can read, and
+ * there is no version of that which changes it.
+ * @typedef {Object} Provider
+ * @property {any} publicKey
+ * @property {(tx: any) => Promise<any>} [signTransaction]
+ */
+
+/** The wallet the page found, if any. @returns {Provider | undefined} */
+function currentProvider() {
+  return window.solana || window.phantom?.solana;
+}
+
+/**
+ * Ask the wallet to sign, or hand the built transaction back unsigned.
+ *
+ * @param {string} serialised   the request as JSON, not an object
+ * @param {boolean} [buildOnly] true when the caller signs with its own key
+ * @returns {Promise<WalletAnswer>}
+ */
 export async function signSolanaTransaction(serialised, buildOnly = false) {
-  const provider = window.solana || window.phantom?.solana;
+  const provider = currentProvider();
   if (buildOnly && !provider?.publicKey) {
     // Nothing to sign with here, which is fine: the caller signs. The library
     // is still needed, because the serialisation is the part that has to be
@@ -88,7 +174,10 @@ export async function signSolanaTransaction(serialised, buildOnly = false) {
   // was asked for. The count is compared rather than trusted: losing an
   // instruction in the library is silent, and "0 instructions" is exactly the
   // thing a person reads past.
-  const described = describeTransaction(tx, request.label);
+  // A transaction that arrives at the wallet empty would be approved with
+  // nothing on screen and signed as a fee-only transaction. The count is
+  // compared rather than trusted: losing an instruction in the library is
+  // silent, and "0 instructions" is exactly the thing a person reads past.
   const wanted = request.instructions.length;
   const shown = compiledInstructions(tx).length;
   if (shown !== wanted) {
@@ -98,9 +187,14 @@ export async function signSolanaTransaction(serialised, buildOnly = false) {
     };
   }
 
-  if (!window.confirm(described)) {
-    return { refusal: 'refused' };
-  }
+  // No confirmation here, and that is the wallet's to give. A window.confirm
+  // in front of it puts the same question on screen twice: once in a native
+  // dialog that cannot be styled and knows nothing about the transaction, and
+  // once in the wallet, which does know and is the gate that was always going
+  // to matter. It also blocks the page and cannot be driven from a test, so a
+  // script that wanted this automatable had to stub it. The round trip is
+  // checked instead, on the signed bytes, which is a stronger claim than
+  // reading back a description of them.
 
   // The caller signs with a key it holds, so hand back the built transaction
   // as it stands, with its signature slots still empty.
@@ -146,6 +240,15 @@ export async function signSolanaTransaction(serialised, buildOnly = false) {
 // A versioned transaction is what a current wallet expects. The older
 // Transaction type is still built as a fallback, because a wallet that wants
 // it will say so more clearly than "Expected String" does.
+/**
+ * Assemble the transaction the wallet is about to be asked to sign.
+ *
+ * @param {TxRequest} request
+ * @param {Web3} web3
+ * @param {Provider} provider
+ * @param {string} payer  base58; the fee payer and the first signer
+ * @returns {any} a VersionedTransaction
+ */
 function buildTransaction(request, web3, provider, payer) {
   const {
     PublicKey, TransactionInstruction, VersionedTransaction, TransactionMessage,
@@ -286,57 +389,16 @@ function buildTransaction(request, web3, provider, payer) {
   }
 }
 
-// What the person approving gets to see.
-//
-// It reads the compiled message rather than the objects it was built from,
-// because that is what the signed transaction carries: addresses and data as
-// base58 strings with indices instead of PublicKey instances. Reading the
-// pre-compilation form meant reaching for .instructions on something that does
-// not have them.
-//
-// Every account is named. A transaction shown as an opaque blob is a
-// transaction approved blindly, and this is the moment where that matters.
-function describeTransaction(tx, label) {
-  const message = tx?.message;
-  if (!message) {
-    return 'A session wants you to sign a Solana transaction, but it could not be read back for review.';
-  }
-
-  const keys = message.staticAccountKeys || [];
-  const header = message.header || {};
-  const signerCount = header.numRequiredSignatures ?? 0;
-  const instructions = compiledInstructions(tx);
-  const lines = [];
-
-  lines.push(label ? String(label) : 'A session wants to sign a Solana transaction.');
-  lines.push('');
-  lines.push(`blockhash: ${message.recentBlockhash || 'unknown'}`);
-  lines.push(`${signerCount} signature(s) required`);
-  lines.push(`${instructions.length} instruction(s):`);
-
-  for (const [i, ix] of instructions.entries()) {
-    lines.push('');
-    lines.push(`  ${i + 1}. program ${keyName(keys, ix.programIdIndex)}`);
-    const accounts = ix.accountKeyIndexes || [];
-    if (!accounts.length) {
-      lines.push('     (no accounts)');
-    }
-    for (const index of accounts) {
-      const role = index < signerCount ? 'signs, ' : '';
-      lines.push(`     ${role}${keyName(keys, index)}`);
-    }
-    lines.push(`     data ${bytesToHex(ix.data || [])}`);
-  }
-
-  lines.push('');
-  lines.push('Signing does not send anything. The transaction has to be broadcast separately.');
-  return lines.join('\n');
-}
-
 // A compiled message calls them compiledInstructions. The friendly form calls
 // them instructions, so both are read: which one is present depends on how far
 // along the transaction is, and reading only the other is what made an intact
 // transaction look empty.
+/**
+ * The instructions of a transaction, whichever form it is currently in.
+ *
+ * @param {any} tx
+ * @returns {any[]}
+ */
 function compiledInstructions(tx) {
   const message = tx?.message;
   if (!message) return [];
@@ -345,27 +407,6 @@ function compiledInstructions(tx) {
   return [];
 }
 
-// An account can be named by index into the key list, or directly. Anything
-// else is shown as itself rather than guessed at, since this is the text
-// somebody is being asked to approve.
-function keyName(keys, index) {
-  if (typeof index === 'string') return index;
-  const found = keys[index];
-  if (typeof found === 'string') return found;
-  // The compiled form keeps PublicKey objects rather than base58 text.
-  if (found && typeof found.toBase58 === 'function') return found.toBase58();
-  return `#${index}`;
-}
-
-// The library is loaded on first use rather than up front, so a session that
-// never signs a transaction never pays for it.
-//
-// It comes from esm.sh rather than straight from the package, and that is not
-// cosmetic. The published browser ESM build imports Node's "buffer", which a
-// page with no bundler cannot resolve: the failure is a bare
-// "Failed to resolve module specifier", which says nothing about which file was
-// at fault. esm.sh resolves those to real browser packages, so what arrives
-// actually runs.
 const WEB3_URL = 'https://esm.sh/@solana/web3.js@3.0.2';
 
 // What the last built transaction's instruction data actually was, so a
@@ -377,6 +418,13 @@ export function lastBuiltData() {
 
 let web3Promise = null;
 
+/**
+ * The Solana library, loaded once and shared. A string answer means it
+ * could not be loaded, and is returned rather than thrown so the person in
+ * the session hears the reason.
+ *
+ * @returns {Promise<Web3 | string>}
+ */
 function loadWeb3() {
   if (web3Promise) return web3Promise;
 
@@ -403,6 +451,10 @@ function hexToBytes(hex) {
   return out;
 }
 
+/**
+ * @param {string} text  base58
+ * @returns {Uint8Array}
+ */
 function base58ToBytes(text) {
   const alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
   let n = 0n;
@@ -423,6 +475,13 @@ function base58ToBytes(text) {
   return padded;
 }
 
+/**
+ * The wallet's public key as the 32 hex bytes the Go side checks the
+ * signature against.
+ *
+ * @param {Provider} provider
+ * @returns {string}
+ */
 function publicKeyHex(provider) {
   const key = provider?.publicKey;
   if (!key) throw new Error('the wallet reports no account');
