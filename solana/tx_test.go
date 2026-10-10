@@ -57,7 +57,7 @@ func startFakeAgent(t *testing.T, priv ed25519.PrivateKey) string {
 			Signature:         sig,
 			SignedTransaction: append(signed, message...),
 		}, pub, nil
-	}, nil); err != nil {
+	}, nil, nil); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
 

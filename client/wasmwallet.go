@@ -33,12 +33,9 @@ var (
 // text. Passing js.Value instead would mean releasing by hand on a path where a
 // mistake costs the whole runtime.
 func walletSigner(publicKeyHex, address string) (gossh.Signer, error) {
-	raw, err := hex.DecodeString(publicKeyHex)
+	raw, err := walletPublicKey(publicKeyHex)
 	if err != nil {
-		return nil, fmt.Errorf("wallet public key is not hex: %w", err)
-	}
-	if len(raw) != ed25519.PublicKeySize {
-		return nil, fmt.Errorf("wallet public key is %d bytes, want %d", len(raw), ed25519.PublicKeySize)
+		return nil, err
 	}
 
 	hook := js.Global().Get(walletSignHook)
@@ -46,7 +43,7 @@ func walletSigner(publicKeyHex, address string) (gossh.Signer, error) {
 		return nil, errNoWallet
 	}
 
-	return NewWalletSigner(ed25519.PublicKey(raw), address,
+	return NewWalletSigner(raw, address,
 		func(summary string, data []byte) ([]byte, error) {
 			answer, err := awaitStringTimeout(hook, []string{summary, hex.EncodeToString(data)}, signatureTimeout)
 			if err != nil {
@@ -57,4 +54,22 @@ func walletSigner(publicKeyHex, address string) (gossh.Signer, error) {
 			}
 			return hex.DecodeString(answer)
 		})
+}
+
+// walletPublicKey is the wallet's ed25519 public key, given as hex by the page.
+//
+// Also handed to agentkey so it can tell which of the forwarded keys is the
+// wallet's. That distinction decides who signs a transaction: the wallet's key
+// can only be used by showing a person the transaction, and every other key in
+// the same agent is signed on this side.
+func walletPublicKey(publicKeyHex string) (ed25519.PublicKey, error) {
+	raw, err := hex.DecodeString(publicKeyHex)
+	if err != nil {
+		return nil, fmt.Errorf("wallet public key is not hex: %w", err)
+	}
+	if len(raw) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("wallet public key is %d bytes, want %d",
+			len(raw), ed25519.PublicKeySize)
+	}
+	return ed25519.PublicKey(raw), nil
 }

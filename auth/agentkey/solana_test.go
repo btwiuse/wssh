@@ -65,7 +65,7 @@ func TestSolanaExtensionSignsATransaction(t *testing.T) {
 			Signature:         ed25519.Sign(priv, message),
 			SignedTransaction: buildSignedTransaction(pub, priv, message),
 		}, pub, nil
-	}, nil); err != nil {
+	}, nil, nil); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
 
@@ -109,7 +109,7 @@ func TestUnknownExtensionIsRefused(t *testing.T) {
 	if err := WithSolana(ring, func(SolanaTxRequest) (SolanaTxResponse, ed25519.PublicKey, error) {
 		t.Fatal("the wallet should not have been asked about an unknown extension")
 		return SolanaTxResponse{}, nil, nil
-	}, nil); err != nil {
+	}, nil, nil); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
 
@@ -133,7 +133,7 @@ func TestExtensionRejectsASignatureForAnotherMessage(t *testing.T) {
 			Signature:         ed25519.Sign(strangerPriv, other),
 			SignedTransaction: buildSignedTransaction(pub, strangerPriv, other),
 		}, pub, nil
-	}, nil); err != nil {
+	}, nil, nil); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
 
@@ -156,7 +156,7 @@ func TestExtensionRejectsAKeyWeDoNotHold(t *testing.T) {
 			Signature:         ed25519.Sign(otherPriv, message),
 			SignedTransaction: buildSignedTransaction(otherPub, otherPriv, message),
 		}, otherPub, nil
-	}, nil); err != nil {
+	}, nil, nil); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
 
@@ -298,7 +298,7 @@ func TestExtensionBoundsTheInstructionCount(t *testing.T) {
 	if err := WithSolana(ring, func(SolanaTxRequest) (SolanaTxResponse, ed25519.PublicKey, error) {
 		asked = true
 		return SolanaTxResponse{}, nil, nil
-	}, nil); err != nil {
+	}, nil, nil); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
 	// The limit is a sanity bound rather than a knob, so it is set here rather
@@ -372,7 +372,7 @@ func TestExtensionCarriesTheReasonInTheAnswer(t *testing.T) {
 
 	if err := WithSolana(ring, func(SolanaTxRequest) (SolanaTxResponse, ed25519.PublicKey, error) {
 		return SolanaTxResponse{}, nil, errors.New("the user closed the wallet prompt")
-	}, nil); err != nil {
+	}, nil, nil); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
 
@@ -402,7 +402,7 @@ func TestExtensionAnswersAMalformedRequest(t *testing.T) {
 	if err := WithSolana(ring, func(SolanaTxRequest) (SolanaTxResponse, ed25519.PublicKey, error) {
 		t.Error("the wallet should not have been asked about a malformed request")
 		return SolanaTxResponse{}, nil, nil
-	}, nil); err != nil {
+	}, nil, nil); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
 
@@ -467,7 +467,7 @@ func TestLocalKeySignsWithoutAWallet(t *testing.T) {
 	// here.
 	if err := WithSolana(ring, nil, func(SolanaTxRequest) ([]byte, error) {
 		return unsigned, nil
-	}); err != nil {
+	}, nil); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
 
@@ -507,7 +507,7 @@ func TestAgentWithNothingToBuildWithRefuses(t *testing.T) {
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
 	ring, _ := mustKeyring(t, priv)
 
-	if err := WithSolana(ring, nil, nil); err != nil {
+	if err := WithSolana(ring, nil, nil, nil); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
 
@@ -545,7 +545,7 @@ func TestPayerDefaultsToTheSigningKey(t *testing.T) {
 	if err := WithSolana(ring, nil, func(req SolanaTxRequest) ([]byte, error) {
 		asked = req
 		return unsigned, nil
-	}); err != nil {
+	}, nil); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
 
@@ -581,7 +581,7 @@ func TestAnExplicitPayerIsNotOverridden(t *testing.T) {
 	if err := WithSolana(ring, nil, func(req SolanaTxRequest) ([]byte, error) {
 		asked = req
 		return unsigned, nil
-	}); err != nil {
+	}, nil); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
 
@@ -609,7 +609,7 @@ func TestAPayerThisAgentDoesNotHoldIsRefused(t *testing.T) {
 	if err := WithSolana(ring, nil, func(SolanaTxRequest) ([]byte, error) {
 		built = true
 		return nil, nil
-	}); err != nil {
+	}, nil); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
 
@@ -634,6 +634,43 @@ func Base58EncodeForTest(t *testing.T, pub ed25519.PublicKey) string {
 	return siws.Base58Encode(pub)
 }
 
+// A browser that both imported an SSH key and connected a wallet forwards an
+// agent holding two keys, and that is the ordinary case rather than a corner.
+// It used to be refused outright - before the extension was even reached -
+// with a bare error, which the agent protocol has no room for: the caller got
+// one failure byte and no sentence. Both halves are pinned here, because
+// either alone can come back.
+func TestExtensionWorksWithSeveralKeysAndAWallet(t *testing.T) {
+	walletPub, walletPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	_, otherPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+
+	ring, _ := mustKeyring(t, walletPriv, otherPriv)
+	var asked SolanaTxRequest
+	if err := WithSolana(ring, func(req SolanaTxRequest) (SolanaTxResponse, ed25519.PublicKey, error) {
+		asked = req
+		message := []byte("a transaction message, whatever the page built")
+		return SolanaTxResponse{
+			Signature:         ed25519.Sign(walletPriv, message),
+			SignedTransaction: buildSignedTransaction(walletPub, walletPriv, message),
+		}, walletPub, nil
+	}, nil, nil); err != nil {
+		t.Fatalf("WithSolana: %v", err)
+	}
+
+	if _, err := askOverAgent(t, ring, testRequest(t)); err != nil {
+		t.Fatalf("a wallet behind several keys must still be asked: %v", err)
+	}
+	if asked.Blockhash == "" {
+		t.Error("the request never reached the wallet")
+	}
+}
+
 // The same setup, answered by a key the agent does not hold. Several keys in
 // the ring must not turn into "any key will do": the check is membership, and
 // this is what stops a wallet the session never offered being used instead.
@@ -653,7 +690,7 @@ func TestExtensionRejectsAKeyTheAgentDoesNotHold(t *testing.T) {
 			Signature:         ed25519.Sign(strangerPriv, []byte("message")),
 			SignedTransaction: []byte("transaction"),
 		}, strangerPub, nil
-	}, nil); err != nil {
+	}, nil, nil); err != nil {
 		t.Fatalf("WithSolana: %v", err)
 	}
 
@@ -676,7 +713,7 @@ func TestSeveralKeysWithNoWalletExplainsItself(t *testing.T) {
 	// there is nobody to ask.
 	if err := WithSolana(ring, nil, func(SolanaTxRequest) ([]byte, error) {
 		return nil, errors.New("should not be reached")
-	}); err != nil {
+	}, nil); err != nil {
 		t.Fatalf("WithSolana: %v", err)
 	}
 
@@ -732,6 +769,135 @@ func twoEd25519(t *testing.T) []ed25519.PrivateKey {
 	return []ed25519.PrivateKey{one, two}
 }
 
+// A named payer must be signed by that payer, whatever the caller did or did
+// not declare about which key is the wallet's. Declaring it decides who gets
+// asked; this checks the answer, and it is the last thing standing between a
+// mis-routed request and a transaction whose fee payer is not the account the
+// caller asked for.
+//
+// This is the undeclared case, where the request is routed to the wallet
+// because there is nothing to route it to. The wallet then answers with its
+// own key, which is the wrong one, and has to be refused rather than passed
+// on. Before the answer was checked, this returned a signature over the wrong
+// fee payer with nothing in it to say so.
+func TestAPayerTheWalletDidNotHonourIsRefused(t *testing.T) {
+	sshPub, sshPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	walletPub, walletPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+
+	ring, _ := mustKeyring(t, sshPriv, walletPriv)
+	if err := WithSolana(ring, func(SolanaTxRequest) (SolanaTxResponse, ed25519.PublicKey, error) {
+		message := []byte("a transaction message, whatever the page built")
+		return SolanaTxResponse{
+			Signature:         ed25519.Sign(walletPriv, message),
+			SignedTransaction: buildSignedTransaction(walletPub, walletPriv, message),
+		}, walletPub, nil
+	}, nil, nil); err != nil {
+		t.Fatalf("WithSolana: %v", err)
+	}
+
+	req := testRequest(t)
+	req.Signer = siws.Base58Encode(sshPub)
+
+	_, err = askOverAgent(t, ring, req)
+	if err == nil {
+		t.Fatalf("naming %s as payer was not honoured and the wallet signed anyway",
+			siws.Base58Encode(sshPub))
+	}
+	for _, want := range []string{req.Signer, siws.Base58Encode(walletPub), "payer"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not mention %q: %v", want, err)
+		}
+	}
+}
+
+// The routing the fix is about. A browser forwards the imported SSH keys and
+// the wallet in one agent, so "the signer is named" has to decide who
+// signs: the wallet's own payer reaches a person, anybody else's is signed on
+// this side. The wallet is declared, so this is the case that used to be
+// impossible.
+func TestAPayerThatIsNotTheWalletIsSignedHere(t *testing.T) {
+	sshPub, sshPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	walletPub, walletPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+
+	ring, _ := mustKeyring(t, sshPriv, walletPriv)
+	asked := false
+	if err := WithSolana(ring,
+		func(SolanaTxRequest) (SolanaTxResponse, ed25519.PublicKey, error) {
+			asked = true
+			return SolanaTxResponse{}, nil, nil
+		},
+		func(req SolanaTxRequest) ([]byte, error) {
+			message := []byte("a transaction message, whatever the page built")
+			return append(append([]byte{1}, make([]byte, ed25519.SignatureSize)...), message...), nil
+		},
+		walletPub); err != nil {
+		t.Fatalf("WithSolana: %v", err)
+	}
+
+	req := testRequest(t)
+	req.Signer = siws.Base58Encode(sshPub)
+	if _, err := askOverAgent(t, ring, req); err != nil {
+		t.Fatalf("a local payer should have been signed here: %v", err)
+	}
+	if asked {
+		t.Error("the wallet was asked to sign a transaction that named somebody else as payer")
+	}
+}
+
+// The other direction, and the one that must not change: naming the wallet
+// still goes to the wallet. That is the key whose private half is on the far
+// side of a bridge, and the only way to use it is to show a person what they
+// are approving.
+func TestAPayerThatIsTheWalletGoesToTheWallet(t *testing.T) {
+	_, otherPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	walletPub, walletPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+
+	ring, _ := mustKeyring(t, otherPriv, walletPriv)
+	asked := false
+	if err := WithSolana(ring, func(SolanaTxRequest) (SolanaTxResponse, ed25519.PublicKey, error) {
+		asked = true
+		message := []byte("a transaction message, whatever the page built")
+		return SolanaTxResponse{
+			Signature:         ed25519.Sign(walletPriv, message),
+			SignedTransaction: buildSignedTransaction(walletPub, walletPriv, message),
+		}, walletPub, nil
+	},
+		func(SolanaTxRequest) ([]byte, error) {
+			t.Error("the transaction was built for local signing rather than sent to the wallet")
+			return nil, nil
+		},
+		walletPub); err != nil {
+		t.Fatalf("WithSolana: %v", err)
+	}
+
+	req := testRequest(t)
+	req.Signer = siws.Base58Encode(walletPub)
+	if _, err := askOverAgent(t, ring, req); err != nil {
+		t.Fatalf("the wallet should have been asked: %v", err)
+	}
+	if !asked {
+		t.Error("naming the wallet as payer still went somewhere else")
+	}
+}
+
 // A transaction the page built with room for more than one signature cannot be
 // signed by filling the first slot and declaring the count it asked for. That
 // produced bytes short by whole signatures, with the message glued onto the
@@ -757,7 +923,7 @@ func TestATransactionNeedingTwoSignaturesIsRefused(t *testing.T) {
 		// What the page sends: a slot per signer, as solana.js builds it.
 		message := []byte("a message")
 		return append(append([]byte{2}, make([]byte, 2*ed25519.SignatureSize)...), message...), nil
-	}); err != nil {
+	}, nil); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
 
@@ -790,7 +956,7 @@ func TestASingleSignatureTransactionIsUnchanged(t *testing.T) {
 	if err := WithSolana(ring, nil, func(SolanaTxRequest) ([]byte, error) {
 		message := []byte("a message")
 		return append(append([]byte{1}, make([]byte, ed25519.SignatureSize)...), message...), nil
-	}); err != nil {
+	}, nil); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
 

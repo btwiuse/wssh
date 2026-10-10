@@ -69,7 +69,7 @@ func main() {
 			Signature:         sig,
 			SignedTransaction: append(append([]byte{1}, sig...), message...),
 		}, pubkey, nil
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		panic(err)
 	}

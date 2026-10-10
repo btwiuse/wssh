@@ -41,7 +41,7 @@ func TestMemoRequestWithNoAccountsReachesTheWallet(t *testing.T) {
 			SignedTransaction: buildSignedTransaction(pub, priv, message),
 		}, pub, nil
 	}
-	if err := WithSolana(ring, ask, nil); err != nil {
+	if err := WithSolana(ring, ask, nil, nil); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
 
@@ -94,7 +94,7 @@ func TestNonMemoRequestWithNoAccountsIsStillRefused(t *testing.T) {
 		reached = true
 		return SolanaTxResponse{}, nil, nil
 	}
-	if err := WithSolana(ring, ask, nil); err != nil {
+	if err := WithSolana(ring, ask, nil, nil); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
 

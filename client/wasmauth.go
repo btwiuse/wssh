@@ -134,9 +134,7 @@ const SolanaComment = "solana:"
 // nothing, so the source is what is left.
 func walletComment(creds credentials) string {
 	if addr := strings.TrimSpace(creds.WalletAddress); addr != "" {
-		// SolanaComment is duplicated from auth/agentkey's
-		// WalletCommentPrefix until the routing that reads it lands.
-		return "solana:" + addr
+		return agentkey.WalletCommentPrefix + addr
 	}
 	return "wallet"
 }

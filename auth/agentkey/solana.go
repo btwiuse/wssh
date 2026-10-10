@@ -132,6 +132,33 @@ type SolanaTxResponse struct {
 // refused reports whether this is an answer of no.
 func (r SolanaTxResponse) refused() bool { return r.Refusal != "" }
 
+// ownPublicKey is the ed25519 key an agent holds, or nil if it is something
+// else. Everything else here is checked against it.
+// payerIsLocal reports whether the request names a payer that this agent can
+// sign with itself, rather than one only the wallet can.
+//
+// The three cases, and none of them is a guess:
+//
+//   - no payer named: the wallet is asked, as it always was.
+//   - the payer is the wallet's own key: the wallet is asked, because that
+//     key's private half is on the far side of a bridge and the only way to
+//     use it is to show a person the transaction.
+//   - the payer is some other key this agent holds: signed here. An ed25519
+//     key is an ed25519 key whatever it was made for, and the transaction is
+//     built by the page - the serialisation belongs to the library that
+//     tracks the chain - and signed on this side.
+func (t *SolanaTx) payerIsLocal(req SolanaTxRequest, signers []gossh.Signer) bool {
+	if req.Signer == "" || t.Wallet == nil {
+		return false
+	}
+	raw, err := siws.Base58Decode(req.Signer)
+	if err != nil || len(raw) != ed25519.PublicKeySize {
+		return false
+	}
+	// Not the wallet's, so if this agent holds it, it can sign for itself.
+	return !bytes.Equal(raw, t.Wallet)
+}
+
 // signerForAddress is the signer holding a named base58 account.
 func signerForAddress(signers []gossh.Signer, address string) (gossh.Signer, bool) {
 	raw, err := siws.Base58Decode(address)
@@ -218,6 +245,17 @@ type SolanaTx struct {
 	// Used when the payer names a key this agent holds that is not the
 	// wallet's, and when there is no wallet at all.
 	Build SolanaBuild
+
+	// Wallet is which of the agent's keys the wallet holds, when there is a
+	// wallet and it is known. The private half is on the far side of a
+	// bridge, so this key can be signed with but only by asking: it is the
+	// one key that must reach a person rather than being signed here.
+	//
+	// Nil when there is no wallet, or when a wallet is attached but its key
+	// was not declared. A request that names a payer cannot be routed
+	// reliably without it, so it goes to the wallet - which is the
+	// conservative direction, being the one that asks a person.
+	Wallet ed25519.PublicKey
 
 	// MaxInstructions bounds what one request may ask for. It is a sanity
 	// limit on a message size, not a policy: the wallet sees the result
@@ -448,7 +486,7 @@ func (t *SolanaTx) ExtensionHandler(signers []gossh.Signer) func(name string, co
 		// wallet for a transaction that named somebody else's account would
 		// hand back a signature over the wrong fee payer, and the caller
 		// would have no way to tell.
-		if t.Ask != nil {
+		if t.Ask != nil && !t.payerIsLocal(req, signers) {
 			// The wallet's key is here, so either the request named it or it
 			// named nobody and the wallet picks. Either way there is nothing
 			// to disambiguate: a browser that imported an SSH key and also
@@ -586,7 +624,7 @@ func (t *SolanaTx) ExtensionHandler(signers []gossh.Signer) func(name string, co
 // It is separate from Keyring because it needs a way to reach a wallet, and a
 // keyring on its own is just a list of signers. A keyring without it refuses
 // the extension, which is the same thing it would have done anyway.
-func WithSolana(ring Agent, ask SolanaAsk, build SolanaBuild) error {
+func WithSolana(ring Agent, ask SolanaAsk, build SolanaBuild, wallet ed25519.PublicKey) error {
 	kr, ok := ring.(*keyring)
 	if !ok {
 		return errors.New("this agent does not support extensions")
@@ -594,6 +632,14 @@ func WithSolana(ring Agent, ask SolanaAsk, build SolanaBuild) error {
 	kr.solana = &SolanaTx{
 		Ask:   ask,
 		Build: build,
+		// Which of the agent's keys is the wallet's. Needed because a
+		// browser forwards the imported SSH keys and the wallet in one
+		// agent, and a request naming its payer has to be routed to the
+		// right one: the wallet's key goes to a person, anyone else's is
+		// signed here. A nil wallet means "not known", and then a request
+		// that names a payer cannot be told apart from one that does not,
+		// so it goes to the wallet as before.
+		Wallet: wallet,
 	}
 	return nil
 }

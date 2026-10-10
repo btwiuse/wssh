@@ -15,6 +15,7 @@ package client
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"syscall/js"
@@ -165,6 +166,7 @@ func jsConnect(_ js.Value, args []js.Value) any {
 		// not, so that "no wallet here" comes back as an answer rather than
 		// as the same refusal a real ssh-agent would give.
 		var walletRing agentkey.Agent
+		var walletPub ed25519.PublicKey
 		if creds.WalletPublicKey != "" {
 			wallet, err := walletSigner(creds.WalletPublicKey, creds.WalletAddress)
 			if err != nil {
@@ -172,9 +174,22 @@ func jsConnect(_ js.Value, args []js.Value) any {
 					"message": "the connected wallet could not be used: " + err.Error()})
 				return
 			}
+			// Which of the keys below is the wallet's. A request naming a
+			// payer is routed by it: the wallet's own payer goes to the
+			// wallet, because only a person can approve that one, and
+			// anybody else's is signed here.
+			walletPub, err = walletPublicKey(creds.WalletPublicKey)
+			if err != nil {
+				post(map[string]any{"type": "error",
+					"message": "the connected wallet could not be used: " + err.Error()})
+				return
+			}
 			auth = append(auth, gossh.PublicKeys(wallet))
-			// Labelled as the wallet, so that a session holding both it and
-			// an imported SSH key can say which is which.
+			// Marked as the wallet so that a session holding both it and an
+			// imported SSH key can say which is which. Every ed25519 key in
+			// an agent is a Solana account, so the address alone would not
+			// distinguish them - the point is that this one is the connected
+			// wallet and not a key the user imported.
 			keys = append(keys, agentkey.Key{Signer: wallet, Comment: walletComment(creds)})
 		}
 
@@ -198,7 +213,7 @@ func jsConnect(_ js.Value, args []js.Value) any {
 			if creds.WalletPublicKey == "" {
 				asker = nil
 			}
-			if err := agentkey.WithSolana(ring, asker, solanaBuilder()); err != nil {
+			if err := agentkey.WithSolana(ring, asker, solanaBuilder(), walletPub); err != nil {
 				post(map[string]any{"type": "error",
 					"message": "could not offer Solana transactions: " + err.Error()})
 				return
