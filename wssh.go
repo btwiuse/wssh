@@ -26,7 +26,7 @@ import (
 	"charm.land/log/v2"
 	"charm.land/ssh"
 	"charm.land/wish/v2"
-	"github.com/btwiuse/wssh/auth/authfwd"
+	"github.com/btwiuse/wssh/auth/agentkey"
 	"github.com/coder/websocket"
 )
 
@@ -75,11 +75,11 @@ type Options struct {
 	SSHOptions []ssh.Option
 
 	// Agent, when non-nil, exposes an in-memory ssh-agent over the
-	// "auth-agent@openssh.com" channel. Build it with authfwd.Keyring. The
+	// "auth-agent@openssh.com" channel. Build it with agentkey.Keyring. The
 	// loaded keys are kept in this process: clients can sign with any of
 	// them, so the same authentication rule that applies to
 	// --authorized-keys applies here.
-	Agent authfwd.Agent
+	Agent agentkey.Agent
 
 	// Logger receives session-level detail. Defaults to the charm default
 	// logger, which honours whatever level the process has set.
@@ -142,13 +142,13 @@ func NewServer(opts Options) (*Server, error) {
 	}
 
 	if opts.Agent != nil {
-		// The agent's authfwd.Forwarding option mutates ChannelHandlers
+		// The agent's agentkey.Forwarding option mutates ChannelHandlers
 		// and RequestHandlers on the server, but we reset ChannelHandlers
 		// to a fresh copy of defaults right above, so the option has
 		// already been clobbered. Re-apply it directly to the map
 		// instead. This keeps the agent channel alongside the session
 		// and direct-tcpip handlers in one place.
-		authfwd.Install(sessions, opts.Agent)
+		agentkey.Install(sessions, opts.Agent)
 	}
 
 	return &Server{sessions: sessions, opts: opts}, nil

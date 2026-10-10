@@ -1,19 +1,19 @@
-package authfwd_test
+package agentkey_test
 
 import (
 	"context"
-	"crypto"
 	"crypto/ed25519"
 	"crypto/rand"
 	"net"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"charm.land/wish/v2"
 	"github.com/btwiuse/wssh"
-	"github.com/btwiuse/wssh/auth/authfwd"
+	"github.com/btwiuse/wssh/auth/agentkey"
 	"github.com/btwiuse/wssh/shell"
 	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
@@ -33,6 +33,12 @@ import (
 func TestSSHAuthSockIsUsable(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("SHELL", "/bin/sh")
+	// The middleware runs the shell as a login shell, so $HOME decides
+	// whose profile gets sourced. Leaving it alone would let the
+	// developer's own .profile set PS1, print a banner, or be slow
+	// enough to eat the commands below, and the test would fail for
+	// reasons that have nothing to do with the agent.
+	t.Setenv("HOME", dir)
 
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -43,7 +49,11 @@ func TestSSHAuthSockIsUsable(t *testing.T) {
 		t.Fatalf("pub: %v", err)
 	}
 
-	ring, err := authfwd.Keyring([]crypto.Signer{priv})
+	signer, err := gossh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatalf("signer: %v", err)
+	}
+	ring, err := agentkey.Keyring([]gossh.Signer{signer})
 	if err != nil {
 		t.Fatalf("keyring: %v", err)
 	}
@@ -193,16 +203,22 @@ func extractSSHAuthSockPath(t *testing.T, output string) string {
 	const sentinel = "END_OF_AUTH_SOCK"
 	lines := splitLines(output)
 	for i, line := range lines {
-		if trim(line) != sentinel {
+		// Not equality: an interactive shell prints its prompt on the
+		// same line as the command's output, so the sentinel arrives as
+		// "<prompt> END_OF_AUTH_SOCK".
+		if !strings.HasSuffix(trim(line), sentinel) {
 			continue
 		}
-		// The line two back is the path; the line immediately
-		// before is the prompt that asked the shell to echo
-		// the sentinel.
-		if i >= 2 {
-			return trim(lines[i-2])
+		if i == 0 {
+			return ""
 		}
-		return ""
+		// Same reason for the path on the line above: take its last
+		// field, which is the path rather than the prompt in front of it.
+		fields := strings.Fields(trim(lines[i-1]))
+		if len(fields) == 0 {
+			continue
+		}
+		return fields[len(fields)-1]
 	}
 	return ""
 }

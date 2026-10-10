@@ -1,8 +1,7 @@
-package authfwd_test
+package agentkey_test
 
 import (
 	"context"
-	"crypto"
 	"crypto/ed25519"
 	"crypto/rand"
 	"net"
@@ -13,7 +12,7 @@ import (
 
 	"charm.land/wish/v2"
 	"github.com/btwiuse/wssh"
-	"github.com/btwiuse/wssh/auth/authfwd"
+	"github.com/btwiuse/wssh/auth/agentkey"
 	"github.com/btwiuse/wssh/shell"
 	"github.com/coder/websocket"
 	gossh "golang.org/x/crypto/ssh"
@@ -46,7 +45,11 @@ func TestServerOpensAgentChannel(t *testing.T) {
 		t.Fatalf("pub: %v", err)
 	}
 
-	ring, err := authfwd.Keyring([]crypto.Signer{priv})
+	signer, err := gossh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatalf("signer: %v", err)
+	}
+	ring, err := agentkey.Keyring([]gossh.Signer{signer})
 	if err != nil {
 		t.Fatalf("keyring: %v", err)
 	}
@@ -98,7 +101,7 @@ func TestServerOpensAgentChannel(t *testing.T) {
 		_ = stdin.Close()
 	}()
 
-	// Open the agent channel directly. The server's authfwd handler
+	// Open the agent channel directly. The server's agentkey handler
 	// accepts any such channel; the bytes on it are the agent protocol.
 	ch, agReqs, err := sshClient.OpenChannel("auth-agent@openssh.com", nil)
 	if err != nil {

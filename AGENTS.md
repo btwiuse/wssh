@@ -214,7 +214,7 @@ is real.
   the user does on the remote side. `client.Session.Client()` returns the
   underlying `*ssh.Client`, which the test harness and the WASM bridge
   use to open additional channels. The unsafe trick in
-  `auth/authfwd.ExtractSigner` reaches into the `wrappedSigner` struct
+  `auth/agentkey.ExtractSigner` reaches into the `wrappedSigner` struct
   that `ssh.ParsePrivateKey` produces to recover the inner
   `crypto.Signer` (the standard library hides it behind a private field
   that `reflect` cannot reach on Termux).
@@ -244,7 +244,7 @@ is real.
 - `charm.land/ssh` (server-side) and `golang.org/x/crypto/ssh` (client-side)
   are both imported. The server is the wish SSH server; the client is the
   standard library. `cmd/wssh/client.go` aliases the latter as `gossh`.
-- Agent forwarding is supported server-side via `auth/authfwd/`. The
+- Agent forwarding is supported server-side via `auth/agentkey/`. The
   `--agent-keys` flag on the server subcommands loads private keys
   (PEM, unencrypted) into an in-memory keyring. The server installs
   the `auth-agent@openssh.com` channel handler and accepts the
@@ -257,9 +257,9 @@ is real.
   server-side agent requires a custom client (the browser, a small
   Go program that opens the channel directly, or `wssh client
   --agent`).
-  `authfwd.Install` also creates a per-connection local Unix socket
+  `agentkey.Install` also creates a per-connection local Unix socket
   in a temp dir and stashes its path on the per-connection
-  context under `authfwd.SSHAuthSockKey`. The shell middleware
+  context under `agentkey.SSHAuthSockKey`. The shell middleware
   reads that path and appends `SSH_AUTH_SOCK=<path>` to the
   session env, so any program on the remote side that talks to
   `SSH_AUTH_SOCK` (ssh-add, git push over SSH, etc) finds a working
@@ -271,7 +271,7 @@ is real.
 - The agent channel handler is installed AFTER the default channel
   handlers map is created. The `wish.NewServer` options run before
   that map is set, so any handler installed via `ssh.Option` would be
-  wiped. `auth/authfwd.Install` mutates the map in place after it has
+  wiped. `auth/agentkey.Install` mutates the map in place after it has
   been built, which is the only ordering that survives.
 
 ## File-by-file map
@@ -281,7 +281,7 @@ is real.
 | `Makefile` | Build entry point. `make wssh` is the target that builds a working binary; bare `make` lists targets. |
 | `wssh.go`, `wssh_test.go` | `Server` (HTTP handler wrapping wish). Path/origin/auth tests. |
 | `auth/auth.go`, `auth/auth_test.go` | `auth.Config`, key files (re-read each attempt), password file (bcrypt or plaintext). |
-| `auth/authfwd/`, `auth/authfwd/agent_e2e_test.go` | In-memory ssh-agent. `Keyring([]crypto.Signer)` builds it; `Install(*ssh.Server, agent)` registers the auth-agent channel and request handlers on a server already built (the option-style `Forwarding` exists for callers that wire from a fresh `wish.NewServer`). `--agent-keys` in `cmd/wssh/serve.go` loads PEM keys (ed25519/RSA) and feeds the result. |
+| `auth/agentkey/` | Signing keys exposed to sessions as an ssh-agent. `Keyring([]ssh.Signer)` builds it; `Install(*ssh.Server, agent)` registers the auth-agent channel, the global request, and a per-connection local socket on a server already built. The keyring is fixed: `Add`/`Remove`/`Lock` report that. `--agent-keys` in `cmd/wssh/serve.go` parses key files with `gossh.ParsePrivateKey` and feeds the result. |
 | `client/client.go`, `client/client_test.go` | `Session`, `Dial`, `Write`/`WriteContext`/`Resize`/`Close`/`CloseStdin`. Native tests over loopback. |
 | `client/wasm.go` | `//go:build js && wasm`. JS bridge, parked forever, exports `connect`/`write`/`resize`/`disconnect`/`generateKey`/`keyInfo`. Reads the optional command from arg 6. |
 | `client/wasmauth.go` | `//go:build js && wasm`. JSON-shaped `credentials`, `signerFor`, `buildAuth`, `jsGenerateKey`, `jsKeyInfo`. |

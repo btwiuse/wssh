@@ -12,7 +12,6 @@ package client
 
 import (
 	"context"
-	"crypto"
 	"errors"
 	"fmt"
 	"io"
@@ -22,7 +21,7 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/btwiuse/wssh/auth/authfwd"
+	"github.com/btwiuse/wssh/auth/agentkey"
 	"github.com/coder/websocket"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
@@ -300,12 +299,7 @@ func (s *Session) openAgent(path string) error {
 	if err != nil {
 		return err
 	}
-	cs, err := authfwd.ExtractSigner(signer)
-	if err != nil {
-		return fmt.Errorf("extract signer from %s: %w", path, err)
-	}
-
-	// Open the agent channel. The server's authfwd handler accepts
+	// Open the agent channel. The server's agentkey handler accepts
 	// any auth-agent@openssh.com channel; bytes on it are the
 	// standard agent protocol.
 	ch, reqs, err := s.sshClient.OpenChannel("auth-agent@openssh.com", nil)
@@ -315,8 +309,9 @@ func (s *Session) openAgent(path string) error {
 	go ssh.DiscardRequests(reqs)
 
 	// Build a tiny agent that holds the one key, and serve it on
-	// the channel.
-	ring, err := authfwd.Keyring([]crypto.Signer{cs})
+	// the channel. The signer ssh.ParsePrivateKey just returned is already
+	// exactly what the agent protocol asks for, so it goes in as it is.
+	ring, err := agentkey.Keyring([]ssh.Signer{signer})
 	if err != nil {
 		_ = ch.Close()
 		return fmt.Errorf("build agent keyring: %w", err)

@@ -2,7 +2,6 @@ package client_test
 
 import (
 	"context"
-	"crypto"
 	"crypto/ed25519"
 	"crypto/rand"
 	"net"
@@ -15,7 +14,7 @@ import (
 	"charm.land/ssh"
 	"charm.land/wish/v2"
 	"github.com/btwiuse/wssh"
-	"github.com/btwiuse/wssh/auth/authfwd"
+	"github.com/btwiuse/wssh/auth/agentkey"
 	"github.com/btwiuse/wssh/client"
 	"github.com/btwiuse/wssh/shell"
 	gossh "golang.org/x/crypto/ssh"
@@ -24,7 +23,7 @@ import (
 
 // TestClientUsesAgentKeyForAuthAndForwarding covers the client half
 // of the agent story. The server has a single authorized key in
-// its authfwd keyring; the client dials with the matching
+// its agentkey keyring; the client dials with the matching
 // unencrypted private key, the server's publickey handler
 // accepts it (because the same key is in the keyring, in a
 // different role), and the client also opens an
@@ -55,7 +54,11 @@ func TestClientUsesAgentKeyForAuthAndForwarding(t *testing.T) {
 	// SSH server: when the offered public key matches the one we
 	// have here, accept. Both pieces of the server's behaviour
 	// are gated on this single key.
-	ring, err := authfwd.Keyring([]crypto.Signer{priv})
+	signer, err := gossh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatalf("signer: %v", err)
+	}
+	ring, err := agentkey.Keyring([]gossh.Signer{signer})
 	if err != nil {
 		t.Fatalf("keyring: %v", err)
 	}
@@ -87,14 +90,14 @@ func TestClientUsesAgentKeyForAuthAndForwarding(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	sess, err := client.Dial(ctx, client.Options{
-		URL:            "ws://" + ln.Addr().String() + "/ws",
-		User:           "tester",
-		Cols:           80,
-		Rows:           24,
-		AgentKeyPath:   privKeyPath,
+		URL:             "ws://" + ln.Addr().String() + "/ws",
+		User:            "tester",
+		Cols:            80,
+		Rows:            24,
+		AgentKeyPath:    privKeyPath,
 		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
-		OnData:         func([]byte) {},
-		OnClose:        func(error) {},
+		OnData:          func([]byte) {},
+		OnClose:         func(error) {},
 	})
 	if err != nil {
 		t.Fatalf("dial: %v", err)
@@ -155,7 +158,7 @@ func TestClientUsesAgentKeyForAuthAndForwarding(t *testing.T) {
 	}
 
 	// The agent channel is open on the same connection. Talk
-	// to it as a real agent client would. The authfwd keyring
+	// to it as a real agent client would. The agentkey keyring
 	// has only the one key; we should see exactly that key
 	// listed and be able to sign with it.
 	cli, closer := openAgentChannel(t, sess)
