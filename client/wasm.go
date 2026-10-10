@@ -27,6 +27,15 @@ import (
 // exported functions are ready.
 const ExportResolver = "websshGoExportResolve"
 
+// The globals worker.js installs for Go to call back into. They live in the
+// worker's scope, not the page's, which is why a prompt has to make the round
+// trip as a message rather than being a closure handed over: the page and the
+// worker cannot see each other's globals.
+const (
+	askPassphraseHook = "__websshAskPassphraseFn"
+	askSignatureHook  = "__websshAskSignature"
+)
+
 // Start registers the JavaScript bridge and then parks forever. The browser
 // binary calls this from its main; nothing else needs to.
 func Start() {
@@ -102,12 +111,12 @@ func jsConnect(_ js.Value, args []js.Value) any {
 	// An encrypted key is opened by asking the page for its passphrase. The
 	// private key itself never has to be understood by JavaScript: the page
 	// hands over the text, Go does the cryptography.
-	// The name has to be the one worker.js installs on its own global, with
-	// the double underscore. Reading anything else finds nothing, and a missing
+	// The name has to be the one worker.js installs on its own global, with the
+	// double underscore. Reading anything else finds nothing, and a missing
 	// hook does not fail loudly: an encrypted key simply reports that no
-	// passphrase was given rather than asking the page for one.
+	// passphrase was given instead of asking for one.
 	var askKeyPassphrase func(name string) (string, error)
-	if hook := js.Global().Get("__websshAskPassphraseFn"); hook.Type() == js.TypeFunction {
+	if hook := js.Global().Get(askPassphraseHook); hook.Type() == js.TypeFunction {
 		askKeyPassphrase = func(name string) (string, error) {
 			value, err := awaitString(hook, name)
 			if err != nil || value == "" {
@@ -117,8 +126,23 @@ func jsConnect(_ js.Value, args []js.Value) any {
 		}
 	}
 
+	// What a signature needs the page to approve. Only consulted when the
+	// user asked for the agent to be forwarded, so a session that never
+	// forwards never shows a dialog.
+	var confirmSignature AskSignature
+	if creds.ForwardAgent {
+		hook := js.Global().Get(askSignatureHook)
+		confirmSignature = func(summary string) (bool, error) {
+			answer, err := awaitStringTimeout(hook, summary, signatureTimeout)
+			if err != nil {
+				return false, err
+			}
+			return answer == "yes", nil
+		}
+	}
+
 	go func() {
-		auth, err := buildAuth(creds, askPassword, askKeyPassphrase)
+		auth, signers, err := buildAuth(creds, askPassword, askKeyPassphrase)
 		if err != nil {
 			post(map[string]any{"type": "error", "message": err.Error()})
 			return
@@ -131,7 +155,12 @@ func jsConnect(_ js.Value, args []js.Value) any {
 			Cols:    cols,
 			Rows:    rows,
 			Command: command,
-			OnData:  postData,
+			// Wrapping in ConfirmingSigner is what makes forwarding
+			// acceptable from a browser: the keys stay here, and nothing is
+			// signed without a yes first. Every signature asks again; a yes
+			// is never remembered.
+			AgentSigners: confirmAll(signers, creds.ForwardAgent, confirmSignature),
+			OnData:       postData,
 			OnClose: func(err error) {
 				// Forget the session first. The page keeps delivering keystrokes
 				// after the far side has gone, and reporting each one as an

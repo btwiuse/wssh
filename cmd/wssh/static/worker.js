@@ -86,17 +86,24 @@ function flushInput() {
 let nextPromptId = 0;
 const pendingPrompts = new Map();
 
-function askPage(kind, name) {
+function askPage(kind, name, detail) {
   const id = ++nextPromptId;
   return new Promise((resolve) => {
     pendingPrompts.set(id, resolve);
-    postMessage({ type: 'prompt', id, kind, name: name || '' });
+    postMessage({ type: 'prompt', id, kind, name: name || '', detail: detail || '' });
   });
 }
 
-// Handed to Go: it returns a promise, which Go awaits inside the handshake.
+// Handed to Go: each returns a promise, which Go awaits inside the handshake
+// or, for the signature, inside an agent request.
 globalThis.__websshAskPassword = () => askPage('password');
 globalThis.__websshAskPassphraseFn = (name) => askPage('passphrase', name);
+
+// The signature question is the one that can arrive long after the session
+// started and as often as the far end likes, so it carries its own summary
+// rather than a key name. The answer is yes or no, and "no" is a real answer
+// rather than a failure.
+globalThis.__websshAskSignature = (summary) => askPage('signature', '', summary);
 
 // Answering a prompt the page has shown.
 function answerPrompt(id, value) {

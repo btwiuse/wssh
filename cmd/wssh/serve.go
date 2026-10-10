@@ -77,6 +77,10 @@ type serveOptions struct {
 	// they are exposed to clients so they can sign with them.
 	AgentKeys []string
 
+	// ForwardAgent lets sessions on a connection ask the client to sign.
+	// The client keeps its keys; nothing but signatures crosses.
+	ForwardAgent bool
+
 	// OpenBrowser points the user's browser at the front end once it is up.
 	// Only meaningful for the web command, which is the one with a page.
 	OpenBrowser bool
@@ -134,6 +138,9 @@ func serve(opts serveOptions) error {
 	if opts.UIOnly && len(opts.AgentKeys) > 0 {
 		return errors.New("--agent-keys has no effect with --ui-only: there are no sessions to sign for")
 	}
+	if opts.UIOnly && opts.ForwardAgent {
+		return errors.New("--forward-agent has no effect with --ui-only: there are no sessions to sign for")
+	}
 
 	mux := http.NewServeMux()
 
@@ -153,9 +160,21 @@ func serve(opts serveOptions) error {
 			return err
 		}
 
+		middleware := []wish.Middleware{shell.Middleware()}
+		if opts.ForwardAgent {
+			// Appended, not prepended. wish composes middleware from
+			// first to last with the last one outermost, so putting this
+			// at the end is what makes it run before the shell middleware.
+			// It has to run first: the socket path has to exist before
+			// environ() builds the environment, or SSH_AUTH_SOCK is missing
+			// from the session that needed it.
+			middleware = append(middleware, agentkey.Forward())
+		}
+
 		sessions, err = wssh.NewServer(wssh.Options{
 			HostKeyPath:        opts.HostKeyPath,
-			Middleware:         []wish.Middleware{shell.Middleware()},
+			Middleware:         middleware,
+			ForwardAgent:       opts.ForwardAgent,
 			Pty:                true,
 			Path:               opts.SessionPath,
 			AllowTcpForwarding: opts.AllowTcpForwarding,
@@ -183,6 +202,10 @@ func serve(opts serveOptions) error {
 		}
 		if len(opts.AgentKeys) > 0 {
 			log.Warn("signing keys loaded: anyone who can reach this port can sign with them")
+		}
+		if opts.ForwardAgent {
+			log.Warn("agent forwarding enabled: anything in a session can have the " +
+				"client sign for it")
 		}
 		// An empty path mounts on "/", which in Go's mux is the catch-all:
 		// any path opens a session, exactly as a client dialling a bare
@@ -306,6 +329,13 @@ func addAgentFlags(cmd *cobra.Command, paths *[]string) {
 	cmd.Flags().StringSliceVar(paths, "agent-keys", nil,
 		"private key files to load into the in-memory ssh-agent served over "+
 			"the auth-agent channel; repeatable, unencrypted PEM only")
+}
+
+// addForwardFlags registers the --forward-agent flag shared by the subcommands.
+func addForwardFlags(cmd *cobra.Command, on *bool) {
+	cmd.Flags().BoolVar(on, "forward-agent", false,
+		"let sessions ask the connecting client to sign, the way ssh -A does; "+
+			"the client keeps its keys and only signatures come back")
 }
 
 // buildAgent loads the given key files into an agent that sessions can sign

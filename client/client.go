@@ -87,6 +87,18 @@ type Options struct {
 	// with what it sees in the channel, and the channel can hand
 	// out signatures for things the user does on the remote side.
 	AgentKeyPath string
+
+	// AgentSigners are offered to the server as a keyring for the session,
+	// and for anything it runs, to sign with.
+	//
+	// Unlike AgentKeyPath the caller keeps the Signer, so no file is read
+	// and nothing has to be a path on this machine. That matters because a
+	// Signer may do more than sign: it can ask the user first, which is the
+	// only way to expose a key that is not sitting on disk unencrypted.
+	//
+	// The key itself never crosses the connection. See package agentkey for
+	// the other half.
+	AgentSigners []ssh.Signer
 }
 
 // Session is a live connection.
@@ -182,6 +194,7 @@ func Dial(ctx context.Context, opts Options) (*Session, error) {
 	// PublicKeyHandler must accept this key for the handshake to
 	// succeed, after which the agent channel is the one the
 	// remote side uses for further work.
+	agentSigners := opts.AgentSigners
 	if opts.AgentKeyPath != "" {
 		signer, err := loadAgentKey(opts.AgentKeyPath)
 		if err != nil {
@@ -189,6 +202,9 @@ func Dial(ctx context.Context, opts Options) (*Session, error) {
 			_ = wsConn.Close(websocket.StatusNormalClosure, "")
 			return nil, err
 		}
+		agentSigners = append(agentSigners, signer)
+	}
+	for _, signer := range agentSigners {
 		opts.Auth = append(opts.Auth, ssh.PublicKeys(signer))
 	}
 
@@ -203,6 +219,18 @@ func Dial(ctx context.Context, opts Options) (*Session, error) {
 		return nil, fmt.Errorf("ssh handshake: %w", err)
 	}
 	client := ssh.NewClient(clientConn, chans, reqs)
+
+	// Before the session opens, not after. The server decides whether to
+	// dial back when the session starts, and by then a shell may already be
+	// running with an environment that has no SSH_AUTH_SOCK in it.
+	//
+	// A failure here is deliberately swallowed. The session is fine without
+	// forwarding; only the far end's ability to ask for a signature is
+	// missing. This package also cannot log: it is compiled for js/wasm as
+	// well, and the charm logger drags in bubbletea, which has no js build.
+	if len(agentSigners) > 0 {
+		_ = offerAgent(client, agentSigners)
+	}
 
 	sshSess, err := client.NewSession()
 	if err != nil {
@@ -260,82 +288,51 @@ func Dial(ctx context.Context, opts Options) (*Session, error) {
 		done:      make(chan struct{}),
 	}
 
-	// If an agent key path was given, open the auth-agent channel on
-	// the same connection and tell the server we want agent
-	// forwarding. The same key is what the server saw during auth,
-	// so the channel can answer signatures for the rest of the
-	// session, including whatever the remote shell tries to do over
-	// its forwarded agent.
-	if opts.AgentKeyPath != "" {
-		if err := s.openAgent(opts.AgentKeyPath); err != nil {
-			_ = s.Close()
-			return nil, err
-		}
-	}
-
 	go s.pump(stdin, stdout, stderr, opts)
 
 	return s, nil
 }
 
-// openAgent loads the key at path, opens an "auth-agent@openssh.com"
-// channel on the session's underlying *ssh.Client, and asks the
-// server to forward that channel to any further sessions the user
-// opens on the remote side (the "ssh -A" equivalent).
+// offerAgent tells the server that this connection has a keyring, and registers
+// the handler that will answer when it asks for a signature.
 //
-// The key is loaded with ssh.ParsePrivateKey. Encrypted keys are
-// not supported: passphrase prompting is the wrong shape for a
-// browser-driven dial and is also out of scope for the typical CLI
-// use of this option, where the key file is meant to be the one
-// matching the server's --authorized-keys.
+// The channel runs the other way round from what the name suggests: the
+// client asks, and the *server* opens the channel back. agent.ForwardToAgent
+// is what answers those. Opening a channel towards the server instead would
+// work against a server that installs a handler for a client-initiated agent
+// channel, but that is a different arrangement and would not be agent
+// forwarding.
 //
-// The auth method is built on top of an in-memory ssh-agent: the
-// same key is exposed to the server as both a PublicKeys auth
-// method and as a signable entry in the agent's keyring. The agent
-// lives on a goroutine that pumps bytes between the SSH channel and
-// the keyring.
-func (s *Session) openAgent(path string) error {
-	signer, err := loadAgentKey(path)
+// Nothing but signatures crosses. The signers stay on this side and the server
+// is answered by asking them, so a Signer that blocks until the user says yes
+// costs the far end a wait rather than handing over a key.
+//
+// The caller may ignore an error: a server with no forwarding support simply
+// declines, and the session is an ordinary one.
+func offerAgent(client *ssh.Client, signers []ssh.Signer) error {
+	ring, err := agentkey.Keyring(signers)
 	if err != nil {
-		return err
-	}
-	// Open the agent channel. The server's agentkey handler accepts
-	// any auth-agent@openssh.com channel; bytes on it are the
-	// standard agent protocol.
-	ch, reqs, err := s.sshClient.OpenChannel("auth-agent@openssh.com", nil)
-	if err != nil {
-		return fmt.Errorf("open agent channel: %w", err)
-	}
-	go ssh.DiscardRequests(reqs)
-
-	// Build a tiny agent that holds the one key, and serve it on
-	// the channel. The signer ssh.ParsePrivateKey just returned is already
-	// exactly what the agent protocol asks for, so it goes in as it is.
-	ring, err := agentkey.Keyring([]ssh.Signer{signer})
-	if err != nil {
-		_ = ch.Close()
 		return fmt.Errorf("build agent keyring: %w", err)
 	}
-	go func() {
-		defer ch.Close() //nolint:errcheck
-		// Discard the expected close errors (channel/EOF); anything
-		// else is a real problem that the user should know about.
-		if err := agent.ServeAgent(ring, ch); err != nil && !isExpectedAgentClose(err) {
-			_ = err // debug builds may want a hook here
-		}
-	}()
 
-	// Request agent forwarding for any further sessions the
-	// remote side might start (the equivalent of openssh's `ssh
-	// -A`). On the server side this is just a global request; if
-	// the server has the auth-agent-req handler installed, the
-	// remote shell will see SSH_AUTH_SOCK set when it starts.
-	if err := agent.RequestAgentForwarding(s.sshSess); err != nil {
-		// Forwarding is a best-effort hint; the channel we just
-		// opened still works for direct sign requests from this
-		// process. The user will simply not get the agent when
-		// they SSH further from the remote side.
-		_ = err
+	// Handler first: the server may dial back the moment it agrees, and a
+	// channel with nobody listening on it is a rejected channel.
+	//
+	// Note that agent.ServeAgent handles one request at a time per channel,
+	// so a Signer that blocks holds up every other agent request behind it,
+	// including the List that tells a program which keys exist.
+	if err := agent.ForwardToAgent(client, ring); err != nil {
+		return fmt.Errorf("serve the agent channel: %w", err)
+	}
+
+	// The same global request agent.RequestAgentForwarding sends, issued on
+	// the connection because a session may not exist yet.
+	ok, _, err := client.SendRequest("auth-agent-req@openssh.com", true, nil)
+	if err != nil {
+		return fmt.Errorf("request agent forwarding: %w", err)
+	}
+	if !ok {
+		return errors.New("the server declined agent forwarding")
 	}
 	return nil
 }

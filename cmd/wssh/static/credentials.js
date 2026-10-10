@@ -136,8 +136,11 @@ export const noHooks = { install: installHooks };
 
 // credentialsForConnect bundles what to offer the server, in the order a
 // person would try them: keys first, then the password.
-export function credentialsForConnect() {
+export function credentialsForConnect(forwardAgent = false) {
   return {
+    // Whether the session may ask these keys to sign. The keys stay in the
+    // page either way: only signatures come back over the connection.
+    forwardAgent: !!forwardAgent,
     keys: readKeys()
       .filter((k) => k.enabled !== false)
       .map((k) => ({
@@ -184,9 +187,9 @@ export function CredentialsPanel({ workerRef, onClose }) {
         const info = msg.info || {};
         // Read the key out before overwriting pending: the record that answers
         // this carries no key material, and reading it afterwards stored every
-        // imported key with an undefined privateKey. That broke both key
-        // authentication and agent forwarding for anything pasted in, while
-        // generated keys kept working because they take their own path.
+        // imported key with an undefined privateKey - which quietly broke both
+        // key authentication and agent forwarding for anything pasted in,
+        // while generated keys kept working because they take their own path.
         const pasted = pending.current?.kind === 'pasted'
           ? pending.current.privateKey
           : '';

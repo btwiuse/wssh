@@ -263,6 +263,19 @@ function App() {
   const [prompts, setPrompts] = useState([]);
   const promptQueue = useRef([]);
 
+  // A signature question is not queued with the others and does not share
+  // their dialog. It arrives while the session is live, by which point the
+  // handshake prompts are long gone and the queue is empty, and the answer
+  // has to be yes or no rather than text.
+  const [signature, setSignature] = useState(null);
+
+  // Agent forwarding is the browser's ssh -A. Off unless asked for: with it
+  // on, anything in the session can ask the page to sign, which is why every
+  // signature still stops and asks here.
+  const [forwardAgent, setForwardAgent] = useState(
+    () => store.get('wssh.forwardAgent') === 'true',
+  );
+
   const ask = useCallback((label, secret) => new Promise((resolve) => {
     const next = [...promptQueue.current, { label, secret, resolve }];
     promptQueue.current = next;
@@ -277,6 +290,18 @@ function App() {
     promptQueue.current = rest;
     setPrompts(rest);
     if (current) current.resolve(value);
+  }, []);
+
+  // Refusing is an answer, not a failure: the far end is told the signature
+  // was declined and can report that. Anything else - a closed tab, a dead
+  // worker - is also a no, because Go is waiting on a yes or nothing.
+  const answerSignature = useCallback((value) => {
+    setSignature((current) => {
+      if (current) {
+        workerRef.current?.postMessage({ type: 'promptAnswer', id: current.id, value });
+      }
+      return null;
+    });
   }, []);
 
   // --- terminal lifecycle -------------------------------------------------
@@ -412,11 +437,18 @@ function App() {
       // line it renders as a password dialog the user never asked for. That
       // is how importing a key used to pop an empty password prompt.
       if (event.data?.type !== 'prompt') return;
-      const { id, kind, name } = event.data;
+      const { id, kind, name, detail } = event.data;
       // One dialog per question. Anything that re-delivers the same message
       // would otherwise stack prompts nobody asked for.
       if (seenPrompts.current.has(id)) return;
       seenPrompts.current.add(id);
+
+      // The signature question is answered in its own place; see the state
+      // above for why it cannot share the queue.
+      if (kind === 'signature') {
+        setSignature({ id, summary: detail });
+        return;
+      }
 
       const label = kind === 'passphrase' ? `passphrase for ${name}` : 'password';
       ask(label, kind === 'passphrase').then((value) => {
@@ -471,9 +503,9 @@ function App() {
       cols: term?.cols ?? 80,
       rows: term?.rows ?? 24,
       command: command.trim(),
-      credentials: credentialsForConnect(),
+      credentials: credentialsForConnect(forwardAgent),
     });
-  }, [endpoint, user, command]);
+  }, [endpoint, user, command, forwardAgent]);
 
   // The address key handler runs before connect is declared, so it calls
   // through this.
@@ -640,6 +672,24 @@ function App() {
           onInput=${(e) => setCommand(e.target.value)}
           onKeyDown=${(e) => { if (e.key === 'Enter' && !connected) connect(); }}
         />
+        <label
+          class="flex items-center gap-1 text-xs text-slate-400 shrink-0 select-none
+                 ${connected ? 'opacity-50' : ''}"
+          title="Let the remote side ask these keys to sign. The keys stay in this page;
+only signatures come back, and every signature asks you first."
+        >
+          <input
+            type="checkbox"
+            class="accent-emerald-500"
+            checked=${forwardAgent}
+            disabled=${connected || status === 'connecting'}
+            onChange=${(e) => {
+              setForwardAgent(e.target.checked);
+              store.set('wssh.forwardAgent', e.target.checked ? 'true' : 'false');
+            }}
+          />
+          forward agent
+        </label>
         ${connected || status === 'connecting'
           ? html`<button
               class="px-3 py-1 text-sm rounded bg-slate-700 hover:bg-slate-600 shrink-0"
@@ -662,6 +712,28 @@ function App() {
         class="flex-1 min-h-0 p-2 overflow-hidden"
       ></main>
 
+      ${signature && html`
+        <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div class="w-[26rem] rounded border border-amber-600 bg-slate-900 p-4 shadow-2xl">
+            <h2 class="text-sm font-semibold text-amber-400 mb-1">Signing request</h2>
+            <p class="text-xs text-slate-400 mb-2">
+              Something in this session wants a signature from a key in this page.
+              The key itself has not left the browser.
+            </p>
+            <p class="text-xs font-mono text-slate-200 break-all bg-slate-950
+                      border border-slate-700 rounded px-2 py-1 mb-3">
+              ${signature.summary}
+            </p>
+            <div class="flex justify-end gap-2">
+              <button class="px-3 py-1 text-xs rounded bg-slate-700 hover:bg-slate-600"
+                      onClick=${() => answerSignature('no')}>refuse</button>
+              <button class="px-3 py-1 text-xs rounded bg-emerald-600 hover:bg-emerald-500
+                             text-slate-900 font-semibold"
+                      onClick=${() => answerSignature('yes')}>sign</button>
+            </div>
+          </div>
+        </div>
+      `}
       ${prompts.length > 0 && !connected && html`
         <div class="fixed inset-0 z-40 flex items-center justify-center bg-black/50">
           <div class="w-80 rounded border border-slate-700 bg-slate-900 p-3 shadow-2xl">

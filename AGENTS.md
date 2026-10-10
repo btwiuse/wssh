@@ -213,11 +213,10 @@ is real.
   sees in the channel, and the channel can hand out signatures for things
   the user does on the remote side. `client.Session.Client()` returns the
   underlying `*ssh.Client`, which the test harness and the WASM bridge
-  use to open additional channels. The unsafe trick in
-  `auth/agentkey.ExtractSigner` reaches into the `wrappedSigner` struct
-  that `ssh.ParsePrivateKey` produces to recover the inner
-  `crypto.Signer` (the standard library hides it behind a private field
-  that `reflect` cannot reach on Termux).
+  use to open additional channels. `auth/agentkey.Keyring` takes those
+  `ssh.Signer` values as they are: the agent protocol signs SSH data, so
+  there is no reason to reach past them for the `crypto.Signer` the
+  library keeps in an unexported field.
 - `cmd/wssh/static/index.html` contains the literal placeholder
   `__WSSH_SESSION_PATH__`, which `cmd/wssh/serve.go`'s `frontEnd` replaces
   with the configured `--path` value before serving. The page resolves it
@@ -244,7 +243,14 @@ is real.
 - `charm.land/ssh` (server-side) and `golang.org/x/crypto/ssh` (client-side)
   are both imported. The server is the wish SSH server; the client is the
   standard library. `cmd/wssh/client.go` aliases the latter as `gossh`.
-- Agent forwarding is supported server-side via `auth/agentkey/`. The
+- Agent forwarding (`ssh -A`, the *client* holds the key) is a different
+  feature from `Options.Agent` (the *server* holds it), and they must not be
+  conflated. `Options.AgentSigners` on the client is deliberately signer-based
+  rather than path-based so a caller can supply a `ssh.Signer` that asks the
+  user before signing; the private key never crosses, only signatures. The
+  client must send `auth-agent-req@openssh.com` **before** opening the
+  session, because the server decides whether to dial back at session start.
+- Signing keys are exposed to sessions server-side via `auth/agentkey/`. The
   `--agent-keys` flag on the server subcommands loads private keys
   (PEM, unencrypted) into an in-memory keyring. The server installs
   the `auth-agent@openssh.com` channel handler and accepts the
@@ -281,7 +287,8 @@ is real.
 | `Makefile` | Build entry point. `make wssh` is the target that builds a working binary; bare `make` lists targets. |
 | `wssh.go`, `wssh_test.go` | `Server` (HTTP handler wrapping wish). Path/origin/auth tests. |
 | `auth/auth.go`, `auth/auth_test.go` | `auth.Config`, key files (re-read each attempt), password file (bcrypt or plaintext). |
-| `auth/agentkey/` | Signing keys exposed to sessions as an ssh-agent. `Keyring([]ssh.Signer)` builds it; `Install(*ssh.Server, agent)` registers the auth-agent channel, the global request, and a per-connection local socket on a server already built. The keyring is fixed: `Add`/`Remove`/`Lock` report that. `--agent-keys` in `cmd/wssh/serve.go` parses key files with `gossh.ParsePrivateKey` and feeds the result. |
+| `auth/agentkey/forward.go` | Client-agent forwarding, the `ssh -A` direction. `InstallForwarding` records `auth-agent-req@openssh.com`; `Forward()` is the middleware that, on session open, dials back over an `auth-agent@openssh.com` channel and relays it to a local socket. `--forward-agent` turns it on. Requests are serialised: `agent.NewClient` is one channel with one sequence number. Must be appended **after** the shell middleware in `Options.Middleware`, because wish composes last-one-outermost. |
+| `auth/agentkey/` | Signing keys exposed to sessions as an ssh-agent. `Keyring([]ssh.Signer)` builds it; `Install(*ssh.Server, agent)` registers the auth-agent channel, the global request, and a per-connection local socket on a server already built (install it on a server already built; there is no wish.Option wrapper because wish pulls in bubbletea, which has no js build, and the browser client imports this package). The keyring is fixed: `Add`/`Remove`/`Lock` report that. `--agent-keys` in `cmd/wssh/serve.go` parses key files with `gossh.ParsePrivateKey` and feeds the result. |
 | `client/client.go`, `client/client_test.go` | `Session`, `Dial`, `Write`/`WriteContext`/`Resize`/`Close`/`CloseStdin`. Native tests over loopback. |
 | `client/wasm.go` | `//go:build js && wasm`. JS bridge, parked forever, exports `connect`/`write`/`resize`/`disconnect`/`generateKey`/`keyInfo`. Reads the optional command from arg 6. |
 | `client/wasmauth.go` | `//go:build js && wasm`. JSON-shaped `credentials`, `signerFor`, `buildAuth`, `jsGenerateKey`, `jsKeyInfo`. |

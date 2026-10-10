@@ -81,6 +81,22 @@ type Options struct {
 	// --authorized-keys applies here.
 	Agent agentkey.Agent
 
+	// ForwardAgent makes the *client's* agent available to sessions on
+	// the same connection, which is what `ssh -A` does: the client keeps
+	// its keys and the server asks it to sign.
+	//
+	// This is the opposite direction to Agent, and a different shape of
+	// trust. Nothing about the private key crosses the connection, but
+	// anything running in the session can have the client sign anything
+	// it asks for. Off unless asked for.
+	//
+	// It only takes effect together with agentkey.Forward() in the
+	// Middleware list. Note the order: wish composes middleware from first
+	// to last with the last one outermost, so Forward has to come *after*
+	// the shell middleware in the slice to run before it, which is what
+	// puts the socket in place before the environment is built.
+	ForwardAgent bool
+
 	// Logger receives session-level detail. Defaults to the charm default
 	// logger, which honours whatever level the process has set.
 	Logger *log.Logger
@@ -130,7 +146,16 @@ func NewServer(opts Options) (*Server, error) {
 		channels[name] = handler
 	}
 	sessions.ChannelHandlers = channels
-	sessions.RequestHandlers = ssh.DefaultRequestHandlers
+
+	// Copied for the same reason the channel map is: the request handlers are
+	// a package-level variable too, and InstallForwarding writes into this
+	// one. Aliasing it would hand every other server in the process an agent
+	// forwarder it never asked for.
+	requests := make(map[string]ssh.RequestHandler, len(ssh.DefaultRequestHandlers))
+	for name, handler := range ssh.DefaultRequestHandlers {
+		requests[name] = handler
+	}
+	sessions.RequestHandlers = requests
 	sessions.SubsystemHandlers = ssh.DefaultSubsystemHandlers
 
 	if opts.AllowTcpForwarding {
@@ -139,6 +164,10 @@ func NewServer(opts Options) (*Server, error) {
 		// rejects the channel otherwise.
 		channels["direct-tcpip"] = ssh.DirectTCPIPHandler
 		sessions.LocalPortForwardingCallback = func(ssh.Context, string, uint32) bool { return true }
+	}
+
+	if opts.ForwardAgent {
+		agentkey.InstallForwarding(sessions)
 	}
 
 	if opts.Agent != nil {

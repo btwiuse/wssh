@@ -27,6 +27,11 @@ type credentials struct {
 
 	// Passwords are offered after the keys, if the user has any.
 	Passwords []string `json:"passwords"`
+
+	// ForwardAgent turns the keys above into an agent the session can ask to
+	// sign with. It is the browser's `ssh -A`: the keys stay here, and only
+	// signatures come back. Off unless the user asked for it.
+	ForwardAgent bool `json:"forwardAgent"`
 }
 
 // keyMaterial is one private key and, when it is encrypted, the passphrase that
@@ -43,17 +48,23 @@ type keyMaterial struct {
 
 // buildAuth turns what the page supplied into the methods to offer the server:
 // keys first, in the order given, and the password after them.
+//
+// The signers come back alongside because the caller may want them for
+// something else - forwarding an agent - and parsing a key twice to get at
+// them twice would mean asking for a passphrase twice.
 func buildAuth(creds credentials, askPassword func() (string, error),
-	askKeyPassphrase func(name string) (string, error)) ([]gossh.AuthMethod, error) {
+	askKeyPassphrase func(name string) (string, error)) ([]gossh.AuthMethod, []gossh.Signer, error) {
 	var auth []gossh.AuthMethod
+	var signers []gossh.Signer
 
 	for _, key := range creds.Keys {
 		signer, err := signerFor(key, askKeyPassphrase)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if signer != nil {
 			auth = append(auth, gossh.PublicKeys(signer))
+			signers = append(signers, signer)
 		}
 	}
 
@@ -76,7 +87,7 @@ func buildAuth(creds credentials, askPassword func() (string, error),
 			return askPassword()
 		}))
 	}
-	return auth, nil
+	return auth, signers, nil
 }
 
 // signerFor opens one private key, asking the page for a passphrase if it needs

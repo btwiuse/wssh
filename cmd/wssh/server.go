@@ -65,6 +65,7 @@ for a directly reachable server.`,
 
 	addAuthFlags(cmd, &opts.Auth)
 	addAgentFlags(cmd, &opts.AgentKeys)
+	addForwardFlags(cmd, &opts.ForwardAgent)
 
 	return cmd
 }
