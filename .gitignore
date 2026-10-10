@@ -18,3 +18,16 @@
 # WASM build output: rebuild with client/build.sh
 /cmd/wssh/static/ssh.wasm
 /cmd/wssh/static/wasm_exec.js
+
+# Keys written into the working directory by a command with no --out-dir.
+# `wssh keygen id_ed25519` defaults to the current directory, and the selftest
+# instructions ask for `--hostkey ./hk`, so both land here during ordinary use.
+# A private key that reaches a commit is the one mistake here that cannot be
+# walked back.
+/id_ed25519
+/id_ed25519.pub
+/hostkey
+
+# Ledger of a local Solana validator: genesis, a rocksdb tree, and faucet
+# keypairs. Over a gigabyte, and never anything a commit should carry.
+/test-ledger/
