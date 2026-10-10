@@ -24,6 +24,7 @@ import * as agent from "./agent.ts";
 import * as rpc from "./rpc.ts";
 import * as instruction from "./instruction.ts";
 import { encodeBase58 } from "./base58.ts";
+import { feePayer } from "./fee.ts";
 
 // -- Args --------------------------------------------------------------------
 
@@ -282,12 +283,14 @@ if (!resp.signedTransaction) {
 if (!global.send) {
   // Print the signed transaction as base58 for human readability.
   const txBytes = agent.signedTransactionBytes(resp);
+  reportFeePayer(txBytes);
   console.log(encodeBase58(txBytes));
   Deno.exit(0);
 }
 
 if (global.verbose) console.error("[sol-tx] sending via RPC");
 const txBytes = agent.signedTransactionBytes(resp);
+reportFeePayer(txBytes);
 const sig = await rpc.sendTransaction(endpoint, txBytes, global.verbose);
 // The signature goes to stdout on its own so that `SIG=$(sol-tx ... --send)`
 // yields exactly one line. Everything meant for a person reading the terminal
@@ -315,4 +318,15 @@ Deno.exit(0);
 
 // ---------------------------------------------------------------------------
 
-function _unused(): void {} // sentinel: keep file structure consistent
+// reportFeePayer says which account actually paid, read out of the signed
+// bytes rather than out of the request. Those differ whenever --payer was
+// empty and the wallet chose, and which wallet chose is the thing worth
+// being able to see after the fact. Unreadable bytes say nothing rather
+// than naming something that is not there.
+function reportFeePayer(signed: Uint8Array): void {
+  try {
+    console.error(`fee payer: ${feePayer(signed)}`);
+  } catch {
+    // A transaction we cannot read is not one to make a claim about.
+  }
+}

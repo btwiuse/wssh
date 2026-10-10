@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/btwiuse/wssh/solana"
+)
 
 // The explorer link is only correct if the cluster matches the endpoint, so
 // the cases that matter are the four: the three public clusters and a private
@@ -75,5 +79,20 @@ func TestExplorerTxURLFollowsTheEndpointNotTheFlag(t *testing.T) {
 	}
 	if got := explorerTxURL(effectiveRPC("https://api.devnet.solana.com", "mainnet"), sig); got != "https://solscan.io/tx/sig?cluster=devnet" {
 		t.Errorf("the link should follow the endpoint, got %q", got)
+	}
+}
+
+// The fee payer printed on stderr is read out of the signed transaction, so
+// a signature that does not carry one must not print a wrong account rather
+// than nothing. Silence is the honest answer when the bytes cannot be read.
+func TestFeePayerIsSilentOnSomethingItCannotRead(t *testing.T) {
+	for name, body := range map[string][]byte{
+		"empty":                     nil,
+		"a bare signature":          {1},
+		"signatures and no message": append([]byte{1}, make([]byte, 64)...),
+	} {
+		if got, err := solana.FeePayer(body); err == nil {
+			t.Errorf("%s should not have produced a payer, got %q", name, got)
+		}
 	}
 }

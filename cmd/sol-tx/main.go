@@ -63,6 +63,7 @@ func newSolTxCmd() *cobra.Command {
 		data      string
 		memo      string
 		send      bool
+		verbose   bool
 	)
 
 	cmd := &cobra.Command{
@@ -106,7 +107,15 @@ Examples:
   sol-tx call --program 9xQe... --account 5cyy... --data 3Bxs...
 
   # Attach a note and reach a block, without moving anything
-  sol-tx memo --memo "deployed" --send`,
+  sol-tx memo --memo "deployed" --send
+
+Output:
+  The account that paid is read back out of the signed transaction and
+  printed to stderr, because it is not always the one that was asked
+  for: with --payer empty the wallet chooses, and which wallet chose is
+  worth seeing after the fact. With --send the signature goes to stdout
+  on its own and the explorer's link to stderr, so
+  SIG=$(sol-tx ... --send) is one clean line.`,
 		// "transfer" and "call" are read as a leading word rather than
 		// subcommands, because both share every flag and a person should
 		// not have to say which. The help has always shown them this way, so
@@ -127,12 +136,18 @@ Examples:
 						"a memo (--memo), or a call (--program, --account, --data)", mode)
 			}
 
+			endpoint := effectiveRPC(rpcURL, network)
+			logf(verbose, "[sol-tx] agent=%s", sockPath)
+			logf(verbose, "[sol-tx] rpc=%s", endpoint)
+			logf(verbose, "[sol-tx] mode=%s", mode)
+
 			req, err := buildSolTxRequest(solTxRequest{
 				mode:     mode,
 				sockPath: sockPath, rpcURL: effectiveRPC(rpcURL, network), blockhash: blockhash, label: label,
 				to: to, sol: sol, lamports: lamports,
 				program: program, accounts: accounts, data: data, payer: payer,
-				memo: memo,
+				memo:    memo,
+				verbose: verbose,
 			})
 			if err != nil {
 				return err //nolint:wrapcheck
@@ -143,12 +158,21 @@ Examples:
 
 			// The browser may be waiting on a person to read a wallet
 			// prompt, so nothing here should time out in a hurry.
+			logf(verbose, "[sol-tx] asking agent")
 			resp, err := solana.Ask(ctx, sockPath, req)
 			if err != nil {
 				return err //nolint:wrapcheck
 			}
 
-			endpoint := effectiveRPC(rpcURL, network)
+			// Which account actually paid, read out of the bytes that were
+			// signed rather than out of the request. Those differ whenever
+			// --payer was empty and the wallet chose, and which wallet chose
+			// is the thing worth being able to see after the fact.
+			if resp.SignedTransaction != nil {
+				if who, ferr := solana.FeePayer(resp.SignedTransaction); ferr == nil {
+					fmt.Fprintf(os.Stderr, "fee payer: %s\n", who)
+				}
+			}
 
 			// Printing the transaction rather than broadcasting it: this
 			// command has no opinion about when or whether it should be
@@ -157,6 +181,7 @@ Examples:
 			// to the RPC endpoint, so the wallet signs once and the money
 			// moves once, instead of being shuffled between two commands.
 			if send {
+				logf(verbose, "[sol-tx] sending via RPC")
 				sig, err := solana.SendTransaction(ctx, endpoint, resp.SignedTransaction)
 				if err != nil {
 					return err //nolint:wrapcheck
@@ -166,6 +191,7 @@ Examples:
 				// Everything meant for a person reading the terminal goes to
 				// stderr, including the link to look the transaction up in.
 				fmt.Println(sig)
+				logf(verbose, "[rpc] POST %s  getSignatureStatuses", endpoint)
 				if err := solana.ConfirmTransaction(ctx, endpoint, sig); err != nil {
 					return err //nolint:wrapcheck
 				}
@@ -207,6 +233,8 @@ Examples:
 	cmd.Flags().StringVar(&data, "data", "", "instruction data in base58, for call")
 	cmd.Flags().StringVar(&memo, "memo", "",
 		"text to attach to the transaction, for memo; costs one signature fee and moves nothing")
+	cmd.Flags().BoolVar(&verbose, "verbose", false,
+		"log every step on stderr: which agent, which endpoint, which RPC call")
 	cmd.Flags().BoolVar(&send, "send", false,
 		"broadcast the signed transaction through --rpc and wait for confirmation, "+
 			"instead of printing it")
@@ -223,6 +251,7 @@ type solTxRequest struct {
 	accounts                                           []string
 	data                                               string
 	send                                               bool
+	verbose                                            bool
 }
 
 // resolveNetwork turns the friendly --network name into an RPC URL. The
@@ -241,6 +270,16 @@ func resolveNetwork(name string) string {
 // when set, --network fills in when it is empty, and the call site never
 // has to think about which was passed: one source of truth keeps --send
 // and the blockhash fetch pointing at the same endpoint.
+// logf writes one step to stderr when --verbose is on. Everything a person
+// reads goes to stderr rather than stdout, so that stdout stays the
+// signature alone and `SIG=$(sol-tx ... --send)` is one clean line.
+func logf(verbose bool, format string, args ...any) {
+	if !verbose {
+		return
+	}
+	fmt.Fprintf(os.Stderr, format+"\n", args...)
+}
+
 func effectiveRPC(rpcURL, network string) string {
 	if strings.TrimSpace(rpcURL) != "" {
 		return rpcURL
@@ -356,6 +395,8 @@ func buildSolTxRequest(in solTxRequest) (agentkey.SolanaTxRequest, error) {
 	}
 
 	if req.Blockhash == "" {
+		logf(in.verbose, "[sol-tx] fetching blockhash")
+		logf(in.verbose, "[rpc] POST %s  getLatestBlockhash", in.rpcURL)
 		blockhash, err := solana.LatestBlockhash(context.Background(), in.rpcURL)
 		if err != nil {
 			return req, err //nolint:wrapcheck
