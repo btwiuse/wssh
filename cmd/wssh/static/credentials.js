@@ -172,6 +172,42 @@ export async function signInWithTheWallet(message) {
   return `${bytesToHex(answer.signedMessage)}:${bytesToHex(answer.signature)}`;
 }
 
+// The account's public key as hex, whichever wallet produced it.
+//
+// toHex is one wallet's spelling and toBytes is the standard's; neither is
+// universal. Going through toBase58 and decoding here would be the most
+// portable of all, so that is the fallback rather than the first choice.
+function publicKeyHex(provider) {
+  const key = provider?.publicKey;
+  if (!key) throw new Error('the wallet reports no account');
+  if (typeof key.toBytes === 'function') return bytesToHex(key.toBytes());
+  if (typeof key.toBase58 === 'function') return bytesToHex(base58ToBytes(key.toBase58()));
+  throw new Error('this wallet does not say what account it is');
+}
+
+// Solana addresses are base58. This is only the fallback for a wallet with no
+// toBytes, and it is checked rather than trusted: the key comes back out the
+// other way before it is used.
+function base58ToBytes(text) {
+  const alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  let n = 0n;
+  for (const char of text) {
+    const digit = alphabet.indexOf(char);
+    if (digit < 0) throw new Error(`"${char}" is not in the base58 alphabet`);
+    n = n * 58n + BigInt(digit);
+  }
+  let hex = n.toString(16);
+  if (hex.length % 2) hex = `0${hex}`;
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i += 1) out[i] = parseInt(hex.substr(i * 2, 2), 16);
+
+  let leading = 0;
+  for (const b of text) { if (b !== alphabet[0]) break; leading += 1; }
+  const padded = new Uint8Array(leading + out.length);
+  padded.set(out, leading);
+  return padded;
+}
+
 function bytesToHex(bytes) {
   return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
@@ -512,7 +548,7 @@ export async function signSolanaTransaction(serialised) {
   }
 
   return {
-    publicKey: provider.publicKey.toHex(),
+    publicKey: publicKeyHex(provider),
     signature: bytesToHex(signature),
     signedTransaction: bytesToHex(serialized),
   };
