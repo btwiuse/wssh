@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/btwiuse/wssh/auth/agentkey"
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -92,4 +93,48 @@ func keyLabel(signer gossh.Signer) string {
 		return fmt.Sprintf("%s %s", pub.Type(), fp)
 	}
 	return pub.Type()
+}
+
+// offeredKeys is the keyring a browser session actually reaches, with the
+// asking applied to it.
+//
+// It is here, and not in the wasm file that uses it, because getting it wrong
+// is a nil dereference on a path nothing natively runs: the session takes the
+// keyring whenever there is one, and there is one whenever the user has any
+// key, so this decides whether an imported key is ever asked before it signs.
+// That was asserted in a comment for a while and not true.
+//
+// The wallet is kept out of the wrapping deliberately. Its signer already
+// crosses the page bridge, where the wallet asks; wrapping it would ask twice
+// for one signature.
+func offeredKeys(
+	keys []agentkey.Key,
+	wallet *agentkey.Key,
+	forward bool,
+	ask AskSignature,
+) []agentkey.Key {
+	offered := make([]agentkey.Key, 0, len(keys)+1)
+	for _, key := range keys {
+		if confirmBeforeSigning(forward, ask) {
+			key.Signer = confirmOne(key.Signer, ask)
+		}
+		offered = append(offered, key)
+	}
+	if wallet != nil {
+		offered = append(offered, *wallet)
+	}
+	return offered
+}
+
+// signersOf is the plain signer list, for the half of Options that takes
+// signers rather than a keyring.
+func signersOf(keys []agentkey.Key, wallet *agentkey.Key) []gossh.Signer {
+	signers := make([]gossh.Signer, 0, len(keys)+1)
+	for _, key := range keys {
+		signers = append(signers, key.Signer)
+	}
+	if wallet != nil {
+		signers = append(signers, wallet.Signer)
+	}
+	return signers
 }

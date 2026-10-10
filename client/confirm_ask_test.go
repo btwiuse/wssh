@@ -9,6 +9,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/btwiuse/wssh/auth/agentkey"
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -141,4 +142,91 @@ func TestConfirmOneLabelsTheKey(t *testing.T) {
 	if !bytes.Contains([]byte(summary), []byte(gossh.KeyAlgoED25519)) {
 		t.Errorf("the question does not say what kind of key it is: %q", summary)
 	}
+}
+
+// No wallet is the ordinary case, and it is the one that panicked: the key
+// was a pointer assigned only when the page had a wallet, and the assembly
+// then read a field through it. Both helpers take it as a pointer and check it
+// here, which is the only place the check can be made without a browser.
+func TestNoWalletIsNotADereference(t *testing.T) {
+	keys := []agentkey.Key{{Signer: newTestSigner(t), Comment: "laptop"}}
+
+	offered := offeredKeys(keys, nil, true, func(string) (bool, error) { return true, nil })
+	if len(offered) != 1 {
+		t.Fatalf("got %d keys, want 1", len(offered))
+	}
+	if got := signersOf(keys, nil); len(got) != 1 {
+		t.Errorf("got %d signers, want 1", len(got))
+	}
+}
+
+// With a wallet, both lists carry it - and it is the one that is not
+// wrapped, because its signer already asks through the page bridge and a
+// second prompt for one signature is worse than none.
+func TestTheWalletIsOfferedAndNotWrapped(t *testing.T) {
+	imported := newTestSigner(t)
+	wallet := newTestSigner(t)
+	keys := []agentkey.Key{{Signer: imported, Comment: "laptop"}}
+	walletKey := &agentkey.Key{Signer: wallet, Comment: "solana:abc"}
+
+	asked := 0
+	offered := offeredKeys(keys, walletKey, true, func(string) (bool, error) { asked++; return true, nil })
+	if len(offered) != 2 {
+		t.Fatalf("got %d keys, want 2", len(offered))
+	}
+	if _, wrapped := offered[0].Signer.(*ConfirmingSigner); !wrapped {
+		t.Error("the imported key was not wrapped, so it would sign without asking")
+	}
+	if _, wrapped := offered[1].Signer.(*ConfirmingSigner); wrapped {
+		t.Error("the wallet was wrapped; its own bridge already asks, so that is a second prompt")
+	}
+	if offered[1].Comment != "solana:abc" {
+		t.Errorf("the wallet's label was lost: %q", offered[1].Comment)
+	}
+	if signers := signersOf(keys, walletKey); len(signers) != 2 {
+		t.Errorf("got %d signers, want 2", len(signers))
+	}
+
+	// Asking about the wallet goes through the wallet, not the wrapper, so
+	// this must not have asked anything on its own.
+	if asked != 0 {
+		t.Errorf("assembling asked the page %d times, want 0", asked)
+	}
+}
+
+// Nothing at all - no keys and no wallet - is a page that connected with
+// nothing to sign with. It must be an empty list rather than a panic.
+func TestNothingToOffer(t *testing.T) {
+	if got := offeredKeys(nil, nil, true, func(string) (bool, error) { return true, nil }); len(got) != 0 {
+		t.Errorf("got %d keys, want none", len(got))
+	}
+	if got := signersOf(nil, nil); len(got) != 0 {
+		t.Errorf("got %d signers, want none", len(got))
+	}
+}
+
+// Forwarding off must not wrap anything, and so must not ask: a session that
+// never forwards never opens a channel and never shows a dialog.
+func TestForwardingOffWrapsNothing(t *testing.T) {
+	keys := []agentkey.Key{{Signer: newTestSigner(t)}}
+	offered := offeredKeys(keys, nil, false, func(string) (bool, error) {
+		t.Error("asked while forwarding is off")
+		return true, nil
+	})
+	if _, wrapped := offered[0].Signer.(*ConfirmingSigner); wrapped {
+		t.Error("the key was wrapped with forwarding off")
+	}
+}
+
+func newTestSigner(t *testing.T) gossh.Signer {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	signer, err := gossh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatalf("signer: %v", err)
+	}
+	return signer
 }

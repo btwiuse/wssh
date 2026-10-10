@@ -209,23 +209,9 @@ func jsConnect(_ js.Value, args []js.Value) any {
 			// Without a wallet the extension is attached with nothing behind
 			// it, so the refusal names that rather than looking like an agent
 			// that has never heard of transactions.
-			// This is the keyring the session actually talks to, so it is
-			// where the asking has to happen. Wrapping only AgentSigners
-			// asked for nothing: serveAgentChannel prefers AgentKeyring
-			// whenever there is one, and there is one whenever the user has
-			// any key at all.
-			offered := make([]agentkey.Key, 0, len(keys)+1)
-			for _, key := range keys {
-				if confirmBeforeSigning(creds.ForwardAgent, confirmSignature) {
-					key.Signer = confirmOne(key.Signer, confirmSignature)
-				}
-				offered = append(offered, key)
-			}
-			if walletKey.Signer != nil {
-				offered = append(offered, *walletKey)
-			}
-
-			ring, err := agentkey.KeyringWithComments(offered)
+			ring, err := agentkey.KeyringWithComments(
+				offeredKeys(keys, walletKey, creds.ForwardAgent, confirmSignature),
+			)
 			if err != nil {
 				post(map[string]any{"type": "error",
 					"message": "could not prepare the signing keyring: " + err.Error()})
@@ -243,20 +229,10 @@ func jsConnect(_ js.Value, args []js.Value) any {
 			walletRing = ring
 		}
 
-		// What the session is offered: the signers, wrapped so that nothing
-		// is signed without a yes. This is the path used when there is no
-		// keyring to reach through - no Solana extension to attach, or a
-		// caller that has no wallet at all.
-		//
-		// Every signature asks again; a yes is never remembered.
-		signers := make([]gossh.Signer, 0, len(keys)+1)
-		for _, k := range keys {
-			signers = append(signers, k.Signer)
-		}
-		if walletKey.Signer != nil {
-			signers = append(signers, walletKey.Signer)
-		}
-
+		// The keys stay in the browser either way. Forwarding a wallet is
+		// already the decision, so there is no switch for the extension: a
+		// remembered approval would hand it open to whatever got as far as a
+		// shell.
 		sess, err := Dial(context.Background(), Options{
 			Auth:       auth,
 			SIWSSigner: walletSIWSSigner,
@@ -269,7 +245,7 @@ func jsConnect(_ js.Value, args []js.Value) any {
 			// is already the decision, so there is no switch for the
 			// extension: a remembered approval would hand it open to whatever
 			// got as far as a shell.
-			AgentSigners: confirmAll(signers, creds.ForwardAgent, confirmSignature),
+			AgentSigners: confirmAll(signersOf(keys, walletKey), creds.ForwardAgent, confirmSignature),
 			AgentKeyring: walletRing,
 			OnData:       postData,
 			OnClose: func(err error) {
