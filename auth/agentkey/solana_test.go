@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
 	"strings"
 	"testing"
 
@@ -509,11 +511,19 @@ func TestAgentWithNothingToBuildWithRefuses(t *testing.T) {
 		t.Fatalf("attach: %v", err)
 	}
 
-	// Nothing behind it and nothing here to sign with: that has to come back
-	// as a failure code rather than an answer, because there is nothing this
-	// agent could ever do with the request.
-	if _, err := ring.Extension(SolanaTxExtension, marshalRequest(t, testRequest(t))); err == nil {
-		t.Fatal("an agent that can do neither should not have answered")
+	// Nothing behind it and nothing here to sign with. This used to be
+	// returned as a bare error, which the agent protocol turns into a single
+	// failure byte: the caller learned that something was wrong and nothing
+	// else. It comes back as a Refusal now, which is an answer that survives
+	// the wire and says why.
+	resp, err := askOverAgent(t, ring, testRequest(t))
+	if err == nil {
+		t.Fatalf("an agent that can do neither should have refused, got %+v", resp)
+	}
+	for _, want := range []string{"no wallet", "no key"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not say %q: %v", want, err)
+		}
 	}
 }
 
@@ -557,10 +567,10 @@ func TestPayerDefaultsToTheSigningKey(t *testing.T) {
 	}
 }
 
-// A payer that was named is left alone: the caller may be paying for someone
-// else, which is the whole reason the field exists.
+// A payer that was named is left alone: the agent has no business picking a
+// different one, and this used to be the only thing checked about it.
 func TestAnExplicitPayerIsNotOverridden(t *testing.T) {
-	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	ring, _ := mustKeyring(t, priv)
 
 	message := []byte("a message")
@@ -576,16 +586,232 @@ func TestAnExplicitPayerIsNotOverridden(t *testing.T) {
 	}
 
 	req := testRequest(t)
-	req.Signer = "someone-else"
+	req.Signer = siws.Base58Encode(pub)
 	if _, err := ring.Extension(SolanaTxExtension, marshalRequest(t, req)); err != nil {
 		t.Fatalf("extension: %v", err)
 	}
-	if asked.Signer != "someone-else" {
-		t.Errorf("an explicit payer was replaced with %q", asked.Signer)
+	if asked.Signer != req.Signer {
+		t.Errorf("payer came back as %q, want the one named, %q", asked.Signer, req.Signer)
+	}
+}
+
+// A payer naming an account this session does not hold is refused rather than
+// passed on. The page builds the transaction with that account as the required
+// fee-payer signer and the agent signs with a different key, so the cluster
+// rejects it for a reason that points nowhere near this. Solana's fee payer has
+// to sign, which is why the plain-agent path in solana/agentsign.go requires
+// the same thing.
+func TestAPayerThisAgentDoesNotHoldIsRefused(t *testing.T) {
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	ring, _ := mustKeyring(t, priv)
+
+	built := false
+	if err := WithSolana(ring, nil, func(SolanaTxRequest) ([]byte, error) {
+		built = true
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+
+	stranger, _, _ := ed25519.GenerateKey(rand.Reader)
+	req := testRequest(t)
+	req.Signer = siws.Base58Encode(stranger)
+
+	_, err := askOverAgent(t, ring, req)
+	if err == nil {
+		t.Fatal("a payer this agent does not hold should have been refused")
+	}
+	if !strings.Contains(err.Error(), "not a key this session holds") {
+		t.Errorf("the refusal does not say what is wrong: %v", err)
+	}
+	if built {
+		t.Error("a transaction was built for a payer that could never sign it")
 	}
 }
 
 func Base58EncodeForTest(t *testing.T, pub ed25519.PublicKey) string {
 	t.Helper()
 	return siws.Base58Encode(pub)
+}
+
+// The same setup, answered by a key the agent does not hold. Several keys in
+// the ring must not turn into "any key will do": the check is membership, and
+// this is what stops a wallet the session never offered being used instead.
+func TestExtensionRejectsAKeyTheAgentDoesNotHold(t *testing.T) {
+	_, heldPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	strangerPub, strangerPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+
+	ring, _ := mustKeyring(t, heldPriv)
+	if err := WithSolana(ring, func(SolanaTxRequest) (SolanaTxResponse, ed25519.PublicKey, error) {
+		return SolanaTxResponse{
+			Signature:         ed25519.Sign(strangerPriv, []byte("message")),
+			SignedTransaction: []byte("transaction"),
+		}, strangerPub, nil
+	}, nil); err != nil {
+		t.Fatalf("WithSolana: %v", err)
+	}
+
+	_, err = askOverAgent(t, ring, testRequest(t))
+	if err == nil {
+		t.Fatal("a wallet the agent does not hold should have been refused")
+	}
+	if !strings.Contains(err.Error(), "does not hold") {
+		t.Errorf("the refusal does not say what was wrong: %v", err)
+	}
+}
+
+// Several keys and no wallet is a genuinely unanswerable question, so it is
+// still refused - but the refusal has to arrive as a sentence. This is the
+// case that used to produce "agent: generic extension failure" with nothing
+// behind it, and the sentence is the whole point of the test.
+func TestSeveralKeysWithNoWalletExplainsItself(t *testing.T) {
+	ring, _ := mustKeyring(t, twoEd25519(t)...)
+	// WithSolana with a build but no ask: the extension is attached, and
+	// there is nobody to ask.
+	if err := WithSolana(ring, nil, func(SolanaTxRequest) ([]byte, error) {
+		return nil, errors.New("should not be reached")
+	}); err != nil {
+		t.Fatalf("WithSolana: %v", err)
+	}
+
+	_, err := askOverAgent(t, ring, testRequest(t))
+	if err == nil {
+		t.Fatal("several keys and no wallet should have been refused")
+	}
+	for _, want := range []string{"2 keys", "wallet"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not mention %q: %v", want, err)
+		}
+	}
+}
+
+// askOverAgent puts a request through the agent protocol over a real socket
+// and returns the response, or the reason.
+//
+// The socket is the point: an error raised inside the handler never reaches a
+// caller as text, so a test that called Extension directly would have passed
+// while the person using the command saw one meaningless byte.
+func askOverAgent(t *testing.T, ring Agent, req SolanaTxRequest) (SolanaTxResponse, error) {
+	t.Helper()
+
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+	go func() { _ = agent.ServeAgent(ring, b) }()
+
+	raw, err := agent.NewClient(a).Extension(SolanaTxExtension, marshalRequest(t, req))
+	if err != nil {
+		return SolanaTxResponse{}, err
+	}
+	var resp SolanaTxResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return SolanaTxResponse{}, fmt.Errorf("unreadable answer: %w", err)
+	}
+	if resp.Refusal != "" {
+		return SolanaTxResponse{}, errors.New(resp.Refusal)
+	}
+	return resp, nil
+}
+
+func twoEd25519(t *testing.T) []ed25519.PrivateKey {
+	t.Helper()
+	_, one, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	_, two, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	return []ed25519.PrivateKey{one, two}
+}
+
+// A transaction the page built with room for more than one signature cannot be
+// signed by filling the first slot and declaring the count it asked for. That
+// produced bytes short by whole signatures, with the message glued onto the
+// end of the signature region, and returned no error at all: the caller was
+// handed something that looked signed and was not a transaction.
+//
+// Solana has one fee payer per transaction - it is the first required signer -
+// so this is not about paying twice. It is about a request naming an account as
+// a signer, which `SolanaAccount.IsSigner` exists for and which nothing in the
+// built-in instructions does today.
+func TestATransactionNeedingTwoSignaturesIsRefused(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	other, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	ring, _ := mustKeyring(t, priv)
+
+	if err := WithSolana(ring, nil, func(SolanaTxRequest) ([]byte, error) {
+		// What the page sends: a slot per signer, as solana.js builds it.
+		message := []byte("a message")
+		return append(append([]byte{2}, make([]byte, 2*ed25519.SignatureSize)...), message...), nil
+	}); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+
+	req := testRequest(t)
+	req.Signer = siws.Base58Encode(pub)
+	req.Instructions[0].Accounts = append(req.Instructions[0].Accounts, SolanaAccount{
+		Address:  siws.Base58Encode(other),
+		IsSigner: true,
+	})
+
+	_, err = askOverAgent(t, ring, req)
+	if err == nil {
+		t.Fatal("a transaction needing two signatures should have been refused")
+	}
+	if !strings.Contains(err.Error(), "2 signatures") {
+		t.Errorf("the refusal does not say how many were needed: %v", err)
+	}
+}
+
+// The one that must keep working, so the refusal above cannot be satisfied by
+// refusing everything: a single-signer transaction is signed and comes back
+// whole, with the signature count matching what went in.
+func TestASingleSignatureTransactionIsUnchanged(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	ring, _ := mustKeyring(t, priv)
+
+	if err := WithSolana(ring, nil, func(SolanaTxRequest) ([]byte, error) {
+		message := []byte("a message")
+		return append(append([]byte{1}, make([]byte, ed25519.SignatureSize)...), message...), nil
+	}); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+
+	req := testRequest(t)
+	req.Signer = siws.Base58Encode(pub)
+
+	resp, err := askOverAgent(t, ring, req)
+	if err != nil {
+		t.Fatalf("a single-signer transaction should have been signed: %v", err)
+	}
+	signatures, message, err := splitSolanaTransaction(resp.SignedTransaction)
+	if err != nil {
+		t.Fatalf("the answer is not a transaction: %v", err)
+	}
+	if len(signatures) != 1 {
+		t.Fatalf("got %d signatures, want 1", len(signatures))
+	}
+	if string(message) != "a message" {
+		t.Errorf("the message came back as %q", message)
+	}
+	if !ed25519.Verify(pub, message, signatures[0]) {
+		t.Error("the signature does not verify")
+	}
 }

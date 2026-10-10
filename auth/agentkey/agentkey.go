@@ -173,17 +173,17 @@ func (r *keyring) Extension(name string, contents []byte) ([]byte, error) {
 	}
 	r.mu.RUnlock()
 
-	// One wallet is one key, so the extension is answered by the only key
-	// there is. With several there is nothing to disambiguate with and
-	// guessing would be worse than refusing.
-	if len(signers) != 1 {
-		return nil, errors.New("this agent holds several keys and cannot tell which one to sign with")
-	}
-
-	// The signer itself, not just its key: an agent holding a local key signs
-	// with it rather than sending the transaction off to a wallet it does not
-	// have.
-	return r.solana.ExtensionHandler(signers[0])(name, contents)
+	// Every key goes down, not one chosen here. With a wallet behind the
+	// page the wallet picks the account, so the agent has no choosing to do
+	// and refusing early would break the ordinary browser that both imported
+	// an SSH key and connected a wallet. Which key is the right one is a
+	// question about the answer, and it is answered where the answer is.
+	//
+	// Every refusal the extension makes comes back as a Refusal in the
+	// answer rather than as an error from here, because an error from here
+	// is a single failure byte on the wire and the sentence saying why never
+	// reaches the caller. That cost this whole path an afternoon once.
+	return r.solana.ExtensionHandler(signers)(name, contents)
 }
 
 // SignWithFlags is Sign with no flags. The agent protocol's flags carry RSA

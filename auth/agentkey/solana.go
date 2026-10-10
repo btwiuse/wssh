@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
+
 	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 
@@ -28,6 +30,28 @@ import (
 // deliberate choice - a "trust this session" shortcut would hand the wallet
 // open to anything that got as far as a shell.
 const SolanaTxExtension = "solana-tx@wssh"
+
+// WalletCommentPrefix labels a key that came out of a connected wallet, as
+// `solana:<address>`.
+//
+// It lives here rather than in the browser client because both sides have to
+// agree on it: the client writes it, and a command reading the agent's key
+// list looks for it to tell which of the keys a wallet will be asked to sign
+// with. A label only one side knows about is one side can read and the other
+// cannot.
+//
+// The address is part of the label because a comment is the only part of a
+// line that survives being pasted into authorized_keys. And `solana:` rather
+// than `wallet:` because ed25519 is not Solana's - Sui and Near wallets are on
+// the same curve - so the prefix says what the address is *in*, which is the
+// part a reader cannot work out from the string itself.
+const WalletCommentPrefix = "solana:"
+
+// IsWalletComment reports whether a key comment is one of ours, naming the
+// connected wallet's account.
+func IsWalletComment(comment string) bool {
+	return strings.HasPrefix(comment, WalletCommentPrefix)
+}
 
 // SolanaTxRequest is what a session sends.
 //
@@ -107,6 +131,55 @@ type SolanaTxResponse struct {
 
 // refused reports whether this is an answer of no.
 func (r SolanaTxResponse) refused() bool { return r.Refusal != "" }
+
+// signerForAddress is the signer holding a named base58 account.
+func signerForAddress(signers []gossh.Signer, address string) (gossh.Signer, bool) {
+	raw, err := siws.Base58Decode(address)
+	if err != nil {
+		return nil, false
+	}
+	return signerHolding(signers, raw)
+}
+
+// signerHolding is the signer in signers whose public key is the one given.
+//
+// Asking "is this key one of ours" rather than "which one is it" is what
+// lets an agent hold more than one key while a wallet is connected: the
+// wallet decides, and this only has to agree.
+func signerHolding(signers []gossh.Signer, pub ed25519.PublicKey) (gossh.Signer, bool) {
+	if len(pub) != ed25519.PublicKeySize {
+		return nil, false
+	}
+	for _, s := range signers {
+		if s == nil {
+			continue
+		}
+		if got := ownPublicKey(s); got != nil && bytes.Equal(got, pub) {
+			return s, true
+		}
+	}
+	return nil, false
+}
+
+// noSignerRefusal is why nothing here can sign, said in a sentence that will
+// survive the trip. Counted rather than described, because "this session has
+// nothing that can sign" is true of zero and of three, and the fix is
+// different for each.
+func noSignerRefusal(held int) string {
+	switch held {
+	case 0:
+		return "this session has nothing that can sign a transaction: " +
+			"connect a wallet, or give the session a key"
+	case 1:
+		// Unreachable from here, but a wrong count would read as a bug in
+		// the check rather than as a real state.
+		return "this session holds one key, which cannot sign without a wallet"
+	default:
+		return fmt.Sprintf(
+			"this session holds %d keys and no wallet to choose between them: "+
+				"connect a wallet, or leave exactly one key in the session", held)
+	}
+}
 
 func ownPublicKey(signer gossh.Signer) ed25519.PublicKey {
 	crypto, ok := signer.PublicKey().(gossh.CryptoPublicKey)
@@ -340,14 +413,16 @@ func readCompactU16(b []byte) (value int, rest []byte, err error) {
 // understand gets a plain failure rather than silence. That matters here: an
 // agent that answered every extension the same way would be indistinguishable
 // from one that had no idea what was being asked.
-func (t *SolanaTx) ExtensionHandler(signer gossh.Signer) func(name string, contents []byte) ([]byte, error) {
+func (t *SolanaTx) ExtensionHandler(signers []gossh.Signer) func(name string, contents []byte) ([]byte, error) {
 	return func(name string, contents []byte) ([]byte, error) {
 		if name != SolanaTxExtension {
 			return nil, agent.ErrExtensionUnsupported
 		}
 		if t == nil || (t.Ask == nil && t.Build == nil) {
-			return nil, errors.New("this agent cannot sign Solana transactions: " +
-				"there is no wallet behind it and no key here to sign with")
+			return json.Marshal(SolanaTxResponse{
+				Refusal: "this agent cannot sign Solana transactions: " +
+					"there is no wallet behind it and no key here to sign with",
+			})
 		}
 
 		req, err := ParseSolanaTxRequest(contents)
@@ -374,7 +449,14 @@ func (t *SolanaTx) ExtensionHandler(signer gossh.Signer) func(name string, conte
 		// hand back a signature over the wrong fee payer, and the caller
 		// would have no way to tell.
 		if t.Ask != nil {
-			// The wallet picks which of its accounts signs.
+			// The wallet's key is here, so either the request named it or it
+			// named nobody and the wallet picks. Either way there is nothing
+			// to disambiguate: a browser that imported an SSH key and also
+			// connected a wallet forwards both, and one key in an agent is
+			// not a precondition for signing. What does have to be checked
+			// is the answer - that it came from a key this agent actually
+			// holds - which is a question about the reply rather than about
+			// the request.
 			resp, used, err := t.Ask(req)
 			if err != nil {
 				// Carried as it stands, not wrapped. The page already says
@@ -386,9 +468,10 @@ func (t *SolanaTx) ExtensionHandler(signer gossh.Signer) func(name string, conte
 				// and calling it one is simply false.
 				return json.Marshal(SolanaTxResponse{Refusal: err.Error()})
 			}
-			if used == nil || !bytes.Equal(used, ownPublicKey(signer)) {
+			signer, ok := signerHolding(signers, used)
+			if !ok {
 				return json.Marshal(SolanaTxResponse{
-					Refusal: "the answer was signed by a key this agent does not hold",
+					Refusal: "the wallet signed with a key this agent does not hold",
 				})
 			}
 			// A payer that was named has to be the one that signed. The
@@ -396,16 +479,50 @@ func (t *SolanaTx) ExtensionHandler(signer gossh.Signer) func(name string, conte
 			// the one asked for is an answer to a different question - the
 			// caller would be handed a signature whose fee payer is not the
 			// account it named, and nothing downstream could tell.
+			if req.Signer != "" {
+				wanted, held := signerForAddress(signers, req.Signer)
+				if !held || !bytes.Equal(ownPublicKey(wanted), ownPublicKey(signer)) {
+					return json.Marshal(SolanaTxResponse{
+						Refusal: fmt.Sprintf(
+							"the request named %s as the payer but the wallet signed with %s",
+							req.Signer, siws.Base58Encode(used)),
+					})
+				}
+			}
 			if err := VerifySolanaTx(resp, ownPublicKey(signer)); err != nil {
 				return json.Marshal(SolanaTxResponse{Refusal: err.Error()})
 			}
 			return json.Marshal(resp)
 		}
 
-		if signer == nil {
+		// Signing here. The payer says which key when it is named, which is
+		// what makes several keys a normal case rather than a question this
+		// cannot answer - the same reasoning as the plain-agent path in
+		// solana/agentsign.go, which also takes the payer over the key
+		// count.
+		var signer gossh.Signer
+		switch {
+		case req.Signer != "":
+			found, ok := signerForAddress(signers, req.Signer)
+			if !ok {
+				return json.Marshal(SolanaTxResponse{
+					Refusal: fmt.Sprintf(
+						"the payer %s is not a key this session holds; "+
+							"sol-keys lists the ones it does", req.Signer),
+				})
+			}
+			signer = found
+		case len(signers) == 1:
+			signer = signers[0]
+		default:
+			// With no payer there is nobody to choose an account, so
+			// several keys is an unanswerable question rather than a normal
+			// case. It is refused here, as a Refusal, rather than as a bare
+			// error: a bare error becomes the single failure byte the agent
+			// protocol allows and the sentence explaining it never reaches
+			// the caller.
 			return json.Marshal(SolanaTxResponse{
-				Refusal: "this session has nothing that can sign a transaction: " +
-					"connect a wallet, or give the session a key",
+				Refusal: noSignerRefusal(len(signers)),
 			})
 		}
 
