@@ -98,6 +98,9 @@ type SolanaTxResponse struct {
 	// page already holds signs this exactly as it signs an SSH challenge.
 	Unsigned []byte `json:"unsigned,omitempty"`
 
+	// message is the part the signature covers, kept so a fixture can be read
+	// apart in a test. It is not on the wire.
+	message           []byte `json:"-"`
 	Signature         []byte `json:"signature,omitempty"`
 	SignedTransaction []byte `json:"signedTransaction,omitempty"`
 }
