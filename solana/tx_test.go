@@ -626,3 +626,53 @@ func TestSendTransactionLeavesPreflightOn(t *testing.T) {
 		t.Errorf("the commitment should still be stated: %s", got)
 	}
 }
+
+// A preflight failure answers -32002 with a message of "Transaction
+// simulation failed" and the actual cause in data. Reporting only the
+// message leaves the reader with a heading and nothing under it, which
+// is the difference between "the account has no SOL" and a shrug.
+func TestSendTransactionReportsWhyASimulationFailed(t *testing.T) {
+	const body = `{"jsonrpc":"2.0","error":{"code":-32002,"message":"Transaction simulation failed",` +
+		`"data":{"err":{"InstructionError":[2,"MissingAccount"]},` +
+		`"logs":["Program ComputeBudget111111111111111111111111111111 invoke [1]",` +
+		`"Program 11111111111111111111111111111111 failed: An account required by the instruction is missing"]}},` +
+		`"id":1}`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, body)
+	}))
+	defer server.Close()
+
+	_, err := solana.SendTransaction(context.Background(), server.URL, []byte("bytes"))
+	if err == nil {
+		t.Fatal("a refused transaction should be reported")
+	}
+	for _, want := range []string{
+		"would not accept",       // says the cluster refused it
+		"failed:",                // the program's own line
+		"An account required",    // and what it said
+		"fee has not been spent", // nothing was broadcast
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the reason should survive: %q not in %v", want, err)
+		}
+	}
+}
+
+// An error with no data is still reported - the message is all there is,
+// and inventing a reason for it would be worse than saying nothing.
+func TestSendTransactionWithoutDataStillReportsTheMessage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w,
+			`{"jsonrpc":"2.0","error":{"code":-32602,"message":"failed to deserialize"},"id":1}`)
+	}))
+	defer server.Close()
+
+	_, err := solana.SendTransaction(context.Background(), server.URL, []byte("bytes"))
+	if err == nil {
+		t.Fatal("a refused transaction should be reported")
+	}
+	if !strings.Contains(err.Error(), "failed to deserialize") {
+		t.Errorf("the message should survive when there is nothing else, got %v", err)
+	}
+}

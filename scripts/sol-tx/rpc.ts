@@ -5,9 +5,51 @@
 // carries the URL the request went to so that a DNS or middlebox problem
 // shows up in the output rather than as a generic network error.
 
+/**
+ * The shape of a JSON-RPC error as Solana answers it.
+ *
+ * `data` is where the reason lives for the codes that carry one. A failed
+ * preflight simulation answers -32002 with a message of "Transaction
+ * simulation failed" and the actual reason - which account ran out of
+ * what - in data.err. Reading only code and message throws the reason away
+ * and leaves the reader with a heading and nothing under it.
+ */
 interface JsonRpcResponse<T> {
   result?: T;
-  error?: { code: number; message: string };
+  error?: {
+    code: number;
+    message: string;
+    data?: {
+      /** the instruction error, in the cluster's own shape */
+      err?: unknown;
+      /** the program logs, which name the program that gave up */
+      logs?: string[];
+      unitsConsumed?: number;
+    };
+  };
+}
+
+/**
+ * The reason under a JSON-RPC error, as one line.
+ *
+ * The cluster's error is a nested object whose keys are not meant to be
+ * read by a person, so it is rendered as JSON and left that way: the shapes
+ * are not enumerable and the one that matters is not worth a special case
+ * that would only cover today's. Program logs come first when present,
+ * because "Program X failed: <why>" is the sentence that names the cause.
+ */
+function reasonOf(error: NonNullable<JsonRpcResponse<unknown>["error"]>): string | null {
+  const data = error.data;
+  if (!data) return null;
+
+  if (Array.isArray(data.logs) && data.logs.length > 0) {
+    const failed = data.logs.filter((l) => /failed/i.test(l));
+    if (failed.length > 0) return failed.join("; ");
+  }
+  if (data.err !== undefined && data.err !== null) {
+    return `the cluster said: ${JSON.stringify(data.err)}`;
+  }
+  return null;
 }
 
 async function call<T>(
@@ -53,13 +95,24 @@ async function call<T>(
 
   if (parsed.error) {
     const { code, message } = parsed.error;
+    // The reason is the point. "Transaction simulation failed" on its own
+    // is a heading, and the sentence under it says which account was empty.
+    const why = reasonOf(parsed.error);
+    const detail = why ? `${message}: ${why}` : message;
+
     if (code === -32601) {
-      throw new Error(`${endpoint} does not implement ${method}: ${message}`);
+      throw new Error(`${endpoint} does not implement ${method}: ${detail}`);
+    }
+    if (code === -32002) {
+      throw new Error(
+        `${endpoint} would not accept this transaction: ${detail}. ` +
+        `Nothing was broadcast; the fee has not been spent.`,
+      );
     }
     if (code !== 0) {
-      throw new Error(`${endpoint} refused the call (code ${code}): ${message}`);
+      throw new Error(`${endpoint} refused the call (code ${code}): ${detail}`);
     }
-    throw new Error(`${endpoint} refused the call: ${message}`);
+    throw new Error(`${endpoint} refused the call: ${detail}`);
   }
 
   return parsed.result as T;

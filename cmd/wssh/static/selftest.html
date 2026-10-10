@@ -409,6 +409,25 @@ async function handle(e) {
         }
         say('signed transaction: ' + signed.slice(0, 60) + '… (' + signed.length + ' base58 chars)');
 
+        // The command reads the fee payer back out of the signed bytes and
+        // prints it. That walk has to agree with the key that actually
+        // signed, and this is the only place with both in the same room:
+        // the session's own output, and the key this page made. A wrong
+        // offset in the reader would otherwise look like a working feature,
+        // because it is checked by the same fixtures it was written from.
+        const reported = plain.find((l) => l.startsWith('fee payer:')) || '';
+        if (reported) {
+          const said = reported.replace('fee payer:', '').trim();
+          if (said !== selfKey.address) {
+            say('<span class="fail">FAIL — the reported fee payer is not the key that signed</span>');
+            say('reported: ' + said);
+            say('signed by: ' + selfKey.address);
+            failures.push('fee payer');
+          } else {
+            say('<span class="pass">PASS — the reported fee payer is the key that signed</span>');
+          }
+        }
+
         // A fee payer that does not exist on the cluster trips the simulator
         // with AccountNotFound, which reads as a phantom sign error rather
         // than the configuration mistake it actually is. Skip the simulate

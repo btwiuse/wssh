@@ -139,3 +139,40 @@ Deno.test("a private endpoint gets no explorer link", () => {
   assertEquals(rpc.explorerTxURL("not a url", "sig"), "");
   assertEquals(rpc.clusterOf("https://my-rpc.example.com"), null);
 });
+
+// A preflight failure answers -32002 with a message of "Transaction
+// simulation failed" and the actual cause in data. Reporting only the
+// message leaves the reader with a heading and nothing under it.
+Deno.test("sendTransaction reports why a simulation failed", async () => {
+  await runWithServer(
+    () =>
+      new Response(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          error: {
+            code: -32002,
+            message: "Transaction simulation failed",
+            data: {
+              err: { InstructionError: [2, "MissingAccount"] },
+              logs: [
+                "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+                "Program 11111111111111111111111111111111 failed: An account required by the instruction is missing",
+              ],
+            },
+          },
+          id: 1,
+        }),
+        { headers: { "Content-Type": "application/json" } },
+      ),
+    async (endpoint) => {
+      const err = await assertRejects(
+        async () => await rpc.sendTransaction(endpoint, new Uint8Array([0xaa]), false),
+      );
+      for (const want of ["would not accept", "failed:", "An account required", "fee has not been spent"]) {
+        if (!String(err).includes(want)) {
+          throw new Error(`the reason should survive: ${want} not in ${err}`);
+        }
+      }
+    },
+  );
+});

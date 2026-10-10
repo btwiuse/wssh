@@ -362,6 +362,17 @@ func SendTransaction(ctx context.Context, rpcURL string, signed []byte) (string,
 		Error  *struct {
 			Code    int    `json:"code"`
 			Message string `json:"message"`
+			// Data is where the reason lives for the codes that carry one.
+			// A failed preflight simulation answers -32002 with a message
+			// of "Transaction simulation failed" and the actual cause - which
+			// account ran out of what - in here. Reading only Code and
+			// Message throws that away and leaves a heading with nothing
+			// under it.
+			Data *struct {
+				Err   json.RawMessage `json:"err"`
+				Logs  []string        `json:"logs"`
+				Units *uint64         `json:"unitsConsumed"`
+			} `json:"data"`
 		} `json:"error"`
 	}
 	// The full URL tells the user which endpoint was actually hit, which
@@ -382,25 +393,62 @@ func SendTransaction(ctx context.Context, rpcURL string, signed []byte) (string,
 			url, len(raw), trimForLog(raw, 120))
 	}
 	if answer.Error != nil {
+		detail := answer.Error.Message
+		if why := rpcReason(answer.Error.Data); why != "" {
+			detail += ": " + why
+		}
 		// Standard JSON-RPC codes are specific enough to be worth naming:
 		// code -32601 is "the cluster does not implement sendTransaction",
 		// which is the difference between a proxy problem and a code bug.
 		switch {
 		case answer.Error.Code == -32601:
 			return "", fmt.Errorf("%s does not implement sendTransaction: %s",
-				url, answer.Error.Message)
+				url, detail)
+		case answer.Error.Code == -32002:
+			// The cluster simulated this and refused it, so nothing was
+			// accepted and the fee was not spent. Saying so is the difference
+			// between "try again" and "the account has no SOL".
+			return "", fmt.Errorf(
+				"%s would not accept this transaction: %s. "+
+					"Nothing was broadcast; the fee has not been spent",
+				url, detail)
 		case answer.Error.Code != 0:
 			return "", fmt.Errorf("%s refused the transaction (code %d): %s",
-				url, answer.Error.Code, answer.Error.Message)
+				url, answer.Error.Code, detail)
 		default:
-			return "", fmt.Errorf("%s refused the transaction: %s",
-				url, answer.Error.Message)
+			return "", fmt.Errorf("%s refused the transaction: %s", url, detail)
 		}
 	}
 	if answer.Result == "" {
 		return "", fmt.Errorf("%s returned no signature", url)
 	}
 	return answer.Result, nil
+}
+
+// rpcReason renders what a cluster put under a JSON-RPC error as one line.
+//
+// The error object is nested in shapes that are not meant to be read by a
+// person, so it is rendered as JSON and left that way rather than given a
+// special case per shape. Program logs come first when there are any: "Program
+// X failed: <why>" is the sentence that names the cause, where the err object
+// on its own is an instruction index and a string.
+func rpcReason(data *struct {
+	Err   json.RawMessage `json:"err"`
+	Logs  []string        `json:"logs"`
+	Units *uint64         `json:"unitsConsumed"`
+}) string {
+	if data == nil {
+		return ""
+	}
+	for _, line := range data.Logs {
+		if strings.Contains(strings.ToLower(line), "failed") {
+			return line
+		}
+	}
+	if len(data.Err) > 0 && string(data.Err) != "null" {
+		return "the cluster said: " + string(data.Err)
+	}
+	return ""
 }
 
 func trimForLog(b []byte, n int) string {

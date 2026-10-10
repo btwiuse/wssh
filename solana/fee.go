@@ -35,28 +35,25 @@ func FeePayer(signed []byte) (string, error) {
 		rest = rest[1:]
 	}
 
+	// The header is three separate bytes, not one packed byte: required
+	// signatures, readonly signatures, readonly unsigned. Reading it as a
+	// single byte puts everything after it one position out of true, which
+	// returns a plausible account that is not the payer.
+	if len(rest) < 3 {
+		return "", errors.New("the signed transaction ends inside its header")
+	}
+	rest = rest[3:]
+
 	if versioned {
-		// header, then the number of static keys.
-		if len(rest) < 1 {
-			return "", errors.New("the signed transaction ends before its header")
-		}
-		rest = rest[1:]
+		// A versioned message then counts its static keys.
 		_, n, err := readCompactU16(rest)
 		if err != nil {
 			return "", fmt.Errorf("the account count is not readable: %w", err)
 		}
 		rest = rest[n:]
-	} else {
-		// Three counts in a row: required signatures, readonly signatures,
-		// readonly unsigned. Then the keys.
-		for i := range 3 {
-			_, n, err := readCompactU16(rest)
-			if err != nil {
-				return "", fmt.Errorf("the header count %d is not readable: %w", i, err)
-			}
-			rest = rest[n:]
-		}
 	}
+	// A legacy message has no count of its own: the three header counts
+	// just read imply how many accounts follow.
 
 	if len(rest) < 32 {
 		return "", errors.New("the signed transaction carries no fee payer")

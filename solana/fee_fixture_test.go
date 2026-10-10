@@ -12,9 +12,16 @@ import (
 func compact(n int) []byte { return []byte{byte(n)} }
 
 // versionedMessage builds the message of a v0 transaction with one account.
+// The header is three separate bytes - required signatures, readonly
+// signatures, readonly unsigned - and only then a count of the static keys.
+// Reading the header as one packed byte leaves everything after it out of
+// position, and what comes back is a plausible looking account that is not
+// the payer.
 func versionedMessage(pub ed25519.PublicKey) []byte {
 	out := []byte{0x80}              // version 0, top bit set
-	out = append(out, 0x00)          // header: no required-signature counts to read past
+	out = append(out, 0x01)          // numRequiredSignatures
+	out = append(out, 0x00)          // numReadonlySignedAccounts
+	out = append(out, 0x00)          // numReadonlyUnsignedAccounts
 	out = append(out, compact(1)...) // one static account key
 	return append(out, pub...)
 }
