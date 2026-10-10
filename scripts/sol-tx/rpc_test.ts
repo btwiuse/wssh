@@ -111,3 +111,31 @@ Deno.test("confirmTransaction surfaces the transaction error when one is set", a
     },
   );
 });
+// The explorer link is only correct if the cluster matches the endpoint, so
+// the cases that matter are the four: the three public clusters and a private
+// RPC, which gets no link at all rather than a wrong one.
+Deno.test("explorerTxURL names the cluster the endpoint belongs to", () => {
+  const sig = "54DxBZKPwS9mBmcxiCodw5updkq2pHAu9CZF7b2tNqv7WYVjmyKDoaTcDViQDEQXNcbFUjG4W9EB19W4hqYnYhwX";
+  const cases: [string, string][] = [
+    ["https://api.mainnet-beta.solana.com", `https://solscan.io/tx/${sig}`],
+    ["https://api.devnet.solana.com", `https://solscan.io/tx/${sig}?cluster=devnet`],
+    ["https://api.testnet.solana.com", `https://solscan.io/tx/${sig}?cluster=testnet`],
+    // The host is matched case-insensitively: a URL typed by hand is
+    // routinely capitalised, and DNS does not care.
+    ["https://API.Mainnet-Beta.Solana.com", `https://solscan.io/tx/${sig}`],
+    // A path on the endpoint is not part of the host.
+    ["https://api.devnet.solana.com/rpc", `https://solscan.io/tx/${sig}?cluster=devnet`],
+  ];
+  for (const [endpoint, want] of cases) {
+    assertEquals(rpc.explorerTxURL(endpoint, sig), want);
+  }
+});
+
+Deno.test("a private endpoint gets no explorer link", () => {
+  // A private RPC says nothing about which cluster it fronts, and a mainnet
+  // link to a devnet transaction is a page that says the transaction does not
+  // exist. No link beats a wrong one.
+  assertEquals(rpc.explorerTxURL("https://my-rpc.example.com", "sig"), "");
+  assertEquals(rpc.explorerTxURL("not a url", "sig"), "");
+  assertEquals(rpc.clusterOf("https://my-rpc.example.com"), null);
+});

@@ -146,3 +146,41 @@ export async function confirmTransaction(
   }
   throw new Error(`signature ${signature} did not confirm within 90s`);
 }
+// The cluster an endpoint belongs to, or null when it cannot be told.
+//
+// Only the public Solana endpoints are recognised. Someone's own RPC carries no
+// cluster in its URL, and calling that mainnet would print a link to a page
+// that says the transaction does not exist, which is worse than printing no
+// link at all.
+export type Cluster = "mainnet" | "devnet" | "testnet";
+
+export function clusterOf(endpoint: string): Cluster | null {
+  let host: string;
+  try {
+    host = new URL(endpoint).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+  switch (host) {
+    case "api.mainnet-beta.solana.com":
+      return "mainnet";
+    case "api.devnet.solana.com":
+      return "devnet";
+    case "api.testnet.solana.com":
+      return "testnet";
+    default:
+      return null;
+  }
+}
+
+// The explorer's link to a confirmed transaction, or "" when the cluster
+// behind the endpoint cannot be named.
+//
+// solscan picks the cluster with a query parameter rather than a path, so
+// mainnet is the bare URL and the other two carry ?cluster=.
+export function explorerTxURL(endpoint: string, signature: string): string {
+  const cluster = clusterOf(endpoint);
+  if (!cluster) return "";
+  const base = `https://solscan.io/tx/${signature}`;
+  return cluster === "mainnet" ? base : `${base}?cluster=${cluster}`;
+}

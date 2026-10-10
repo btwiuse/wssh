@@ -87,6 +87,12 @@ Options:
 Environment:
   SSH_AUTH_SOCK        agent socket
   WSSH_SOLANA_RPC      default --rpc when the flag is empty
+
+Output:
+  With --send the signature goes to stdout on its own, so
+  SIG=$(deno task start ... --send) is one clean line. The explorer link
+  goes to stderr, once the transaction has confirmed, so piping the
+  signature is not disturbed by it.
 `);
   Deno.exit(2);
 }
@@ -283,11 +289,26 @@ if (!global.send) {
 if (global.verbose) console.error("[sol-tx] sending via RPC");
 const txBytes = agent.signedTransactionBytes(resp);
 const sig = await rpc.sendTransaction(endpoint, txBytes, global.verbose);
+// The signature goes to stdout on its own so that `SIG=$(sol-tx ... --send)`
+// yields exactly one line. Everything meant for a person reading the terminal
+// goes to stderr, including the link to look the transaction up in.
 console.log(sig);
 const status = await rpc.confirmTransaction(endpoint, sig, global.verbose);
 if (global.verbose) {
   console.error(
     `[sol-tx] confirmed: status=${status.confirmationStatus} slot=${status.slot}`,
+  );
+}
+// Only after the confirmation lands: a signature on its own says the cluster
+// accepted the bytes, not that the instructions ran, and a link to a failed
+// transaction is a worse thing to print than no link at all.
+const explorer = rpc.explorerTxURL(endpoint, sig);
+if (explorer) {
+  console.error(explorer);
+} else if (global.verbose) {
+  console.error(
+    "[sol-tx] no explorer link: the cluster behind --rpc could not be named, " +
+      "and guessing one would point at a transaction that is not there",
   );
 }
 Deno.exit(0);
