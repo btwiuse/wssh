@@ -33,7 +33,7 @@ WASMJS := $(STATIC)/wasm_exec.js
 WASM_GO := $(shell GOOS=js GOARCH=wasm CGO_ENABLED=0 go list -f '{{if .Module}}{{if eq .Module.Path "github.com/btwiuse/wssh"}}{{range .GoFiles}}{{$$.Dir}}/{{.}} {{end}}{{end}}{{end}}' -deps ./client/cmd/webssh-web 2>/dev/null)
 WASM_SRC := client/build.sh $(WASM_GO) go.mod
 
-.PHONY: wssh sol-tx bin
+.PHONY: wssh sol-tx sol-keys bin
 wssh: $(WASM) $(WASMJS) ## build bin/wssh, populating static/ first
 	@mkdir -p $(BIN)
 	$(GO) build -trimpath -o $(BIN)/wssh ./cmd/wssh
@@ -44,7 +44,12 @@ sol-tx: ## build bin/sol-tx
 	$(GO) build -trimpath -o $(BIN)/sol-tx ./cmd/sol-tx
 	@echo "built $(BIN)/sol-tx"
 
-bin: wssh sol-tx ## build every binary
+sol-keys: ## build bin/sol-keys, which lists what the agent holds
+	@mkdir -p $(BIN)
+	$(GO) build -trimpath -o $(BIN)/sol-keys ./cmd/sol-keys
+	@echo "built $(BIN)/sol-keys"
+
+bin: wssh sol-tx sol-keys ## build every binary
 
 # build.sh emits both files in one pass, because wasm_exec.js has to come from
 # the same Go release that produced ssh.wasm or the two disagree about the
@@ -61,8 +66,8 @@ generate: ## run every //go:generate directive, which populates static/
 	$(GO) generate ./...
 
 .PHONY: install
-install: ## install wssh and sol-tx into GOBIN
-	$(GO) install ./cmd/wssh ./cmd/sol-tx
+install: ## install wssh, sol-tx and sol-keys into GOBIN
+	$(GO) install ./cmd/wssh ./cmd/sol-tx ./cmd/sol-keys
 
 .PHONY: serve
 serve: wssh ## build, then run the server with the browser front end
