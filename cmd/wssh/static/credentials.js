@@ -164,9 +164,29 @@ export async function signInWithTheWallet(message) {
     return found ? found.slice(label.length + 2) : '';
   };
 
+  // The header is "<domain> wants you to sign in with your Solana account:",
+  // the same string the server formats. Stripping the suffix leaves the
+  // domain, exactly the way ParseSIWS reads it back out.
+  const SIWS_HEADER = ' wants you to sign in with your Solana account:';
+  const header = lines[0] || '';
+  const domain = header.endsWith(SIWS_HEADER)
+    ? header.slice(0, -SIWS_HEADER.length)
+    : '';
+
+  // The statement, if there is one, is the line right after the account line
+  // that is not a labelled field. Looking it up by index would break on the
+  // first message that omits a statement, and Phantom needs it to show the
+  // user what they are approving.
+  let statement = '';
+  let scan = 2;
+  while (scan < lines.length && lines[scan] === '') scan += 1;
+  if (scan < lines.length && !/^\w.*: /.test(lines[scan])) {
+    statement = lines[scan];
+  }
+
   const answer = await provider.signIn({
-    domain: pick('wants you to sign in') ? message.split(' ')[0] : '',
-    statement: lines[3] || '',
+    domain,
+    statement,
     version: pick('Version') || '1',
     chainId: pick('Chain ID') || 'solana:mainnet',
     nonce: pick('Nonce'),
