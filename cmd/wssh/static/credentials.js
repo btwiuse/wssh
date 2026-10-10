@@ -182,6 +182,14 @@ export function CredentialsPanel({ workerRef, onClose }) {
         setStatus('generated a key; the public half goes on the server');
       } else if (msg.type === 'keyInfo') {
         const info = msg.info || {};
+        // Read the key out before overwriting pending: the record that answers
+        // this carries no key material, and reading it afterwards stored every
+        // imported key with an undefined privateKey. That broke both key
+        // authentication and agent forwarding for anything pasted in, while
+        // generated keys kept working because they take their own path.
+        const pasted = pending.current?.kind === 'pasted'
+          ? pending.current.privateKey
+          : '';
         pending.current = { kind: 'info', info };
         if (info.error) {
           setStatus(`that is not a private key: ${info.error}`);
@@ -191,7 +199,7 @@ export function CredentialsPanel({ workerRef, onClose }) {
           id: `k${Date.now()}${Math.random().toString(36).slice(2, 7)}`,
           name: info.type || 'key',
           publicKey: info.publicKey || '',
-          privateKey: pending.current ? pending.current.privateKey : '',
+          privateKey: pasted,
           fingerprint: info.fingerprint || '',
           encrypted: !!info.encrypted,
           enabled: true,
