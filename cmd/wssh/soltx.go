@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/btwiuse/wssh/auth/agentkey"
@@ -17,6 +18,7 @@ func newSolTxCmd() *cobra.Command {
 	var (
 		sockPath  string
 		rpcURL    string
+		network   string
 		blockhash string
 		label     string
 		payer     string
@@ -26,6 +28,7 @@ func newSolTxCmd() *cobra.Command {
 		program   string
 		accounts  []string
 		data      string
+		send      bool
 	)
 
 	cmd := &cobra.Command{
@@ -47,12 +50,23 @@ The transaction itself is built in the browser, where the wallet is, and is
 shown to whoever holds it before they approve it. This command never
 constructs one.
 
+By default the signed transaction is printed, not sent. Pass --send to
+hand it to the RPC endpoint instead, and wait for confirmation. The endpoint
+is whichever --rpc points at, falling back to --network when --rpc is empty,
+so a transfer built against devnet goes to devnet.
+
 Examples:
-  # Transfer, with the blockhash fetched from an RPC endpoint
-  wssh sol-tx transfer --to 5cyy... --sol 1 --rpc https://api.mainnet-beta.solana.com
+  # Transfer on mainnet, signed but not sent
+  wssh sol-tx transfer --to 5cyy... --sol 1 --network mainnet
+
+  # Transfer on devnet, signed and broadcast
+  wssh sol-tx transfer --to 5cyy... --sol 0.001 --network devnet --send
 
   # Transfer against a blockhash you already have
   wssh sol-tx transfer --to 5cyy... --lamports 1000000000 --blockhash 9xQe...
+
+  # Custom RPC endpoint, taking precedence over --network
+  wssh sol-tx call --program 9xQe... --account 5cyy... --data 3Bxs... --rpc https://my-rpc.example.com
 
   # Any instruction at all
   wssh sol-tx call --program 9xQe... --account 5cyy... --data 3Bxs...`,
@@ -74,7 +88,7 @@ Examples:
 
 			req, err := buildSolTxRequest(solTxRequest{
 				mode:     mode,
-				sockPath: sockPath, rpcURL: rpcURL, blockhash: blockhash, label: label,
+				sockPath: sockPath, rpcURL: effectiveRPC(rpcURL, network), blockhash: blockhash, label: label,
 				to: to, sol: sol, lamports: lamports,
 				program: program, accounts: accounts, data: data, payer: payer,
 			})
@@ -92,10 +106,25 @@ Examples:
 				return err //nolint:wrapcheck
 			}
 
+			endpoint := effectiveRPC(rpcURL, network)
+
 			// Printing the transaction rather than broadcasting it: this
 			// command has no opinion about when or whether it should be
 			// sent, and handing back something signed and not sent keeps
-			// that decision with the caller.
+			// that decision with the caller. --send reverses that and posts
+			// to the RPC endpoint, so the wallet signs once and the money
+			// moves once, instead of being shuffled between two commands.
+			if send {
+				sig, err := client.SendTransaction(ctx, endpoint, resp.SignedTransaction)
+				if err != nil {
+					return err //nolint:wrapcheck
+				}
+				fmt.Println(sig)
+				if err := client.ConfirmTransaction(ctx, endpoint, sig); err != nil {
+					return err //nolint:wrapcheck
+				}
+				return nil
+			}
 			fmt.Println(siws.Base58Encode(resp.SignedTransaction))
 			return nil
 		},
@@ -103,8 +132,12 @@ Examples:
 
 	cmd.Flags().StringVar(&sockPath, "agent", os.Getenv("SSH_AUTH_SOCK"),
 		"the agent socket to ask; empty means $SSH_AUTH_SOCK")
-	cmd.Flags().StringVar(&rpcURL, "rpc", "https://api.mainnet-beta.solana.com",
-		"RPC endpoint to fetch a blockhash from when one was not given")
+	cmd.Flags().StringVar(&rpcURL, "rpc", os.Getenv("WSSH_SOLANA_RPC"),
+		"RPC endpoint; takes precedence over --network when both are set, "+
+			"or empty to fall through to --network's default. "+
+			"$WSSH_SOLANA_RPC sets this when the flag is empty")
+	cmd.Flags().StringVar(&network, "network", "mainnet",
+		"named cluster to use when --rpc is empty: mainnet, testnet, devnet, or a custom URL")
 	cmd.Flags().StringVar(&blockhash, "blockhash", "",
 		"blockhash to build against; fetched from --rpc when absent")
 	cmd.Flags().StringVar(&payer, "payer", "",
@@ -119,18 +152,45 @@ Examples:
 	cmd.Flags().StringVar(&program, "program", "", "program to call, for call")
 	cmd.Flags().StringArrayVar(&accounts, "account", nil, "an account to pass, repeatable")
 	cmd.Flags().StringVar(&data, "data", "", "instruction data in base58, for call")
+	cmd.Flags().BoolVar(&send, "send", false,
+		"broadcast the signed transaction through --rpc and wait for confirmation, "+
+			"instead of printing it")
 
 	return cmd
 }
 
 type solTxRequest struct {
 	mode                                      string
-	sockPath, rpcURL, blockhash, label, payer string
+	sockPath, rpcURL, network, blockhash, label, payer string
 	to, sol                                   string
 	lamports                                  uint64
 	program                                   string
 	accounts                                  []string
 	data                                      string
+	send                                      bool
+}
+
+// resolveNetwork turns the friendly --network name into an RPC URL. The
+// empty string and the named clusters all have a default; anything else
+// is treated as a custom URL, which is what makes the same flag useful
+// for a private cluster or a paid provider.
+//
+// The named values use the same endpoints the official Solana CLI does;
+// flipping --network changes both the blockhash source and the
+// destination for --send, which is what makes one switch cover both.
+func resolveNetwork(name string) string {
+	return client.ResolveNetwork(name)
+}
+
+// effectiveRPC picks the URL the rest of the command will use. --rpc wins
+// when set, --network fills in when it is empty, and the call site never
+// has to think about which was passed: one source of truth keeps --send
+// and the blockhash fetch pointing at the same endpoint.
+func effectiveRPC(rpcURL, network string) string {
+	if strings.TrimSpace(rpcURL) != "" {
+		return rpcURL
+	}
+	return resolveNetwork(network)
 }
 
 func buildSolTxRequest(in solTxRequest) (agentkey.SolanaTxRequest, error) {

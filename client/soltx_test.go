@@ -346,4 +346,129 @@ func TestLatestBlockhashReportsWhatWentWrong(t *testing.T) {
 			t.Fatal("an unreachable endpoint should be reported")
 		}
 	})
+
+	t.Run("method not found is named, not generic", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = io.WriteString(w, `{"jsonrpc":"2.0","error":{"code":-32601,"message":"Method not found"},"id":1}`)
+		}))
+		defer server.Close()
+
+		_, err := client.LatestBlockhash(context.Background(), server.URL)
+		if err == nil {
+			t.Fatal("method-not-found should be reported")
+		}
+		if !strings.Contains(err.Error(), "-32601") {
+			t.Errorf("the code should be in the message, got %v", err)
+		}
+	})
+
+	t.Run("a non-JSON body is surfaced as text", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = io.WriteString(w, "upstream proxy: not a JSON-RPC endpoint")
+		}))
+		defer server.Close()
+
+		_, err := client.LatestBlockhash(context.Background(), server.URL)
+		if err == nil {
+			t.Fatal("a non-JSON body should be reported")
+		}
+		if !strings.Contains(err.Error(), "non-JSON") {
+			t.Errorf("the response shape should be named, got %v", err)
+		}
+		if !strings.Contains(err.Error(), "not a JSON-RPC endpoint") {
+			t.Errorf("the body text should survive, got %v", err)
+		}
+	})
+}
+
+// ResolveNetwork is the friendly name -> URL switch the sol-tx --network
+// flag uses. The same names the Solana CLI takes, the same URLs the CLI
+// talks to, and a custom URL passes through unchanged when nothing else
+// matches.
+func TestResolveNetwork(t *testing.T) {
+	cases := []struct {
+		name, in, want string
+	}{
+		{"empty falls through to mainnet", "", "https://api.mainnet-beta.solana.com"},
+		{"mainnet", "mainnet", "https://api.mainnet-beta.solana.com"},
+		{"mainnet-beta alias", "mainnet-beta", "https://api.mainnet-beta.solana.com"},
+		{"testnet", "testnet", "https://api.testnet.solana.com"},
+		{"devnet", "devnet", "https://api.devnet.solana.com"},
+		{"uppercase is accepted", "DEVNET", "https://api.devnet.solana.com"},
+		{"whitespace is trimmed", "  devnet  ", "https://api.devnet.solana.com"},
+		{"custom url passes through", "https://my-rpc.example.com", "https://my-rpc.example.com"},
+		{"custom http passes through", "http://127.0.0.1:8899", "http://127.0.0.1:8899"},
+		{"an unknown name passes through", "staging", "staging"},
+	}
+	for _, c := range cases {
+		if got := client.ResolveNetwork(c.in); got != c.want {
+			t.Errorf("%s: ResolveNetwork(%q) = %q, want %q", c.name, c.in, got, c.want)
+		}
+	}
+}
+
+// SendTransaction hands the bytes to the endpoint and reports the signature
+// the cluster gave back, so the rest of the program can confirm or follow
+// up without re-serialising what it was given.
+func TestSendTransaction(t *testing.T) {
+	const sig = "5eJ8Qt5mNk7z1FU2L9PaC8J9KBd3gL3a5Y29Bb1UzVr"
+	const body = `{"jsonrpc":"2.0","result":"` + sig + `","id":1}`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("asked with %s, want POST", r.Method)
+		}
+		// The bytes go over the wire as base64, not base58 - the cluster
+		// expects the same encoding every other RPC call uses.
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		if !strings.Contains(string(raw), "sendTransaction") {
+			t.Errorf("body should mention sendTransaction, got %q", string(raw))
+		}
+		if !strings.Contains(string(raw), "encoding") {
+			t.Errorf("body should name the encoding, got %q", string(raw))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, body)
+	}))
+	defer server.Close()
+
+	got, err := client.SendTransaction(context.Background(), server.URL, []byte("any bytes"))
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if got != sig {
+		t.Errorf("got %q, want %q", got, sig)
+	}
+}
+
+// ConfirmTransaction returns nil when the cluster says it is on chain. An
+// error from the cluster keeps its wording so the person running this can
+// read what actually went wrong.
+func TestConfirmTransaction(t *testing.T) {
+	t.Run("confirmed", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = io.WriteString(w, `{"jsonrpc":"2.0","result":{},"id":1}`)
+		}))
+		defer server.Close()
+
+		if err := client.ConfirmTransaction(context.Background(), server.URL, "sig"); err != nil {
+			t.Errorf("nil result should mean confirmed, got %v", err)
+		}
+	})
+
+	t.Run("an error from the endpoint", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = io.WriteString(w, `{"jsonrpc":"2.0","error":{"message":"blockhash not found"}}`)
+		}))
+		defer server.Close()
+
+		if err := client.ConfirmTransaction(context.Background(), server.URL, "sig"); err == nil {
+			t.Fatal("an endpoint error should be reported")
+		} else if !strings.Contains(err.Error(), "blockhash not found") {
+			t.Errorf("the endpoint's own wording should survive, got %v", err)
+		}
+	})
 }

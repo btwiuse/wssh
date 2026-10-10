@@ -3,6 +3,7 @@ package client
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh/agent"
@@ -176,6 +178,27 @@ func describeExtensionFailure(err error) error {
 	return fmt.Errorf("the agent refused to sign: %s", msg)
 }
 
+// ResolveNetwork turns the friendly --network name into an RPC URL. The empty
+// string and the named clusters all have a default; anything else is treated
+// as a custom URL, which is what makes the same flag useful for a private
+// cluster or a paid provider.
+//
+// The named values use the same endpoints the official Solana CLI does:
+// flipping the name changes both the blockhash source and the destination for
+// a send, so one switch covers both.
+func ResolveNetwork(name string) string {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "", "mainnet", "mainnet-beta":
+		return "https://api.mainnet-beta.solana.com"
+	case "testnet":
+		return "https://api.testnet.solana.com"
+	case "devnet":
+		return "https://api.devnet.solana.com"
+	default:
+		return name
+	}
+}
+
 // LatestBlockhash asks an RPC endpoint for the most recent blockhash.
 //
 // A blockhash goes stale in about a minute, which is why this is fetched just
@@ -219,13 +242,23 @@ func LatestBlockhash(ctx context.Context, rpcURL string) (string, error) {
 			} `json:"value"`
 		} `json:"result"`
 		Error *struct {
+			Code    int    `json:"code"`
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&answer); err != nil {
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
 		return "", fmt.Errorf("read the blockhash answer: %w", err)
 	}
+	if err := json.Unmarshal(raw, &answer); err != nil {
+		return "", fmt.Errorf("%s answered with a non-JSON body (%d bytes): %q",
+			hostOf(rpcURL), len(raw), trimForLog(raw, 120))
+	}
 	if answer.Error != nil {
+		if answer.Error.Code != 0 {
+			return "", fmt.Errorf("%s (code %d): %s",
+				hostOf(rpcURL), answer.Error.Code, answer.Error.Message)
+		}
 		return "", fmt.Errorf("%s: %s", hostOf(rpcURL), answer.Error.Message)
 	}
 	if answer.Result.Value.Blockhash == "" {
@@ -243,6 +276,155 @@ func hostOf(rawURL string) string {
 		return rawURL
 	}
 	return parsed.Host
+}
+
+// urlOf returns the URL string used in messages that name the endpoint.
+// It is the full URL when it parses cleanly, the input otherwise: the
+// difference matters when --rpc is a host that does not in fact answer
+// at the path our client tried, which the host alone does not show.
+func urlOf(rawURL string) string {
+	if _, err := url.Parse(rawURL); err != nil {
+		return rawURL
+	}
+	return rawURL
+}
+
+// SendTransaction posts a signed transaction to an RPC endpoint and waits
+// for it to be confirmed.
+//
+// The wait is bounded because a transaction that the cluster will not accept
+// fails fast, and one it accepts lands within a few seconds; anything past
+// that is something the caller will have to read about on their own, and
+// pretending to wait for it would just delay the news.
+func SendTransaction(ctx context.Context, rpcURL string, signed []byte) (string, error) {
+	body := []byte(fmt.Sprintf(
+		`{"jsonrpc":"2.0","id":1,"method":"sendTransaction","params":["%s",{"encoding":"base64","skipPreflight":true,"preflightCommitment":"confirmed"}]}`,
+		base64.StdEncoding.EncodeToString(signed),
+	))
+
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rpcURL, bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("build the send request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("send to %s: %w", hostOf(rpcURL), err)
+	}
+	defer resp.Body.Close() //nolint:errcheck
+
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("%s answered the send request with %s", hostOf(rpcURL), resp.Status)
+	}
+
+	var answer struct {
+		Result string `json:"result"`
+		Error  *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	// The full URL tells the user which endpoint was actually hit, which
+	// matters when --rpc is set to a host that does not in fact implement
+	// sendTransaction: code -32601 from the right host is "use a real
+	// Solana endpoint", from the wrong one is "check your URL".
+	url := urlOf(rpcURL)
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", fmt.Errorf("read the send answer: %w", err)
+	}
+	if err := json.Unmarshal(raw, &answer); err != nil {
+		// A non-JSON body is the cluster's last word on what went wrong,
+		// and the only chance to name it before the message is lost:
+		// surfacing the bytes here is what turns "it did not work" into a
+		// reason to look at.
+		return "", fmt.Errorf("%s answered with a non-JSON body (%d bytes): %q",
+			url, len(raw), trimForLog(raw, 120))
+	}
+	if answer.Error != nil {
+		// Standard JSON-RPC codes are specific enough to be worth naming:
+		// code -32601 is "the cluster does not implement sendTransaction",
+		// which is the difference between a proxy problem and a code bug.
+		switch {
+		case answer.Error.Code == -32601:
+			return "", fmt.Errorf("%s does not implement sendTransaction: %s",
+				url, answer.Error.Message)
+		case answer.Error.Code != 0:
+			return "", fmt.Errorf("%s refused the transaction (code %d): %s",
+				url, answer.Error.Code, answer.Error.Message)
+		default:
+			return "", fmt.Errorf("%s refused the transaction: %s",
+				url, answer.Error.Message)
+		}
+	}
+	if answer.Result == "" {
+		return "", fmt.Errorf("%s returned no signature", url)
+	}
+	return answer.Result, nil
+}
+
+func trimForLog(b []byte, n int) string {
+	if len(b) <= n {
+		return string(b)
+	}
+	return string(b[:n]) + "…"
+}
+
+// ConfirmTransaction asks the cluster whether a transaction it accepted has
+// been recorded. nil err means confirmed; the signature itself is the only
+// useful thing to print.
+func ConfirmTransaction(ctx context.Context, rpcURL, signature string) error {
+	body := []byte(fmt.Sprintf(
+		`{"jsonrpc":"2.0","id":1,"method":"confirmTransaction","params":["%s",{"commitment":"confirmed"}]}`,
+		signature,
+	))
+
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rpcURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("build the confirm request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("confirm at %s: %w", hostOf(rpcURL), err)
+	}
+	defer resp.Body.Close() //nolint:errcheck
+
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("%s answered the confirm request with %s", hostOf(rpcURL), resp.Status)
+	}
+
+	var answer struct {
+		Result *struct{} `json:"result"`
+		Error  *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return fmt.Errorf("read the confirm answer: %w", err)
+	}
+	if err := json.Unmarshal(raw, &answer); err != nil {
+		return fmt.Errorf("%s answered with a non-JSON body (%d bytes): %q",
+			hostOf(rpcURL), len(raw), trimForLog(raw, 120))
+	}
+	if answer.Error != nil {
+		if answer.Error.Code != 0 {
+			return fmt.Errorf("%s (code %d): %s",
+				hostOf(rpcURL), answer.Error.Code, answer.Error.Message)
+		}
+		return fmt.Errorf("%s: %s", hostOf(rpcURL), answer.Error.Message)
+	}
+	return nil
 }
 
 func ParseLamports(sol string) (uint64, error) {

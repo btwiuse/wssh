@@ -56,7 +56,14 @@ export async function signSolanaTransaction(serialised, buildOnly = false) {
   // Without a wallet there is no fee payer to name, so the session's own key
   // pays. It is the key that signed in, so it is the one the transaction has
   // to name as well.
-  const payer = provider?.publicKey?.toBase58?.() || request.payer;
+  //
+  // buildOnly goes the other way: the caller is signing with its own key,
+  // and a wallet would only override the payer it was asked for. The fee
+  // payer is therefore the one the request named, regardless of whether a
+  // wallet happens to be connected.
+  const payer = buildOnly
+    ? request.payer
+    : (provider?.publicKey?.toBase58?.() || request.payer);
   if (!payer) {
     return { refusal: 'no fee payer: connect a wallet, or say which key to pay with' };
   }

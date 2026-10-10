@@ -75,7 +75,10 @@ window.confirm = (text) => { confirmation = String(text); return true; };
 
 const params = new URLSearchParams(location.search);
 const BIN = params.get('bin') || 'wssh';
-const RPC = params.get('rpc') || '';
+// Default to devnet: mainnet rejects browser fetches with 403 because of CORS,
+// and the test only needs a network that accepts requests with an Origin
+// header. Pass ?rpc= to point at any other endpoint.
+const RPC = params.get('rpc') || 'https://api.devnet.solana.com';
 
 // A real blockhash, used because nothing here is sent anywhere and only the
 // shape matters. It has to parse as a 32-byte base58 value, because that is
@@ -133,6 +136,89 @@ async function blockhash() {
     throw new Error(`${RPC} answered without a blockhash: ${raw.slice(0, 120)}`);
   }
   return hash;
+}
+
+// airdrop tops up a freshly-made key on devnet so simulateTransaction has an
+// account to charge fees against. One SOL is more than enough for the
+// transfers this test runs, and the RPC node gives it out for free on
+// devnet. mainnet has no such thing, which is why the test defaults to
+// devnet.
+async function airdrop(address) {
+  const res = await fetch(RPC, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0', id: 1,
+      method: 'requestAirdrop',
+      params: [address, 1000000000],
+    }),
+  });
+  const raw = await res.text();
+  let body;
+  try { body = JSON.parse(raw); } catch {
+    throw new Error(`${RPC} answered with something that is not JSON (${res.status}): ${raw.slice(0, 120)}`);
+  }
+  if (body?.error) throw new Error(`${RPC}: ${body.error.message}`);
+  const sig = body?.result;
+  if (!sig) throw new Error(`${RPC} answered without a signature: ${raw.slice(0, 120)}`);
+
+  // A requestAirdrop is a transfer; it has to be confirmed before the
+  // account holds lamports. confirmTransaction returns null on success,
+  // so absence is what we are after here.
+  const conf = await fetch(RPC, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0', id: 1,
+      method: 'confirmTransaction',
+      params: [sig, { commitment: 'confirmed' }],
+    }),
+  });
+  const confText = await conf.text();
+  let confBody;
+  try { confBody = JSON.parse(confText); } catch {
+    throw new Error(`${RPC} answered with something that is not JSON (${conf.status}): ${confText.slice(0, 120)}`);
+  }
+  if (confBody?.error) throw new Error(`${RPC}: ${confBody.error.message}`);
+  return sig;
+}
+
+// simulateTransaction asks the RPC node to run a signed transaction without
+// sending it, and returns the error it reports. The signature itself is not
+// checked here - this is the page's chance to prove the transaction shape is
+// something the cluster will accept, which is the same check a wallet's
+// "simulate" button performs before asking for approval.
+//
+// A signature over a nonsense blob still verifies, and a transaction whose
+// shape is wrong still parses. What catches a wrong shape is the cluster
+// running the program: that is what we are after here.
+async function simulateTransaction(signed) {
+  // Solana's RPC takes the transaction bytes as a base58 string, not base64.
+  const wire = solanaLib.VersionedTransaction.deserialize(base58Decode(signed)).serialize();
+  const enc = base58(wire);
+  const res = await fetch(RPC, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0', id: 1,
+      method: 'simulateTransaction',
+      params: [enc, { sigVerify: false, replaceRecentBlockhash: false, commitment: 'processed' }],
+    }),
+  });
+  const raw = await res.text();
+  let body;
+  try { body = JSON.parse(raw); } catch {
+    throw new Error(`${RPC} answered with something that is not JSON (${res.status}): ${raw.slice(0, 120)}`);
+  }
+  if (body?.error) throw new Error(`${RPC}: ${body.error.message}`);
+  const v = body?.result?.value;
+  if (!v) throw new Error(`${RPC} answered without a value: ${raw.slice(0, 120)}`);
+  if (v.err) {
+    const ixNo = v.errInstructionError ? Object.keys(v.errInstructionError)[0] : null;
+    const where = ixNo !== null ? ` at instruction ${ixNo}` : '';
+    throw new Error(`simulateTransaction failed${where}: ${JSON.stringify(v.err)}`);
+  }
+  return v;
 }
 
 // --- phase 1: the transport ---
@@ -314,6 +400,35 @@ async function handle(e) {
           say('it reads back as the requested transfer: payer, program, account and amount all match');
         }
         say('signed transaction: ' + signed.slice(0, 60) + '… (' + signed.length + ' base58 chars)');
+
+        // A fee payer that does not exist on the cluster trips the simulator
+        // with AccountNotFound, which reads as a phantom sign error rather
+        // than the configuration mistake it actually is. Skip the simulate
+        // step rather than fail the test when the cluster refuses the airdrop
+        // (devnet is rate-limited, local validators have no airdrop method).
+        if (RPC) {
+          try {
+            await airdrop(selfKey.address);
+            say('airdropped 1 SOL to ' + selfKey.address);
+          } catch (err) {
+            say('<span class="skip">SKIP — could not fund the test key for the simulate step: ' + err.message + '</span>');
+            finish();
+            return;
+          }
+        }
+
+        // The signature and the byte-level shape are checked above. Now check
+        // the third thing: that the cluster is willing to run it. A wallet's
+        // "simulate" is the same call, and the only place this kind of mistake
+        // surfaces is when the answer is fed back to a person who expected
+        // the wallet to have refused already.
+        try {
+          await simulateTransaction(signed);
+          say('<span class="pass">PASS — the cluster simulates the transaction without error</span>');
+        } catch (err) {
+          say('<span class="fail">FAIL — the cluster refuses to simulate: ' + err.message + '</span>');
+          failures.push('simulate');
+        }
         finish();
         return;
       }
@@ -406,14 +521,24 @@ function checkRoundTrip(signed, want) {
   }
 
   const instructions = tx.message?.compiledInstructions || [];
-  if (instructions.length !== 1) {
-    problems.push(`${instructions.length} instructions, want 1`);
+  if (instructions.length < 1) {
+    problems.push(`${instructions.length} instructions, want at least 1`);
+    return problems;
+  }
+
+  // Phantom prepends a SetComputeUnitLimit and a SetComputeUnitPrice before
+  // signing, so a tx built for one transfer usually arrives carrying three
+  // instructions. The test asks for one transfer; verify that, not the rest.
+  const transferIx = instructions.find((ix) =>
+    keys[ix.programIdIndex] === program);
+  if (!transferIx) {
+    problems.push('no instruction calls the System Program');
     return problems;
   }
 
   // What was asked for, built by the library rather than by hand here: a test
   // that re-derives the encoding is testing its own arithmetic.
-  const ix = instructions[0];
+  const ix = transferIx;
   const expected = solanaLib.SystemProgram.transfer({
     fromPubkey: new solanaLib.PublicKey(keys[0]),
     toPubkey: new solanaLib.PublicKey(want.address),
