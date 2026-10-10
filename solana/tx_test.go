@@ -138,9 +138,15 @@ func TestSolanaTxReachesAnAgentAndComesBackSigned(t *testing.T) {
 	}
 }
 
-// An agent that has never heard of the extension is a different problem from
-// one that declined, and the caller needs to be able to tell them apart.
-func TestSolanaTxExplainsAnAgentWithoutOne(t *testing.T) {
+// An agent that has never heard of the extension is not a dead end. A plain
+// ssh-agent signs anything it is handed, so the transaction is built here and
+// the message goes to it as an ordinary signature request - which is why this
+// reaches a signature at all.
+//
+// It does have one thing the wallet did not have to think about: an agent will
+// not choose an account. With a single key on offer the choice is made for it;
+// with more than one it has to be named.
+func TestSolanaTxSignsWithAPlainSSHAgent(t *testing.T) {
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatalf("generate: %v", err)
@@ -182,14 +188,12 @@ func TestSolanaTxExplainsAnAgentWithoutOne(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	_, err = solana.Ask(ctx, path, soltxRequest(t, "5cyyvrzC3N3Kz1vU1iA9symxyMpKWFPSU3AmBdt9XKC5", 1))
-	if err == nil {
-		t.Fatal("an agent with no wallet should not have signed")
+	resp, err := solana.Ask(ctx, path, soltxRequest(t, "5cyyvrzC3N3Kz1vU1iA9symxyMpKWFPSU3AmBdt9XKC5", 1))
+	if err != nil {
+		t.Fatalf("a plain ssh-agent should be able to sign: %v", err)
 	}
-	// A plain ssh-agent signs anything, so being told that this command is
-	// unnecessary is more use than being sent off to attach a wallet.
-	if !strings.Contains(err.Error(), "real ssh-agent you do not need this command") {
-		t.Errorf("the refusal should say why this command is not needed, got %v", err)
+	if len(resp.SignedTransaction) == 0 {
+		t.Fatal("no signed transaction came back")
 	}
 }
 

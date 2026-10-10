@@ -131,6 +131,22 @@ func Ask(ctx context.Context, sockPath string, req agentkey.SolanaTxRequest) (ag
 			"no agent: SSH_AUTH_SOCK is not set, so nothing here can ask for a signature")
 	}
 
+	resp, err := askOnce(ctx, sockPath, req)
+	if errors.Is(err, agent.ErrExtensionUnsupported) {
+		// An agent that has never heard of the extension is the ordinary case
+		// rather than an exceptional one - every ssh-agent in the world is
+		// one, and it will sign anything asked of it. So the transaction is
+		// built here and signed through the ordinary signature request,
+		// which is the one thing such an agent does understand.
+		return SignWithAgent(ctx, sockPath, req)
+	}
+	return resp, err
+}
+
+// askOnce is the extension conversation on its own, over a connection of its
+// own. It is separate so that Ask can retry on a fresh socket: the one the
+// failed extension request was sent on is not a socket to keep talking on.
+func askOnce(ctx context.Context, sockPath string, req agentkey.SolanaTxRequest) (agentkey.SolanaTxResponse, error) {
 	var dialer net.Dialer
 	conn, err := dialer.DialContext(ctx, "unix", sockPath)
 	if err != nil {
@@ -173,6 +189,13 @@ func AskOver(ctx context.Context, conn net.Conn, req agentkey.SolanaTxRequest) (
 	agentConn := agent.NewClient(conn)
 	raw, err := agentConn.Extension(agentkey.SolanaTxExtension, body)
 	if err != nil {
+		if errors.Is(err, agent.ErrExtensionUnsupported) {
+			// Returned as itself, so the caller can tell "this agent does
+			// not know the extension" from every other failure and reach
+			// for the path that works with an agent that has never heard
+			// of it. Rewriting it here would throw that away.
+			return resp, err
+		}
 		return resp, describeExtensionFailure(err)
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
