@@ -30,23 +30,14 @@ const signatureTimeout = 2 * time.Minute
 // asking, but the wrapping happens after parsing, where the names have been
 // dropped, so the public key's own type and fingerprint stand in.
 func confirmAll(signers []gossh.Signer, forward bool, ask AskSignature) []gossh.Signer {
-	if !forward || ask == nil || len(signers) == 0 {
+	if !confirmBeforeSigning(forward, ask) || len(signers) == 0 {
 		return nil
 	}
 	wrapped := make([]gossh.Signer, 0, len(signers))
 	for _, signer := range signers {
-		wrapped = append(wrapped, NewConfirmingSigner(signer, keyLabel(signer), ask))
+		wrapped = append(wrapped, confirmOne(signer, ask))
 	}
 	return wrapped
-}
-
-// keyLabel names a key the way a person would recognise it.
-func keyLabel(signer gossh.Signer) string {
-	pub := signer.PublicKey()
-	if fp := gossh.FingerprintSHA256(pub); fp != "" {
-		return fmt.Sprintf("%s %s", pub.Type(), fp)
-	}
-	return pub.Type()
 }
 
 // awaitStringTimeout is awaitString with a deadline. It returns an error rather

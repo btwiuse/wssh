@@ -65,3 +65,31 @@ func (c *ConfirmingSigner) Sign(rand io.Reader, data []byte) (*gossh.Signature, 
 	}
 	return c.inner.Sign(rand, data)
 }
+
+// confirmBeforeSigning is whether a signature should stop and ask.
+//
+// Turning it off keeps the ordinary case ordinary: without it the session
+// never opens an agent channel and the page is never asked anything about
+// signing.
+func confirmBeforeSigning(forward bool, ask AskSignature) bool {
+	return forward && ask != nil
+}
+
+// confirmOne is one signer that asks first.
+//
+// The label comes from the public key rather than from the key material,
+// because the wrapping happens after parsing, where the names have been
+// dropped. That is a lesser loss than it looks: what the question needs to say
+// is which key is asking, and a fingerprint does that.
+func confirmOne(signer gossh.Signer, ask AskSignature) gossh.Signer {
+	return NewConfirmingSigner(signer, keyLabel(signer), ask)
+}
+
+// keyLabel names a key the way a person would recognise it.
+func keyLabel(signer gossh.Signer) string {
+	pub := signer.PublicKey()
+	if fp := gossh.FingerprintSHA256(pub); fp != "" {
+		return fmt.Sprintf("%s %s", pub.Type(), fp)
+	}
+	return pub.Type()
+}

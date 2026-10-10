@@ -166,6 +166,7 @@ func jsConnect(_ js.Value, args []js.Value) any {
 		// not, so that "no wallet here" comes back as an answer rather than
 		// as the same refusal a real ssh-agent would give.
 		var walletRing agentkey.Agent
+		var walletKey *agentkey.Key
 		var walletPub ed25519.PublicKey
 		if creds.WalletPublicKey != "" {
 			wallet, err := walletSigner(creds.WalletPublicKey, creds.WalletAddress)
@@ -190,10 +191,15 @@ func jsConnect(_ js.Value, args []js.Value) any {
 			// an agent is a Solana account, so the address alone would not
 			// distinguish them - the point is that this one is the connected
 			// wallet and not a key the user imported.
-			keys = append(keys, agentkey.Key{Signer: wallet, Comment: walletComment(creds)})
+			//
+			// Held apart from the imported keys rather than appended to them,
+			// because it must not be wrapped: its signer already crosses the
+			// page bridge, where the wallet asks. Wrapping it would ask twice
+			// for one signature.
+			walletKey = &agentkey.Key{Signer: wallet, Comment: walletComment(creds)}
 		}
 
-		if len(keys) > 0 {
+		if len(keys) > 0 || walletKey != nil {
 			// The keyring answers Solana transactions, so anything in the
 			// session can ask the wallet to sign one. There is no switch for
 			// this: forwarding a wallet is already the decision, and a
@@ -203,7 +209,23 @@ func jsConnect(_ js.Value, args []js.Value) any {
 			// Without a wallet the extension is attached with nothing behind
 			// it, so the refusal names that rather than looking like an agent
 			// that has never heard of transactions.
-			ring, err := agentkey.KeyringWithComments(keys)
+			// This is the keyring the session actually talks to, so it is
+			// where the asking has to happen. Wrapping only AgentSigners
+			// asked for nothing: serveAgentChannel prefers AgentKeyring
+			// whenever there is one, and there is one whenever the user has
+			// any key at all.
+			offered := make([]agentkey.Key, 0, len(keys)+1)
+			for _, key := range keys {
+				if confirmBeforeSigning(creds.ForwardAgent, confirmSignature) {
+					key.Signer = confirmOne(key.Signer, confirmSignature)
+				}
+				offered = append(offered, key)
+			}
+			if walletKey.Signer != nil {
+				offered = append(offered, *walletKey)
+			}
+
+			ring, err := agentkey.KeyringWithComments(offered)
 			if err != nil {
 				post(map[string]any{"type": "error",
 					"message": "could not prepare the signing keyring: " + err.Error()})
@@ -221,11 +243,18 @@ func jsConnect(_ js.Value, args []js.Value) any {
 			walletRing = ring
 		}
 
-		// The comments travel in the keyring above; Options takes the
-		// signers on their own.
-		signers := make([]gossh.Signer, 0, len(keys))
+		// What the session is offered: the signers, wrapped so that nothing
+		// is signed without a yes. This is the path used when there is no
+		// keyring to reach through - no Solana extension to attach, or a
+		// caller that has no wallet at all.
+		//
+		// Every signature asks again; a yes is never remembered.
+		signers := make([]gossh.Signer, 0, len(keys)+1)
 		for _, k := range keys {
 			signers = append(signers, k.Signer)
+		}
+		if walletKey.Signer != nil {
+			signers = append(signers, walletKey.Signer)
 		}
 
 		sess, err := Dial(context.Background(), Options{
@@ -236,10 +265,10 @@ func jsConnect(_ js.Value, args []js.Value) any {
 			Cols:       cols,
 			Rows:       rows,
 			Command:    command,
-			// Wrapping in ConfirmingSigner is what makes forwarding
-			// acceptable from a browser: the keys stay here, and nothing is
-			// signed without a yes first. Every signature asks again; a yes
-			// is never remembered.
+			// The keys stay in the browser either way. Forwarding a wallet
+			// is already the decision, so there is no switch for the
+			// extension: a remembered approval would hand it open to whatever
+			// got as far as a shell.
 			AgentSigners: confirmAll(signers, creds.ForwardAgent, confirmSignature),
 			AgentKeyring: walletRing,
 			OnData:       postData,
