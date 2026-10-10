@@ -92,14 +92,6 @@ type SolanaTxResponse struct {
 	// Empty means the answer is yes.
 	Refusal string `json:"refusal,omitempty"`
 
-	// Payer is the base58 wallet public key that holds the signing key.
-	// Returned on every response so a caller that did not already know
-	// which pubkey the agent represents can ask once and pass it back
-	// on later requests (the memo program, for example, needs the signer
-	// listed in accounts and the wallet fills the signer itself only
-	// when the request already names it).
-	Payer string `json:"payer,omitempty"`
-
 	// message is the part the signature covers, kept so a fixture can be read
 	// apart in a test. It is not on the wire.
 	message           []byte `json:"-"`
@@ -119,17 +111,6 @@ func ownPublicKey(signer gossh.Signer) ed25519.PublicKey {
 	}
 	pub, _ := crypto.CryptoPublicKey().(ed25519.PublicKey)
 	return pub
-}
-
-// walletPayer is the base58 wallet public key, or empty when no signer is
-// attached. The response carries it on every path - refusal, success, or
-// missing-input - so a caller that did not already know which pubkey the
-// agent represents can ask once and pass it back on later requests.
-func walletPayer(signer gossh.Signer) string {
-	if pub := ownPublicKey(signer); pub != nil {
-		return siws.Base58Encode(pub)
-	}
-	return ""
 }
 
 // SolanaBuild asks for a transaction to be built without being signed, for an
@@ -233,8 +214,16 @@ func ParseSolanaTxRequest(contents []byte) (SolanaTxRequest, error) {
 		// else still has to name its accounts up front, since a missing one
 		// is a regression of the request shape rather than something the
 		// wallet can recover from.
+		//
+		// The wording names the agent rather than the wallet because the
+		// browser-side builder has its own check with the same words. A
+		// refusal that does not say which side produced it is one the reader
+		// has to bisect by hand, and this one means the build in front of you
+		// predates the carve-out.
 		if len(in.Accounts) == 0 && !isNoAccountProgram(in.ProgramID) {
-			return req, fmt.Errorf("instruction %d names no accounts", i)
+			return req, fmt.Errorf(
+				"the agent refused instruction %d: it names no accounts, and only "+
+					"the memo program may leave the accounts list empty", i)
 		}
 		if len(in.Accounts) > solanaMaxAccounts {
 			return req, fmt.Errorf("instruction %d names %d accounts", i, len(in.Accounts))
@@ -364,7 +353,6 @@ func (t *SolanaTx) ExtensionHandler(signer gossh.Signer) func(name string, conte
 			return json.Marshal(SolanaTxResponse{
 				Refusal: fmt.Sprintf("a transaction request carries %d instructions, the limit is %d",
 					len(req.Instructions), t.maxInstructions()),
-				Payer:   walletPayer(signer),
 			})
 		}
 
@@ -378,20 +366,15 @@ func (t *SolanaTx) ExtensionHandler(signer gossh.Signer) func(name string, conte
 			if err != nil {
 				return json.Marshal(SolanaTxResponse{
 					Refusal: fmt.Sprintf("the wallet did not sign: %v", err),
-					Payer:   walletPayer(signer),
 				})
 			}
 			if used == nil || !bytes.Equal(used, ownPublicKey(signer)) {
 				return json.Marshal(SolanaTxResponse{
 					Refusal: "the answer was signed by a key this agent does not hold",
-					Payer:   walletPayer(signer),
 				})
 			}
 			if err := VerifySolanaTx(resp, ownPublicKey(signer)); err != nil {
-				return json.Marshal(SolanaTxResponse{Refusal: err.Error(), Payer: walletPayer(signer)})
-			}
-			if resp.Payer == "" {
-				resp.Payer = walletPayer(signer)
+				return json.Marshal(SolanaTxResponse{Refusal: err.Error()})
 			}
 			return json.Marshal(resp)
 		}
@@ -400,7 +383,6 @@ func (t *SolanaTx) ExtensionHandler(signer gossh.Signer) func(name string, conte
 			return json.Marshal(SolanaTxResponse{
 				Refusal: "this session has nothing that can sign a transaction: " +
 					"connect a wallet, or give the session a key",
-				Payer:   walletPayer(signer),
 			})
 		}
 
@@ -419,24 +401,22 @@ func (t *SolanaTx) ExtensionHandler(signer gossh.Signer) func(name string, conte
 		// the signature belongs here because the key is here.
 		built, err := t.Build(req)
 		if err != nil {
-			return json.Marshal(SolanaTxResponse{Refusal: err.Error(), Payer: walletPayer(signer)})
+			return json.Marshal(SolanaTxResponse{Refusal: err.Error()})
 		}
 		signatures, message, err := splitSolanaTransaction(built)
 		if err != nil {
-			return json.Marshal(SolanaTxResponse{Refusal: err.Error(), Payer: walletPayer(signer)})
+			return json.Marshal(SolanaTxResponse{Refusal: err.Error()})
 		}
 
 		signed, err := signer.Sign(rand.Reader, message)
 		if err != nil {
 			return json.Marshal(SolanaTxResponse{
 				Refusal: "the session key could not sign: " + err.Error(),
-				Payer:   walletPayer(signer),
 			})
 		}
 
 		out := append([]byte{byte(len(signatures))}, signed.Blob...)
 		return json.Marshal(SolanaTxResponse{
-			Payer:            walletPayer(signer),
 			Signature:         signed.Blob,
 			SignedTransaction: append(out, message...),
 		})

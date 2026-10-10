@@ -193,7 +193,10 @@ function buildTransaction(request, web3, provider, payer) {
     // we can recover from.
     const isMemo = instruction?.programId === MEMO_PROGRAM_ID;
     if (!instruction?.accounts?.length && !isMemo) {
-     throw new Error(`instruction ${i} names no accounts`);
+     throw new Error(
+      `the wallet refused instruction ${i}: it names no accounts, and only the ` +
+      `memo program may leave the accounts list empty`,
+     );
     }
 
     let programId;

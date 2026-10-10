@@ -18,11 +18,20 @@ STATIC := cmd/wssh/static
 WASM   := $(STATIC)/ssh.wasm
 WASMJS := $(STATIC)/wasm_exec.js
 
-# Everything that can change the browser client. Listed explicitly rather than
-# found at parse time so the dependency is visible and stays correct when files
-# move.
-WASM_SRC := client/build.sh client/client.go client/wasm.go client/wasmauth.go \
-            client/cmd/webssh-web/main.go go.mod
+# Everything that can change the browser client.
+#
+# Found with go list rather than written out by hand, because a hand-kept
+# list is a list that goes stale, and a stale list here is worse than a
+# broken build: the wasm keeps compiling code that no longer matches the tree,
+# the page keeps working, and the transaction builder quietly runs last week's
+# rules. Asking the toolchain which files actually go into the binary is the
+# only list that cannot be wrong that way.
+#
+# The listing runs for the target, not the host: client/cmd/webssh-web is
+# behind a js && wasm build tag, so a host-platform go list reports no files
+# at all and the dependency quietly becomes empty.
+WASM_GO := $(shell GOOS=js GOARCH=wasm CGO_ENABLED=0 go list -f '{{if .Module}}{{if eq .Module.Path "github.com/btwiuse/wssh"}}{{range .GoFiles}}{{$$.Dir}}/{{.}} {{end}}{{end}}{{end}}' -deps ./client/cmd/webssh-web 2>/dev/null)
+WASM_SRC := client/build.sh $(WASM_GO) go.mod
 
 .PHONY: wssh
 wssh: $(WASM) $(WASMJS) ## build bin/wssh, populating static/ first
