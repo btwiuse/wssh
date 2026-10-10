@@ -46,7 +46,7 @@ export function signedTransactionBytes(resp: SolanaTxResponse): Uint8Array {
   if (!resp.signedTransaction) {
     throw new Error("the agent returned no signed transaction");
   }
-  return Uint8Array.from(atob(resp.signedTransaction), (c) => c.charCodeAt(0));
+  return hexToBytes(resp.signedTransaction, "signed transaction");
 }
 
 const EXTENSION_NAME = "solana-tx@wssh";
@@ -160,19 +160,39 @@ export async function ask(
 
     if (verbose) {
       console.error(`[agent] reply    ${reply.length} bytes`);
-      const hex = Array.from(reply).map((b) => b.toString(16).padStart(2, "0")).join(" ");
-      console.error(`[agent]   hex: ${hex}`);
+      console.error(`[agent]   hex: ${bytesToHex(reply).replace(/(..)/g, "$1 ")}`);
     }
 
     const { ok, payload } = readExtensionReply(reply);
     if (!ok) {
       if (reply.length === 0 || reply[0] === SSH_AGENT_FAILURE) {
         throw new Error(
-          "this agent does not sign Solana transactions. If it is a real " +
-            "ssh-agent you do not need this command: it will sign anything " +
-            "you ask of it, so git push and ssh-keygen work as they always " +
-            "have. Otherwise it is a browser agent with no wallet attached, " +
-            "which needs one, and the agent forwarding that reaches it",
+          "this agent has no Solana extension, which is what every real " +
+            "ssh-agent says. Its ed25519 keys are still Solana accounts, and " +
+            "bin/sol-tx builds the transaction and asks the agent to sign it " +
+            "the ordinary way; this script only shows what the agent says, " +
+            "and cannot do that. If it is a browser agent, it needs a wallet " +
+            "connected on the page",
+        );
+        // SSH_AGENT_FAILURE is the protocol's "no such extension", which is
+        // what every real ssh-agent says and always will: it signs SSH data
+        // and knows nothing about Solana.
+        //
+        // What to do about it is not "nothing". A key in such an agent is
+        // an ed25519 key, and an ed25519 key is a Solana account, so the
+        // transaction can be built and handed over as an ordinary signature
+        // request - which is one thing an agent has always understood.
+        //
+        // That path lives in bin/sol-tx, and it is not here: this script
+        // builds no transaction, so it has nothing to fall back to. Saying
+        // so is more use than failing with an instruction that is wrong.
+        throw new Error(
+          "this agent has no Solana extension, which is what every real " +
+            "ssh-agent says. Its ed25519 keys are still Solana accounts, and " +
+            "bin/sol-tx builds the transaction and asks the agent to sign it " +
+            "the ordinary way; this script only shows what the agent says, " +
+            "and cannot do that. If it is a browser agent, it needs a wallet " +
+            "connected on the page",
         );
       }
       throw new Error(`the agent refused to sign: ${new TextDecoder().decode(payload)}`);
@@ -188,8 +208,7 @@ export async function ask(
       // an off-by-one in the wire format looks like "JSON parse error" with
       // nothing to pin it on.
       console.error(`[agent] payload ${payload.length} bytes (not JSON):`);
-      const hex = Array.from(payload).map((b) => b.toString(16).padStart(2, "0")).join(" ");
-      console.error(`[agent]   hex: ${hex}`);
+      console.error(`[agent]   hex: ${bytesToHex(payload).replace(/(..)/g, "$1 ")}`);
       console.error(`[agent]   text: ${jsonText}`);
       throw new Error(`the agent's answer is not readable JSON: ${(err as Error).message}`);
     }
@@ -218,6 +237,36 @@ export interface AgentKey {
   /** base58, for an ed25519 key; empty for anything that cannot sign Solana */
   address: string;
   comment: string;
+}
+
+/**
+ * Hex to bytes.
+ *
+ * The response fields are hex - the page writes them with bytesToHex and the
+ * Go client reads them with a hex decoder - and reading them as base64 was
+ * quietly wrong: every character of a hex string also happens to be a legal
+ * base64 character, so nothing failed. It produced roughly half again as many
+ * bytes, and everything downstream then read a transaction that was not one:
+ * a plausible address of the right length, naming an account nobody holds.
+ */
+function hexToBytes(hex: string, what: string): Uint8Array {
+  if (hex.length % 2 !== 0) {
+    throw new Error(`the ${what} is ${hex.length} hex characters, which is not a whole number of bytes`);
+  }
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    const byte = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+    if (Number.isNaN(byte)) {
+      throw new Error(`the ${what} has something that is not hex at character ${i * 2}`);
+    }
+    out[i] = byte;
+  }
+  return out;
+}
+
+/** Hex without separators, which is what the response fields carry. */
+function bytesToHex(b: Uint8Array): string {
+  return Array.from(b).map((x) => x.toString(16).padStart(2, "0")).join("");
 }
 
 /**
@@ -251,6 +300,14 @@ export async function list(sockPath: string, verbose = false): Promise<AgentKey[
   } finally {
     conn.close();
   }
+}
+
+/** Read one length-prefixed string, refusing a length past the end. */
+function readOneString(buf: Uint8Array, what: string): Uint8Array {
+  if (buf.length < 4) throw new Error(`the answer carried no ${what}`);
+  const len = new DataView(buf.buffer, buf.byteOffset, buf.byteLength).getUint32(0, false);
+  if (4 + len > buf.length) throw new Error(`the answer claimed a ${what} past its end`);
+  return buf.subarray(4, 4 + len);
 }
 
 /**
