@@ -46,7 +46,9 @@ import { signSolanaTransaction, warmUp, base58Decode } from './solana.js';
 // it: an ed25519 key generated here is the same kind of key, which is
 // the whole reason a session can sign without one.
 //
-// ?bin=   path to the wssh binary in the session (default: wssh on PATH)
+// ?bin=   path to the sol-tx binary in the session (default: sol-tx on PATH)
+//         sol-tx is its own binary: it does not speak SSH, and it is not a
+//         wssh subcommand, so the two are named separately here on purpose.
 // ?rpc=   endpoint to fetch a live blockhash from. None is needed by default:
 //          nothing here is broadcast, so the blockhash only has to be
 //          well-formed, and the public RPCs refuse browser requests for CORS
@@ -69,7 +71,7 @@ const CLEAN = /\u001b\[[0-9;?]*[a-zA-Z]|\u001b\][^\u0007]*\u0007|\[\?\d+[hl]|\u0
 const clean = (line) => line.replace(CLEAN, '').trim();
 
 const params = new URLSearchParams(location.search);
-const BIN = params.get('bin') || 'wssh';
+const BIN = params.get('bin') || 'sol-tx';
 // Default to devnet: mainnet rejects browser fetches with 403 because of CORS,
 // and the test only needs a network that accepts requests with an Origin
 // header. Pass ?rpc= to point at any other endpoint.
@@ -233,6 +235,10 @@ function typeToShell(text) {
 }
 
 const CANARY = 'ORDERING_CANARY_12345';
+// Phase 2 needs its own. A command's error is printed under a heading, so a
+// test that judges as soon as it sees that heading judges before the reason
+// has arrived - which is how a failure used to report nothing but ERROR.
+const CANARY_TX = 'TX_RESULT_CANARY_45678';
 // Nothing is broadcast, so this is only ever a shape that has to be right.
 const LAMPORTS = 1;
 
@@ -300,14 +306,14 @@ async function phase2() {
 
   // To and payer are both this key: a transaction whose fee payer it is not
   // will not send, and the point here is the shape not the money.
-  const cmd = `${BIN} sol-tx transfer --to ${key.address} --lamports ${LAMPORTS} ` +
+  const cmd = `${BIN} transfer --to ${key.address} --lamports ${LAMPORTS} ` +
               `--blockhash ${bh} --payer ${key.address}`;
   say('$ ' + cmd);
 
   acc = '';
-  phase = 'tx';
+  phase = 'tx-running';
   txStartedAt = Date.now();
-  typeToShell(cmd);
+  typeToShell(cmd + `; echo ${CANARY_TX}\n`);
 }
 
 w.onmessage = async (e) => {
@@ -347,7 +353,20 @@ async function handle(e) {
         await phase2();
       }
 
-    } else if (phase === 'tx') {
+    } else if (phase === 'tx-running') {
+      // The command is followed by an echo of its own canary. Waiting for that
+      // is what stops this judging a failure before the reason has arrived:
+      // fang prints ERROR as a heading and the message under it, so a test that
+      // fires the moment it sees the heading reports the heading and nothing
+      // else - which is what it was doing before this.
+      const first = acc.indexOf(CANARY_TX);
+      if (first === -1 || acc.indexOf(CANARY_TX, first + CANARY_TX.length) === -1) {
+        return; // the command has not finished; wait for the rest of it
+      }
+      phase = 'tx';
+    }
+
+    if (phase === 'tx') {
       // Wait for the command rather than judging the first chunk: the shell
       // echoes its prompt before anything runs, and a signed transaction is
       // only the last line of several.
@@ -362,7 +381,11 @@ async function handle(e) {
       if (/^ERROR/i.test(last) || /refused|could not|not authorized|no wallet/i.test(last)) {
         phase = 'done';
         say('<span class="fail">FAIL — the transaction was refused</span>');
-        say(last);
+        // The last line is not the reason. fang prints "ERROR" as a heading
+        // and puts the message under it, so reporting the tail only ever
+        // says ERROR, which is the one thing the person reading it already
+        // knew. The lines around it are the reason.
+        say(plain.slice(-10).join('\n'));
         failures.push('transaction');
         finish();
         return;
