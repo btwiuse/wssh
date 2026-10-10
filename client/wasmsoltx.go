@@ -108,13 +108,6 @@ func solanaAsker() agentkey.SolanaAsk {
 		if answer.Refusal != "" {
 			return agentkey.SolanaTxResponse{}, nil, errors.New(answer.Refusal)
 		}
-		if answer.Unsigned != "" {
-			raw, err := decodeHex(answer.Unsigned, "transaction")
-			if err != nil {
-				return agentkey.SolanaTxResponse{}, nil, err
-			}
-			return agentkey.SolanaTxResponse{Unsigned: raw}, nil, nil
-		}
 
 		pub, sig, signed, err := decodeSolTxAnswer(answer)
 		if err != nil {
