@@ -1,3 +1,12 @@
+// sol-tx asks the browser wallet behind a wssh session to sign a Solana
+// transaction, and optionally broadcasts it.
+//
+// It is its own binary rather than a wssh subcommand because nothing it does
+// is about carrying SSH. It never opens a connection, never serves a page, and
+// never touches the host key: it reads an instruction list, hands it to the
+// agent that SSH_AUTH_SOCK points at, and prints or sends what comes back.
+// Shipping it inside wssh would mean anyone who wanted a transaction signer
+// installed a WebSocket transport to get it.
 package main
 
 import (
@@ -9,11 +18,34 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/fang/v2"
 	"github.com/btwiuse/wssh/auth/agentkey"
 	"github.com/btwiuse/wssh/auth/siws"
-	"github.com/btwiuse/wssh/client"
+	"github.com/btwiuse/wssh/solana"
 	"github.com/spf13/cobra"
 )
+
+// Set with -ldflags at build time, the same way cmd/wssh does, so the two
+// binaries report themselves consistently.
+var (
+	version = "dev"
+	commit  = ""
+)
+
+func main() {
+	options := []fang.Option{
+		fang.WithVersion(version),
+	}
+	if commit != "" {
+		options = append(options, fang.WithCommit(commit))
+	}
+
+	// fang reports the error itself, in its own styled form, so what is left
+	// here is the exit status.
+	if err := fang.Execute(context.Background(), newSolTxCmd(), options...); err != nil {
+		os.Exit(1)
+	}
+}
 
 func newSolTxCmd() *cobra.Command {
 	var (
@@ -59,26 +91,30 @@ so a transfer built against devnet goes to devnet.
 
 Examples:
   # Transfer on mainnet, signed but not sent
-  wssh sol-tx transfer --to 5cyy... --sol 1 --network mainnet
+  sol-tx transfer --to 5cyy... --sol 1 --network mainnet
 
   # Transfer on devnet, signed and broadcast
-  wssh sol-tx transfer --to 5cyy... --sol 0.001 --network devnet --send
+  sol-tx transfer --to 5cyy... --sol 0.001 --network devnet --send
 
   # Transfer against a blockhash you already have
-  wssh sol-tx transfer --to 5cyy... --lamports 1000000000 --blockhash 9xQe...
+  sol-tx transfer --to 5cyy... --lamports 1000000000 --blockhash 9xQe...
 
   # Custom RPC endpoint, taking precedence over --network
-  wssh sol-tx call --program 9xQe... --account 5cyy... --data 3Bxs... --rpc https://my-rpc.example.com
+  sol-tx call --program 9xQe... --account 5cyy... --data 3Bxs... --rpc https://my-rpc.example.com
 
   # Any instruction at all
-  wssh sol-tx call --program 9xQe... --account 5cyy... --data 3Bxs...
+  sol-tx call --program 9xQe... --account 5cyy... --data 3Bxs...
 
   # Attach a note and reach a block, without moving anything
-  wssh sol-tx memo --memo "deployed" --send`,
+  sol-tx memo --memo "deployed" --send`,
 		// "transfer" and "call" are read as a leading word rather than
 		// subcommands, because both share every flag and a person should
 		// not have to say which. The help has always shown them this way, so
 		// making them real would only be catching up with the examples.
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		Version:       version,
+
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			mode := "transfer"
@@ -107,7 +143,7 @@ Examples:
 
 			// The browser may be waiting on a person to read a wallet
 			// prompt, so nothing here should time out in a hurry.
-			resp, err := client.SolanaTxAt(ctx, sockPath, req)
+			resp, err := solana.Ask(ctx, sockPath, req)
 			if err != nil {
 				return err //nolint:wrapcheck
 			}
@@ -121,16 +157,16 @@ Examples:
 			// to the RPC endpoint, so the wallet signs once and the money
 			// moves once, instead of being shuffled between two commands.
 			if send {
-				sig, err := client.SendTransaction(ctx, endpoint, resp.SignedTransaction)
+				sig, err := solana.SendTransaction(ctx, endpoint, resp.SignedTransaction)
 				if err != nil {
 					return err //nolint:wrapcheck
 				}
 				// The signature goes to stdout on its own so that
-				// `SIG=$(wssh sol-tx ... --send)` yields exactly one line.
+				// `SIG=$(sol-tx ... --send)` yields exactly one line.
 				// Everything meant for a person reading the terminal goes to
 				// stderr, including the link to look the transaction up in.
 				fmt.Println(sig)
-				if err := client.ConfirmTransaction(ctx, endpoint, sig); err != nil {
+				if err := solana.ConfirmTransaction(ctx, endpoint, sig); err != nil {
 					return err //nolint:wrapcheck
 				}
 				// Only after the confirmation lands: a signature on its own says
@@ -198,7 +234,7 @@ type solTxRequest struct {
 // flipping --network changes both the blockhash source and the
 // destination for --send, which is what makes one switch cover both.
 func resolveNetwork(name string) string {
-	return client.ResolveNetwork(name)
+	return solana.ResolveNetwork(name)
 }
 
 // effectiveRPC picks the URL the rest of the command will use. --rpc wins
@@ -260,7 +296,7 @@ func buildSolTxRequest(in solTxRequest) (agentkey.SolanaTxRequest, error) {
 		// A note, not a transfer. The instruction carries no accounts at
 		// all, which is the one shape both the agent and the wallet have
 		// to be told to expect.
-		instructions, err := client.NewMemo(in.memo)
+		instructions, err := solana.NewMemo(in.memo)
 		if err != nil {
 			return req, err //nolint:wrapcheck
 		}
@@ -300,13 +336,13 @@ func buildSolTxRequest(in solTxRequest) (agentkey.SolanaTxRequest, error) {
 			if in.sol == "" {
 				return req, errUsage("a transfer needs an amount: --sol or --lamports")
 			}
-			parsed, err := client.ParseLamports(in.sol)
+			parsed, err := solana.ParseLamports(in.sol)
 			if err != nil {
 				return req, err //nolint:wrapcheck
 			}
 			amount = parsed
 		}
-		instructions, err := client.NewSolanaTransfer(client.TransferInstruction{
+		instructions, err := solana.NewTransfer(solana.TransferInstruction{
 			Lamports: amount,
 			To:       in.to,
 		})
@@ -320,7 +356,7 @@ func buildSolTxRequest(in solTxRequest) (agentkey.SolanaTxRequest, error) {
 	}
 
 	if req.Blockhash == "" {
-		blockhash, err := client.LatestBlockhash(context.Background(), in.rpcURL)
+		blockhash, err := solana.LatestBlockhash(context.Background(), in.rpcURL)
 		if err != nil {
 			return req, err //nolint:wrapcheck
 		}

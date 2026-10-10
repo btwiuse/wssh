@@ -66,7 +66,7 @@ beyond a WebSocket proxy:
 
 	root.PersistentFlags().BoolVar(debug, "verbose", false, "log session-level detail")
 
-	root.AddCommand(newServerCmd(), newWebCmd(), newClientCmd(), newKeygenCmd(), newSolTxCmd())
+	root.AddCommand(newServerCmd(), newWebCmd(), newClientCmd(), newKeygenCmd())
 
 	options := []fang.Option{
 		fang.WithVersion(version),

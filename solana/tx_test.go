@@ -1,6 +1,6 @@
 //go:build !js
 
-package client_test
+package solana_test
 
 import (
 	"context"
@@ -22,7 +22,7 @@ import (
 
 	"github.com/btwiuse/wssh/auth/agentkey"
 	"github.com/btwiuse/wssh/auth/siws"
-	"github.com/btwiuse/wssh/client"
+	"github.com/btwiuse/wssh/solana"
 )
 
 // startFakeAgent serves a keyring that signs transactions without a wallet.
@@ -95,7 +95,7 @@ func startFakeAgent(t *testing.T, priv ed25519.PrivateKey) string {
 
 func soltxRequest(t *testing.T, to string, lamports uint64) agentkey.SolanaTxRequest {
 	t.Helper()
-	instructions, err := client.NewSolanaTransfer(client.TransferInstruction{
+	instructions, err := solana.NewTransfer(solana.TransferInstruction{
 		Lamports: lamports,
 		To:       to,
 	})
@@ -122,7 +122,7 @@ func TestSolanaTxReachesAnAgentAndComesBackSigned(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	resp, err := client.SolanaTxAt(ctx, sock, soltxRequest(t, "5cyyvrzC3N3Kz1vU1iA9symxyMpKWFPSU3AmBdt9XKC5", 1_000_000_000))
+	resp, err := solana.Ask(ctx, sock, soltxRequest(t, "5cyyvrzC3N3Kz1vU1iA9symxyMpKWFPSU3AmBdt9XKC5", 1_000_000_000))
 	if err != nil {
 		t.Fatalf("ask: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestSolanaTxExplainsAnAgentWithoutOne(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	_, err = client.SolanaTxAt(ctx, path, soltxRequest(t, "5cyyvrzC3N3Kz1vU1iA9symxyMpKWFPSU3AmBdt9XKC5", 1))
+	_, err = solana.Ask(ctx, path, soltxRequest(t, "5cyyvrzC3N3Kz1vU1iA9symxyMpKWFPSU3AmBdt9XKC5", 1))
 	if err == nil {
 		t.Fatal("an agent with no wallet should not have signed")
 	}
@@ -198,7 +198,7 @@ func TestSolanaTxExplainsAnAgentWithoutOne(t *testing.T) {
 func TestSolanaTxWithNoAgentSaysSo(t *testing.T) {
 	t.Setenv("SSH_AUTH_SOCK", "")
 
-	if _, err := client.SolanaTxAt(context.Background(), "",
+	if _, err := solana.Ask(context.Background(), "",
 		soltxRequest(t, "5cyyvrzC3N3Kz1vU1iA9symxyMpKWFPSU3AmBdt9XKC5", 1)); err == nil {
 		t.Fatal("expected a refusal with no agent")
 	} else if !strings.Contains(err.Error(), "SSH_AUTH_SOCK") {
@@ -210,10 +210,10 @@ func TestSolanaTxWithNoAgentSaysSo(t *testing.T) {
 // amount. It is written here rather than left to the browser because it is a
 // struct, not a serialisation format, and getting it wrong is the difference
 // between sending the money and sending nothing.
-func TestNewSolanaTransfer(t *testing.T) {
+func TestNewTransfer(t *testing.T) {
 	const to = "5cyyvrzC3N3Kz1vU1iA9symxyMpKWFPSU3AmBdt9XKC5"
 
-	instructions, err := client.NewSolanaTransfer(client.TransferInstruction{
+	instructions, err := solana.NewTransfer(solana.TransferInstruction{
 		Lamports: 1_000_000_000,
 		To:       to,
 	})
@@ -224,7 +224,7 @@ func TestNewSolanaTransfer(t *testing.T) {
 		t.Fatalf("a transfer is one instruction, got %d", len(instructions))
 	}
 	in := instructions[0]
-	if in.ProgramID != client.SystemProgramID {
+	if in.ProgramID != solana.SystemProgramID {
 		t.Errorf("program is %q, want the System Program", in.ProgramID)
 	}
 	if len(in.Accounts) != 1 || in.Accounts[0].Address != to {
@@ -255,28 +255,28 @@ func TestNewSolanaTransfer(t *testing.T) {
 	}
 
 	// A transfer of nothing, or to nowhere, is not worth asking a wallet for.
-	if _, err := client.NewSolanaTransfer(client.TransferInstruction{Lamports: 0, To: to}); err == nil {
+	if _, err := solana.NewTransfer(solana.TransferInstruction{Lamports: 0, To: to}); err == nil {
 		t.Error("a transfer of nothing should be refused")
 	}
-	if _, err := client.NewSolanaTransfer(client.TransferInstruction{Lamports: 1, To: "0OIl"}); err == nil {
+	if _, err := solana.NewTransfer(solana.TransferInstruction{Lamports: 1, To: "0OIl"}); err == nil {
 		t.Error("a destination that is not an address should be refused")
 	}
 }
 
 func TestParseLamports(t *testing.T) {
-	got, err := client.ParseLamports("1")
+	got, err := solana.ParseLamports("1")
 	if err != nil {
 		t.Fatalf("1 SOL: %v", err)
 	}
 	if got != 1_000_000_000 {
 		t.Errorf("1 SOL is %d lamports", got)
 	}
-	if _, err := client.ParseLamports("0.000000001"); err != nil {
+	if _, err := solana.ParseLamports("0.000000001"); err != nil {
 		t.Errorf("a billionth of a SOL should parse: %v", err)
 	}
 
 	for _, bad := range []string{"0", "-1", "", "lots", "1000000000"} {
-		if _, err := client.ParseLamports(bad); err == nil {
+		if _, err := solana.ParseLamports(bad); err == nil {
 			t.Errorf("%q should not have parsed", bad)
 		}
 	}
@@ -308,7 +308,7 @@ func TestLatestBlockhash(t *testing.T) {
 	}))
 	defer server.Close()
 
-	got, err := client.LatestBlockhash(context.Background(), server.URL)
+	got, err := solana.LatestBlockhash(context.Background(), server.URL)
 	if err != nil {
 		t.Fatalf("blockhash: %v", err)
 	}
@@ -324,7 +324,7 @@ func TestLatestBlockhashReportsWhatWentWrong(t *testing.T) {
 		}))
 		defer server.Close()
 
-		if _, err := client.LatestBlockhash(context.Background(), server.URL); err == nil {
+		if _, err := solana.LatestBlockhash(context.Background(), server.URL); err == nil {
 			t.Fatal("an endpoint error should be reported")
 		} else if !strings.Contains(err.Error(), "bad params") {
 			t.Errorf("the endpoint's own wording should survive, got %v", err)
@@ -337,13 +337,13 @@ func TestLatestBlockhashReportsWhatWentWrong(t *testing.T) {
 		}))
 		defer server.Close()
 
-		if _, err := client.LatestBlockhash(context.Background(), server.URL); err == nil {
+		if _, err := solana.LatestBlockhash(context.Background(), server.URL); err == nil {
 			t.Fatal("an empty answer should be reported")
 		}
 	})
 
 	t.Run("an endpoint that is not there", func(t *testing.T) {
-		if _, err := client.LatestBlockhash(context.Background(), "http://127.0.0.1:1"); err == nil {
+		if _, err := solana.LatestBlockhash(context.Background(), "http://127.0.0.1:1"); err == nil {
 			t.Fatal("an unreachable endpoint should be reported")
 		}
 	})
@@ -354,7 +354,7 @@ func TestLatestBlockhashReportsWhatWentWrong(t *testing.T) {
 		}))
 		defer server.Close()
 
-		_, err := client.LatestBlockhash(context.Background(), server.URL)
+		_, err := solana.LatestBlockhash(context.Background(), server.URL)
 		if err == nil {
 			t.Fatal("method-not-found should be reported")
 		}
@@ -369,7 +369,7 @@ func TestLatestBlockhashReportsWhatWentWrong(t *testing.T) {
 		}))
 		defer server.Close()
 
-		_, err := client.LatestBlockhash(context.Background(), server.URL)
+		_, err := solana.LatestBlockhash(context.Background(), server.URL)
 		if err == nil {
 			t.Fatal("a non-JSON body should be reported")
 		}
@@ -402,7 +402,7 @@ func TestResolveNetwork(t *testing.T) {
 		{"an unknown name passes through", "staging", "staging"},
 	}
 	for _, c := range cases {
-		if got := client.ResolveNetwork(c.in); got != c.want {
+		if got := solana.ResolveNetwork(c.in); got != c.want {
 			t.Errorf("%s: ResolveNetwork(%q) = %q, want %q", c.name, c.in, got, c.want)
 		}
 	}
@@ -436,7 +436,7 @@ func TestSendTransaction(t *testing.T) {
 	}))
 	defer server.Close()
 
-	got, err := client.SendTransaction(context.Background(), server.URL, []byte("any bytes"))
+	got, err := solana.SendTransaction(context.Background(), server.URL, []byte("any bytes"))
 	if err != nil {
 		t.Fatalf("send: %v", err)
 	}
@@ -465,7 +465,7 @@ func TestConfirmTransaction(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 
-		if err := client.ConfirmTransaction(ctx, server.URL, "sig"); err == nil {
+		if err := solana.ConfirmTransaction(ctx, server.URL, "sig"); err == nil {
 			t.Fatal("a signature that never arrives should not read as confirmed")
 		}
 	})
@@ -476,7 +476,7 @@ func TestConfirmTransaction(t *testing.T) {
 		}))
 		defer server.Close()
 
-		if err := client.ConfirmTransaction(context.Background(), server.URL, "sig"); err == nil {
+		if err := solana.ConfirmTransaction(context.Background(), server.URL, "sig"); err == nil {
 			t.Fatal("an endpoint error should be reported")
 		} else if !strings.Contains(err.Error(), "blockhash not found") {
 			t.Errorf("the endpoint's own wording should survive, got %v", err)
@@ -488,15 +488,15 @@ func TestConfirmTransaction(t *testing.T) {
 // accounts list is the point rather than an oversight: the memo program's
 // only account is the signer, and the wallet is the signer.
 func TestNewMemo(t *testing.T) {
-	got, err := client.NewMemo("deployed")
+	got, err := solana.NewMemo("deployed")
 	if err != nil {
 		t.Fatalf("a memo was refused: %v", err)
 	}
 	if len(got) != 1 {
 		t.Fatalf("got %d instructions, want 1", len(got))
 	}
-	if got[0].ProgramID != client.MemoProgramID {
-		t.Errorf("program %q, want the memo program %q", got[0].ProgramID, client.MemoProgramID)
+	if got[0].ProgramID != solana.MemoProgramID {
+		t.Errorf("program %q, want the memo program %q", got[0].ProgramID, solana.MemoProgramID)
 	}
 	if len(got[0].Accounts) != 0 {
 		t.Errorf("a memo names %d accounts, want none", len(got[0].Accounts))
@@ -507,22 +507,22 @@ func TestNewMemo(t *testing.T) {
 
 	// The program id has to be a real address or every memo is refused by
 	// the wallet for a reason that reads like a typo.
-	if _, err := siws.Base58Decode(client.MemoProgramID); err != nil {
+	if _, err := siws.Base58Decode(solana.MemoProgramID); err != nil {
 		t.Errorf("the memo program id is not base58: %v", err)
 	}
 }
 
 func TestNewMemoRefusesWhatTheProgramWouldRefuse(t *testing.T) {
-	if _, err := client.NewMemo(""); err == nil {
+	if _, err := solana.NewMemo(""); err == nil {
 		t.Error("an empty memo should have been refused")
 	}
 	// The program rejects anything longer as "Memo too long", and the
 	// transaction lands as a fee-burning error, so the limit has to be
 	// something a person reads before signing.
-	if _, err := client.NewMemo(strings.Repeat("x", 567)); err == nil {
+	if _, err := solana.NewMemo(strings.Repeat("x", 567)); err == nil {
 		t.Error("a memo over the program's limit should have been refused")
 	}
-	if _, err := client.NewMemo(strings.Repeat("x", 566)); err != nil {
+	if _, err := solana.NewMemo(strings.Repeat("x", 566)); err != nil {
 		t.Errorf("a memo at the limit should be accepted, got %v", err)
 	}
 }
@@ -544,7 +544,7 @@ func TestConfirmTransactionUsesGetSignatureStatuses(t *testing.T) {
 	}))
 	defer server.Close()
 
-	if err := client.ConfirmTransaction(context.Background(), server.URL, "sig"); err != nil {
+	if err := solana.ConfirmTransaction(context.Background(), server.URL, "sig"); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
 	if method != "getSignatureStatuses" {
@@ -568,7 +568,7 @@ func TestConfirmTransactionWaitsForASignatureItCannotSeeYet(t *testing.T) {
 	}))
 	defer server.Close()
 
-	if err := client.ConfirmTransaction(context.Background(), server.URL, "sig"); err != nil {
+	if err := solana.ConfirmTransaction(context.Background(), server.URL, "sig"); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
 	if calls < 2 {
@@ -585,7 +585,7 @@ func TestConfirmTransactionReportsAnOnChainFailure(t *testing.T) {
 	}))
 	defer server.Close()
 
-	err := client.ConfirmTransaction(context.Background(), server.URL, "sig")
+	err := solana.ConfirmTransaction(context.Background(), server.URL, "sig")
 	if err == nil {
 		t.Fatal("a transaction that failed on chain should not read as sent")
 	}

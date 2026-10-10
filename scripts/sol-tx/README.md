@@ -1,7 +1,7 @@
-# wssh sol-tx (Deno)
+# sol-tx, in Deno
 
-A TypeScript reimplementation of `wssh sol-tx` for debugging and learning.
-It does the same job as the Go command (`cmd/wssh/soltx.go`) and is meant
+A TypeScript reimplementation of `sol-tx` for debugging and learning.
+It does the same job as the Go command (`cmd/sol-tx`) and is meant
 to be the version a person can hand-step when the network or the wallet is
 misbehaving. Every byte on the wire is logged in `--verbose` mode.
 

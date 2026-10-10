@@ -1,4 +1,4 @@
-package client
+package solana
 
 import (
 	"bytes"
@@ -84,14 +84,14 @@ type TransferInstruction struct {
 	To string `json:"to"`
 }
 
-// NewSolanaTransfer builds the instruction list for a transfer.
+// NewTransfer builds the instruction list for a transfer.
 //
 // The data field is a System Program transfer: a four-byte discriminant of
 // two, then the amount as eight little-endian bytes. That is twelve bytes of
 // fixed layout rather than a serialisation format, which is why it can be
 // written here without the drift risk that putting the transaction itself in
 // Go would carry.
-func NewSolanaTransfer(transfer TransferInstruction) ([]agentkey.SolanaInstruction, error) {
+func NewTransfer(transfer TransferInstruction) ([]agentkey.SolanaInstruction, error) {
 	if transfer.Lamports == 0 {
 		return nil, errors.New("a transfer of nothing is not worth asking for")
 	}
@@ -118,11 +118,11 @@ func NewSolanaTransfer(transfer TransferInstruction) ([]agentkey.SolanaInstructi
 	}}, nil
 }
 
-// SolanaTxAt asks the agent listening on sockPath to sign a transaction.
+// Ask asks the agent listening on sockPath to sign a transaction.
 //
 // An empty path means $SSH_AUTH_SOCK, which is what a shell sets up for
 // everything else that wants a signature and so the obvious default here too.
-func SolanaTxAt(ctx context.Context, sockPath string, req agentkey.SolanaTxRequest) (agentkey.SolanaTxResponse, error) {
+func Ask(ctx context.Context, sockPath string, req agentkey.SolanaTxRequest) (agentkey.SolanaTxResponse, error) {
 	if sockPath == "" {
 		sockPath = os.Getenv("SSH_AUTH_SOCK")
 	}
@@ -138,10 +138,10 @@ func SolanaTxAt(ctx context.Context, sockPath string, req agentkey.SolanaTxReque
 	}
 	defer conn.Close() //nolint:errcheck
 
-	return SolanaTxOver(ctx, conn, req)
+	return AskOver(ctx, conn, req)
 }
 
-// SolanaTxOver asks an agent, on a connection already open, to sign.
+// AskOver asks an agent, on a connection already open, to sign.
 //
 // The socket is left in a state a caller cannot do much else with afterwards,
 // so this takes the connection rather than a path and says so: one request per
@@ -151,7 +151,7 @@ func SolanaTxAt(ctx context.Context, sockPath string, req agentkey.SolanaTxReque
 // not be coming.
 const solanaTxTimeout = 5 * time.Minute
 
-func SolanaTxOver(ctx context.Context, conn net.Conn, req agentkey.SolanaTxRequest) (agentkey.SolanaTxResponse, error) {
+func AskOver(ctx context.Context, conn net.Conn, req agentkey.SolanaTxRequest) (agentkey.SolanaTxResponse, error) {
 	var resp agentkey.SolanaTxResponse
 
 	body, err := json.Marshal(req)
