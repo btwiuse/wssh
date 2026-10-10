@@ -30,7 +30,7 @@ addEventListener('error', (e) => {
 // The transaction is built by the same code the real page uses. Reimplementing
 // it here would test a copy, and the bugs this exists to catch were all about
 // the real one disagreeing with the server.
-import { signSolanaTransaction, warmUp } from './solana.js';
+import { signSolanaTransaction, warmUp, base58Decode } from './solana.js';
 
 // Exercises worker + Go/WASM + SSH end to end, in two phases.
 //
@@ -140,6 +140,7 @@ async function blockhash() {
 const w = new Worker('./worker.js');
 let phase = 'connect';
 let selfKey = null;
+let solanaLib = null;
 let txStartedAt = 0;
 let acc = '';
 const failures = [];
@@ -151,6 +152,8 @@ function typeToShell(text) {
 }
 
 const CANARY = 'ORDERING_CANARY_12345';
+// Nothing is broadcast, so this is only ever a shape that has to be right.
+const LAMPORTS = 1;
 
 async function start() {
   let credentials = { keys: [], passwords: [] };
@@ -158,8 +161,8 @@ async function start() {
   // The Solana library is fetched while phase 1 runs. It is large enough that
   // a cold fetch outlives the wait a caller would sit through, so the test
   // spends that time on the transport instead.
-  const warm = warmUp().then((w) => typeof w === 'string' ? w : 'ready');
-  warm.then((note) => say('solana library: ' + note));
+  solanaLib = await warmUp();
+  say('solana library: ' + (typeof solanaLib === 'string' ? solanaLib : 'ready'));
 
   try {
     selfKey = await newKey();
@@ -216,7 +219,7 @@ async function phase2() {
 
   // To and payer are both this key: a transaction whose fee payer it is not
   // will not send, and the point here is the shape not the money.
-  const cmd = `${BIN} sol-tx transfer --to ${key.address} --lamports 1 ` +
+  const cmd = `${BIN} sol-tx transfer --to ${key.address} --lamports ${LAMPORTS} ` +
               `--blockhash ${bh} --payer ${key.address}`;
   say('$ ' + cmd);
 
@@ -227,6 +230,19 @@ async function phase2() {
 }
 
 w.onmessage = async (e) => {
+  try {
+    await handle(e);
+  } catch (err) {
+    // A throw in here used to disappear as an unhandled rejection, leaving the
+    // page looking exactly as it does when something has hung. A test that
+    // cannot fail visibly is not a test.
+    say('<span class="fail">FAIL — the page threw: ' + (err && err.message ? err.message : err) + '</span>');
+    failures.push('page');
+    finish();
+  }
+};
+
+async function handle(e) {
   const m = e.data;
 
   if (m.type === 'data') {
@@ -280,15 +296,23 @@ w.onmessage = async (e) => {
         const SYSTEM = '11111111111111111111111111111111';
         const named = confirmation.includes(SYSTEM) && confirmation.includes(selfKey.address);
         if (!named) {
-          say('<span class="fail">FAIL — the confirmation did not name what was being signed</span>');
+          say('<span class="fail">FAIL — the confirmation did not show what was being signed</span>');
           say('showed: ' + (confirmation.slice(0, 300) || '(nothing)'));
           failures.push('confirmation');
         } else {
-          say('<span class="pass">PASS — the confirmation named the account and the program</span>');
+          say('<span class="pass">PASS — the confirmation showed the account and the program</span>');
           say(confirmation.split('\n').slice(0, 8).join('\n'));
         }
 
-        say('<span class="pass">PASS — the browser built a transaction and the server signed it</span>');
+        const problems = checkRoundTrip(signed, { address: selfKey.address, lamports: LAMPORTS });
+        if (problems.length) {
+          say('<span class="fail">FAIL — it is a transaction, but not the one asked for</span>');
+          problems.forEach((p) => say('  - ' + p));
+          failures.push('round trip');
+        } else {
+          say('<span class="pass">PASS — the browser built the transaction and signed it</span>');
+          say('it reads back as the requested transfer: payer, program, account and amount all match');
+        }
         say('signed transaction: ' + signed.slice(0, 60) + '… (' + signed.length + ' base58 chars)');
         finish();
         return;
@@ -347,6 +371,77 @@ w.onerror = (e) => {
   failures.push('worker');
   finish();
 };
+
+// A signed transaction coming back is not the same as the transaction that was
+// asked for. This reads the answer and checks it against the request: a
+// signature proves who signed, not what they signed, and "what" is the part
+// that decides whether anyone lost money.
+function checkRoundTrip(signed, want) {
+  if (!solanaLib || typeof solanaLib === 'string') {
+    return ['the library was not loaded, so the answer could not be read back'];
+  }
+  const { VersionedTransaction, SystemProgram } = solanaLib;
+
+  let tx;
+  try {
+    tx = VersionedTransaction.deserialize(base58Decode(signed));
+  } catch (err) {
+    return ['the answer did not deserialize: ' + err.message];
+  }
+
+  const problems = [];
+  const keys = (tx.message?.staticAccountKeys || []).map((k) => k.toBase58());
+  const program = SystemProgram.programId.toBase58();
+
+  // The fee payer is whoever signs, and it has to be that account or the
+  // transaction will not send.
+  if (keys[0] !== want.address) {
+    problems.push(`fee payer is ${keys[0]}, want ${want.address}`);
+  }
+  if (!keys.includes(program)) {
+    problems.push('the System Program is not among the accounts');
+  }
+  if (!keys.includes(want.address)) {
+    problems.push('the account it was for is not among the accounts');
+  }
+
+  const instructions = tx.message?.compiledInstructions || [];
+  if (instructions.length !== 1) {
+    problems.push(`${instructions.length} instructions, want 1`);
+    return problems;
+  }
+
+  // What was asked for, built by the library rather than by hand here: a test
+  // that re-derives the encoding is testing its own arithmetic.
+  const ix = instructions[0];
+  const expected = solanaLib.SystemProgram.transfer({
+    fromPubkey: new solanaLib.PublicKey(keys[0]),
+    toPubkey: new solanaLib.PublicKey(want.address),
+    lamports: want.lamports,
+  }).data;
+
+  const got = ix.data instanceof Uint8Array ? ix.data : Uint8Array.from(Object.values(ix.data || {}));
+
+  const asList = (a) => Array.from(a).join(',');
+  if (got.length !== expected.length) {
+    problems.push(`instruction data is ${got.length} bytes, want ${expected.length}`);
+    problems.push('  got  ' + asList(got));
+    problems.push('  want ' + asList(expected));
+  } else if (!got.every((b, i) => b === expected[i])) {
+    problems.push('instruction data differs from the transfer that was asked for');
+    problems.push('  got  ' + asList(got));
+    problems.push('  want ' + asList(expected));
+  }
+
+  if (keys[ix.programIdIndex] !== program) {
+    problems.push('the instruction does not call the System Program');
+  }
+  const accounts = (ix.accountKeyIndexes || []).map((i) => keys[i]);
+  if (!accounts.includes(want.address)) {
+    problems.push('the instruction does not name the account it is for');
+  }
+  return problems;
+}
 
 function finish() {
   phase = 'done';
