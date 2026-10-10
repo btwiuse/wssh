@@ -219,6 +219,10 @@ func serve(opts serveOptions) error {
 			log.Warn("any Solana account may sign in: anyone holding any wallet gets " +
 				"a shell on this port")
 		}
+		if opts.Auth.AcceptsAnyKey() {
+			log.Warn("any public key may sign in: anyone holding any key gets a " +
+				"shell on this port")
+		}
 		if len(opts.AgentKeys) > 0 {
 			log.Warn("signing keys loaded: anyone who can reach this port can sign with them")
 		}
@@ -339,9 +343,9 @@ func drain(sessions *wssh.Server, signals <-chan os.Signal, grace time.Duration)
 // serve() logs a warning when it finds nothing configured.
 func addAuthFlags(cmd *cobra.Command, cfg *auth.Config) {
 	cmd.Flags().StringSliceVar(&cfg.KeyFiles, "authorized-keys", nil,
-		`authorized_keys files to accept; "system" means /etc/ssh/authorized_keys and ~/.ssh/authorized_keys`)
+		`authorized_keys files to accept; "system" means /etc/ssh/authorized_keys and ~/.ssh/authorized_keys, "*" accepts any key at all`)
 	cmd.Flags().StringSliceVar(&cfg.Keys, "authorized-key", nil,
-		"an authorized_keys entry given inline, repeatable")
+		`an authorized_keys entry given inline, repeatable; "*" accepts any key at all`)
 	cmd.Flags().StringVar(&cfg.PasswordFile, "password-file", "",
 		"file of accepted passwords, one per line, plaintext or bcrypt")
 	cmd.Flags().StringSliceVar(&cfg.Passwords, "password", nil,

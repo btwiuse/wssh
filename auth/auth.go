@@ -26,15 +26,26 @@ import (
 // standing for "wherever this machine normally keeps authorized keys".
 const SystemAuthorizedKeys = "system"
 
+// AnyKey is the --authorized-keys value that accepts every public key.
+//
+// It follows --authorized-addresses, which accepts every wallet, and it means
+// the same kind of thing: whoever turns it on has decided that the possession
+// of any key at all is good enough, which is close to the same as deciding
+// that anybody is. It is worth saying out loud rather than leaving to be
+// discovered, because it reads like a convenient shorthand and is not one.
+const AnyKey = "*"
+
 // Config describes how clients authenticate. The zero value authenticates
 // nobody, which means it lets everybody in.
 type Config struct {
 	// KeyFiles are authorized_keys files. The literal value "system" expands
-	// to the machine's usual locations.
+	// to the machine's usual locations, and "*" accepts any key at all; see
+	// AnyKey.
 	KeyFiles []string
 
 	// Keys are authorized_keys entries given directly, in the same format as
-	// a line in an authorized_keys file.
+	// a line in an authorized_keys file. The value "*" accepts any key at all;
+	// see AnyKey.
 	Keys []string
 
 	// PasswordFile is a file of accepted passwords, one per line. Blank lines
@@ -47,6 +58,25 @@ type Config struct {
 	// exists precisely so that this is not necessary.
 	Passwords []string
 }
+
+// anyKey reports whether either flag asks for every key rather than a list.
+//
+// Both spellings are accepted because the files flag is the one people reach
+// for, and "*" reads the same way there as it does in --authorized-addresses.
+func (c Config) anyKey() bool {
+	for _, entries := range [][]string{c.KeyFiles, c.Keys} {
+		for _, entry := range entries {
+			if strings.TrimSpace(entry) == AnyKey {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// AcceptsAnyKey reports whether the configuration lets any public key in. The
+// caller uses it to decide whether to say so out loud.
+func (c Config) AcceptsAnyKey() bool { return c.anyKey() }
 
 // Enabled reports whether any authentication method is configured.
 func (c Config) Enabled() bool {
@@ -63,7 +93,14 @@ func (c Config) Enabled() bool {
 func (c Config) Options() ([]ssh.Option, error) {
 	var opts []ssh.Option
 
-	if c.hasKeys() {
+	// Any key at all, if that is what was asked for. Handled before the list
+	// is parsed so that "*" among a list of real keys does not read as an
+	// entry and fail.
+	if c.anyKey() {
+		opts = append(opts, wish.WithPublicKeyAuth(func(_ ssh.Context, _ ssh.PublicKey) bool {
+			return true
+		}))
+	} else if c.hasKeys() {
 		keys, err := parseInlineKeys(c.Keys)
 		if err != nil {
 			return nil, err

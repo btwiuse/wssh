@@ -284,3 +284,79 @@ func mustOptions(t *testing.T, cfg Config) []ssh.Option {
 	}
 	return opts
 }
+
+// "*" in the key list accepts anything at all. It reads like a convenient
+// shorthand for "all of them" and is closer to "anybody", which is worth a
+// test of its own so that nobody changes its meaning by accident.
+func TestAnyKeyAcceptsEverything(t *testing.T) {
+	c := Config{Keys: []string{"*"}}
+	if !c.AcceptsAnyKey() {
+		t.Fatal("\"*\" should accept any key")
+	}
+
+	opts, err := c.Options()
+	if err != nil {
+		t.Fatalf("options: %v", err)
+	}
+	if len(opts) != 1 {
+		t.Fatalf("expected one option, got %d", len(opts))
+	}
+
+	// A key that is on no list is still accepted.
+	key, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	sshPub, err := gossh.NewPublicKey(key)
+	if err != nil {
+		t.Fatalf("wrap: %v", err)
+	}
+	if !accepts(t, opts, sshPub) {
+		t.Error("a key that is on no list was refused")
+	}
+}
+
+// It has to be the only thing that changes: keys alongside it still work, and
+// a list without it is still a list.
+func TestAnyKeyAlongsideRealKeys(t *testing.T) {
+	withStar := Config{Keys: []string{"ssh-ed25519 " + strings.TrimSpace(mustKey(t)) + " someone", "*"}}
+	if !withStar.AcceptsAnyKey() {
+		t.Error("a list containing * should accept any key")
+	}
+
+	withoutStar := Config{Keys: []string{"ssh-ed25519 " + strings.TrimSpace(mustKey(t)) + " someone"}}
+	if withoutStar.AcceptsAnyKey() {
+		t.Error("a list without * should not accept any key")
+	}
+	if !withoutStar.Enabled() {
+		t.Error("a list of real keys is still authentication")
+	}
+}
+
+func accepts(t *testing.T, opts []ssh.Option, key gossh.PublicKey) bool {
+	t.Helper()
+
+	srv := &ssh.Server{}
+	for _, opt := range opts {
+		if err := opt(srv); err != nil {
+			t.Fatalf("apply option: %v", err)
+		}
+	}
+	if srv.PublicKeyHandler == nil {
+		t.Fatal("no public key handler was installed")
+	}
+	return srv.PublicKeyHandler(nil, key)
+}
+
+func mustKey(t *testing.T) string {
+	t.Helper()
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	sshPub, err := gossh.NewPublicKey(pub)
+	if err != nil {
+		t.Fatalf("wrap: %v", err)
+	}
+	return string(gossh.MarshalAuthorizedKey(sshPub))
+}
