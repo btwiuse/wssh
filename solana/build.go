@@ -90,9 +90,15 @@ func BuildTransaction(req agentkey.SolanaTxRequest) ([]byte, error) {
 	}
 
 	// One signer - the payer - and nothing else. Every other account is
-	// unsigned and therefore readonly, which is the conservative reading: a
-	// transaction that writes more than it has to is a transaction that has
-	// to be undone if it is wrong.
+	// unsigned and goes in the third group, which is what the byte named
+	// numReadonlyUnsignedAccounts actually counts: accounts that are
+	// neither signers nor read-only, and therefore writable. The name reads
+	// the other way round, which is how this was once described backwards.
+	//
+	// This matches what a Solana library produces for the same request, and
+	// that is the constraint: the golden fixture is bytes the cluster
+	// accepted, so deviating from it would trade a working encoder for a
+	// tidier one.
 	unsignedCount := len(keys.list) - 1
 	if len(keys.list) > 1<<8 || unsignedCount > 1<<8 {
 		return nil, fmt.Errorf("a transaction naming %d accounts is more than the header can say", len(keys.list))

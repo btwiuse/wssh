@@ -2,13 +2,13 @@ package client
 
 import (
 	"crypto/ed25519"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 
 	gossh "golang.org/x/crypto/ssh"
+
+	"github.com/btwiuse/wssh/solana"
 )
 
 // AskWallet is consulted for every signature a wallet-backed signer is asked
@@ -102,18 +102,16 @@ func (w *WalletSigner) Sign(_ io.Reader, data []byte) (*gossh.Signature, error) 
 	return &gossh.Signature{Format: gossh.KeyAlgoED25519, Blob: sig}, nil
 }
 
-// summarizeSignature describes what is about to be signed. It never includes the
-// key, and the data is only shown as text when it looks like something a person
-// would recognise; a hex prefix is the honest answer for everything else.
+// summarizeSignature describes what is about to be signed, in words.
+//
+// Nothing here falls back to a hex dump for a transaction. A person asked to
+// approve a signature they cannot read has been asked nothing: the prompt
+// becomes theatre and the approval is habit. So a Solana message is decoded
+// and described - who pays, what it calls, what the data says - and anything
+// that opens like one and cannot be read is reported as such rather than
+// passed off as a blob of some other kind.
 func summarizeSignature(name string, data []byte) string {
-	what := printableText(data)
-	if what == "" {
-		what = hex.EncodeToString(headBytes(data, 24))
-		if len(data) > 24 {
-			what += "..."
-		}
-	}
-	return fmt.Sprintf("%s wants to sign %d bytes: %s", name, len(data), what)
+	return solana.Summarise(name, data)
 }
 
 // headBytes returns at most n bytes of b.
@@ -122,24 +120,4 @@ func headBytes(b []byte, n int) []byte {
 		return b
 	}
 	return b[:n]
-}
-
-// printableText returns data as text if it is short and mostly printable, and
-// the empty string otherwise. Guessing wrong here would be worse than showing
-// nothing, because the guess is what the user is approving.
-func printableText(data []byte) string {
-	const max = 120
-	if len(data) == 0 || len(data) > max {
-		return ""
-	}
-	for _, b := range data {
-		if b != '\n' && b != '\t' && (b < 0x20 || b > 0x7e) {
-			return ""
-		}
-	}
-	text := strings.TrimSpace(string(data))
-	if text == "" {
-		return ""
-	}
-	return text
 }
