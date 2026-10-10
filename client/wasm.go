@@ -102,8 +102,12 @@ func jsConnect(_ js.Value, args []js.Value) any {
 	// An encrypted key is opened by asking the page for its passphrase. The
 	// private key itself never has to be understood by JavaScript: the page
 	// hands over the text, Go does the cryptography.
+	// The name has to be the one worker.js installs on its own global, with
+	// the double underscore. Reading anything else finds nothing, and a missing
+	// hook does not fail loudly: an encrypted key simply reports that no
+	// passphrase was given rather than asking the page for one.
 	var askKeyPassphrase func(name string) (string, error)
-	if hook := js.Global().Get("websshAskPassphraseFn"); hook.Type() == js.TypeFunction {
+	if hook := js.Global().Get("__websshAskPassphraseFn"); hook.Type() == js.TypeFunction {
 		askKeyPassphrase = func(name string) (string, error) {
 			value, err := awaitString(hook, name)
 			if err != nil || value == "" {
