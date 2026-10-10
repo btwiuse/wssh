@@ -308,12 +308,17 @@ func Dial(ctx context.Context, opts Options) (*Session, error) {
 	// Whether the agent was offered, and refused. The session is an ordinary
 	// one either way, but a user who asked for a signing key and got nothing
 	// is owed an explanation rather than silence.
-	var agentRefused error
-	if len(agentSigners) > 0 {
-		agentRefused = offerAgent(client, opts.AgentKeyring, agentSigners)
-	}
-	if opts.AgentNotice != nil {
-		opts.AgentNotice(agentRefused)
+	// The channel handler goes up before the session opens. The server
+	// dials back the moment it agrees, and a channel with nobody listening
+	// on it is a rejected channel - so the listening half is set up here,
+	// and the asking half waits for a session to ask on.
+	agentForward := len(agentSigners) > 0
+	if agentForward {
+		if err := serveAgentChannel(client, opts.AgentKeyring, agentSigners); err != nil {
+			cancel()
+			_ = client.Close()
+			return nil, err
+		}
 	}
 
 	sshSess, err := client.NewSession()
@@ -321,6 +326,17 @@ func Dial(ctx context.Context, opts Options) (*Session, error) {
 		cancel()
 		_ = client.Close()
 		return nil, fmt.Errorf("open session: %w", err)
+	}
+
+	// Asked on the session channel, which is where OpenSSH asks: the
+	// request is an extended request on the session, not a global one, and
+	// a server that only listens for global requests never sees it.
+	var agentRefused error
+	if agentForward {
+		agentRefused = requestAgentForwarding(sshSess)
+	}
+	if opts.AgentNotice != nil {
+		opts.AgentNotice(agentRefused)
 	}
 
 	if err := sshSess.RequestPty(opts.Term, opts.Rows, opts.Cols, ssh.TerminalModes{
@@ -405,7 +421,7 @@ type AgentNotice func(refused error)
 // session is an ordinary one - but the caller is handed the reason so it can
 // say so, because "I asked for a key to sign with and nothing happened" is the
 // same symptom as a server that is simply configured not to allow it.
-func offerAgent(client *ssh.Client, ring agentkey.Agent, signers []ssh.Signer) error {
+func serveAgentChannel(client *ssh.Client, ring agentkey.Agent, signers []ssh.Signer) error {
 	if ring == nil {
 		var err error
 		ring, err = agentkey.Keyring(signers)
@@ -414,19 +430,23 @@ func offerAgent(client *ssh.Client, ring agentkey.Agent, signers []ssh.Signer) e
 		}
 	}
 
-	// Handler first: the server may dial back the moment it agrees, and a
-	// channel with nobody listening on it is a rejected channel.
-	//
 	// Note that agent.ServeAgent handles one request at a time per channel,
 	// so a Signer that blocks holds up every other agent request behind it,
 	// including the List that tells a program which keys exist.
 	if err := agent.ForwardToAgent(client, ring); err != nil {
 		return fmt.Errorf("serve the agent channel: %w", err)
 	}
+	return nil
+}
 
-	// The same global request agent.RequestAgentForwarding sends, issued on
-	// the connection because a session may not exist yet.
-	ok, _, err := client.SendRequest("auth-agent-req@openssh.com", true, nil)
+// requestAgentForwarding asks the server to use the agent it has just been
+// offered, in the same place OpenSSH asks: as an extended request on the
+// session channel.
+//
+// It goes before the shell so the server has the answer when the session
+// starts, which is when it decides whether to dial back.
+func requestAgentForwarding(sess *ssh.Session) error {
+	ok, err := sess.SendRequest("auth-agent-req@openssh.com", true, nil)
 	if err != nil {
 		return fmt.Errorf("request agent forwarding: %w", err)
 	}

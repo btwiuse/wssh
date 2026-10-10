@@ -156,9 +156,8 @@ func NewServer(opts Options) (*Server, error) {
 	sessions.ChannelHandlers = channels
 
 	// Copied for the same reason the channel map is: the request handlers are
-	// a package-level variable too, and InstallForwarding writes into this
-	// one. Aliasing it would hand every other server in the process an agent
-	// forwarder it never asked for.
+	// a package-level variable too. Aliasing it would hand every other
+	// server in the process the defaults this one is copying.
 	requests := make(map[string]ssh.RequestHandler, len(ssh.DefaultRequestHandlers))
 	for name, handler := range ssh.DefaultRequestHandlers {
 		requests[name] = handler
@@ -172,10 +171,6 @@ func NewServer(opts Options) (*Server, error) {
 		// rejects the channel otherwise.
 		channels["direct-tcpip"] = ssh.DirectTCPIPHandler
 		sessions.LocalPortForwardingCallback = func(ssh.Context, string, uint32) bool { return true }
-	}
-
-	if opts.ForwardAgent {
-		agentkey.InstallForwarding(sessions)
 	}
 
 	if opts.WalletAuth != nil && opts.WalletAuth.Enabled() {

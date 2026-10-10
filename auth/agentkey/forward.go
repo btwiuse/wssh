@@ -43,25 +43,6 @@ type forwardState struct {
 // what we want: one channel to the client, one socket, many sessions.
 const forwardCtxKey = "wssh.agent-forward-state"
 
-// forwardRequestKey is set when the client sends auth-agent-req@openssh.com.
-// Without it we never dial back, so a client that did not ask is not disturbed
-// with a channel open on every session.
-const forwardRequestKey = "wssh.agent-forward-requested"
-
-// InstallForwarding registers the global request a client sends to say it has
-// an agent to offer. It records the request and does nothing else; the
-// connection back to the client is opened when a session needs it, by Forward.
-func InstallForwarding(srv *ssh.Server) {
-	if srv.RequestHandlers == nil {
-		srv.RequestHandlers = map[string]ssh.RequestHandler{}
-	}
-	srv.RequestHandlers["auth-agent-req@openssh.com"] =
-		func(ctx ssh.Context, _ *ssh.Server, _ *gossh.Request) (bool, []byte) {
-			ctx.SetValue(forwardRequestKey, true)
-			return true, nil
-		}
-}
-
 // Middleware is what wish calls middleware, aliased rather than imported so
 // that this package stays free of wish. The browser client imports this
 // package, and wish pulls in bubbletea, which has no js/wasm build.
@@ -93,10 +74,10 @@ func Forward() Middleware {
 // the channel, or an older client that asked without offering anything, should
 // get an ordinary session with no SSH_AUTH_SOCK rather than a rejected one.
 func attach(s ssh.Session) {
-	ctx := s.Context()
-	if ctx.Value(forwardRequestKey) != true {
+	if !ssh.AgentRequested(s) {
 		return
 	}
+	ctx := s.Context()
 	conn, ok := ctx.Value(ssh.ContextKeyConn).(*gossh.ServerConn)
 	if !ok {
 		log.Debug("agent forwarding requested but no connection on the context")
