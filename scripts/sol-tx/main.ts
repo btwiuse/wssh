@@ -333,7 +333,29 @@ const req: agent.SolanaTxRequest = {
 // -- Ask the wallet ---------------------------------------------------------
 
 if (global.verbose) console.error("[sol-tx] asking agent");
-const resp = await agent.ask(sockPath, req, global.verbose);
+
+// An agent that answers the extension with a plain failure has never heard of
+// Solana, which is what every real ssh-agent says. It will still sign a
+// message, and an ed25519 key is an ed25519 key whatever it was made for, so
+// the transaction is built here and the signature asked for the ordinary way.
+// That is what bin/sol-tx does; this script has the builder too now, so the
+// two are the same command again rather than one that works and one that
+// does not.
+let resp: agent.SolanaTxResponse;
+try {
+  resp = await agent.ask(sockPath, req, global.verbose);
+} catch (err) {
+  if (!(err instanceof agent.AgentHasNoExtension)) throw err;
+  const key = await soleKey(sockPath, modeArgs.signer);
+  // The key has to be named in the request before it is built: the payer is
+  // the first account key and the only signer, so the transaction cannot be
+  // assembled without knowing which one it is. solana/agentsign.go fills it
+  // in the same place, and for the same reason.
+  const withSigner = { ...req, signer: key.address };
+  if (global.verbose) console.error(`[sol-tx] signer=${key.address}`);
+  resp = await agent.signWithPlainAgent(sockPath, withSigner, key.blob, global.verbose);
+}
+
 if (resp.refusal) {
   console.error(resp.refusal);
   Deno.exit(1);
@@ -394,5 +416,47 @@ function reportFeePayer(signed: Uint8Array): void {
     console.error(`fee payer: ${feePayer(signed)}`);
   } catch {
     // A transaction we cannot read is not one to make a claim about.
+  }
+}
+/**
+ * The key a plain agent will sign with.
+ *
+ * A named signer has to be one of the keys here, said plainly if it is not.
+ * Without a name there has to be exactly one, because an agent signs with
+ * whichever key a request names and there is no request to name one with:
+ * picking the first of three would give a transaction the cluster rejects
+ * with nothing pointing here. The same rule solana/agentsign.go applies, and
+ * for the same reason.
+ */
+async function soleKey(sockPath: string, named?: string): Promise<agent.AgentKey> {
+  const held = await agent.list(sockPath, global.verbose);
+  // Only ed25519 keys can sign a Solana transaction at all, so an rsa key in
+  // the agent is not a candidate and listing it would suggest otherwise.
+  const candidates = held.filter((k) => k.address !== "");
+
+  if (named) {
+    const found = candidates.find((k) => k.address === named);
+    if (!found) {
+      throw new Error(
+        `--signer names ${named}, which is not an ed25519 key in this agent. ` +
+          `Run sol-keys to list the ones it does`,
+      );
+    }
+    return found;
+  }
+
+  switch (candidates.length) {
+    case 0:
+      throw new Error(
+        "this agent holds no ed25519 key, and one is needed: a Solana " +
+          "account is an ed25519 key and nothing else can be one",
+      );
+    case 1:
+      return candidates[0];
+    default:
+      throw new Error(
+        `this agent holds ${candidates.length} ed25519 keys and signs with ` +
+          `whichever one is named, so pass --signer with the account to use`,
+      );
   }
 }

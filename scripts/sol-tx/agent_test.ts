@@ -7,7 +7,10 @@
 
 import { assertEquals, assertThrows } from "jsr:@std/assert";
 
-import { signedTransactionBytes } from "./agent.ts";
+import {
+  AgentHasNoExtension,
+  signedTransactionBytes,
+} from "./agent.ts";
 
 const PAYER = "5cyyvrzC3N3Kz1vU1iA9symxyMpKWFPSU3AmBdt9XKC5";
 
@@ -48,4 +51,14 @@ Deno.test("a response that is not hex is refused", () => {
     Error,
     "no signed transaction",
   );
+});
+
+// The extension being absent is an answer, not a fault, and the caller cannot
+// fall back unless it can tell it apart from every other refusal. That is the
+// whole reason this is a class rather than a sentence.
+Deno.test("no extension is its own kind of answer", () => {
+  const err = new AgentHasNoExtension();
+  assertEquals(err instanceof AgentHasNoExtension, true);
+  assertEquals(err instanceof Error, true);
+  assertEquals(err.message.includes("bin/sol-tx"), true, "it says what to do");
 });

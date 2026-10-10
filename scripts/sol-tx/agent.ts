@@ -12,6 +12,7 @@
 // this script useful for debugging a wallet connection that is misbehaving.
 
 import { encodeBase58 } from "./base58.ts";
+import { buildTransaction, messageOf } from "./build.ts";
 
 export interface SolanaAccount {
   address: string;
@@ -55,6 +56,8 @@ const EXTENSION_NAME = "solana-tx@wssh";
 const SSH_AGENT_FAILURE = 5;
 const SSH_AGENTC_REQUEST_IDENTITIES = 11;
 const SSH_AGENT_IDENTITIES_ANSWER = 12;
+const SSH_AGENTC_SIGN_REQUEST = 13;
+const SSH_AGENT_SIGN_RESPONSE = 14;
 const SSH_AGENT_SUCCESS = 6;
 const SSH_AGENT_EXTENSION = 27; // not used by us, kept for completeness
 const SSH_AGENT_EXTENSION_FAILURE = 28;
@@ -166,14 +169,12 @@ export async function ask(
     const { ok, payload } = readExtensionReply(reply);
     if (!ok) {
       if (reply.length === 0 || reply[0] === SSH_AGENT_FAILURE) {
-        throw new Error(
-          "this agent has no Solana extension, which is what every real " +
-            "ssh-agent says. Its ed25519 keys are still Solana accounts, and " +
-            "bin/sol-tx builds the transaction and asks the agent to sign it " +
-            "the ordinary way; this script only shows what the agent says, " +
-            "and cannot do that. If it is a browser agent, it needs a wallet " +
-            "connected on the page",
-        );
+        // Thrown as itself rather than as a sentence, so the caller can
+        // tell "this agent has never heard of the extension" from every
+        // other refusal and reach for the path that works with an agent
+        // that signs SSH data and nothing else. Rewriting it here would
+        // throw that away, exactly as it would in the Go client.
+        throw new AgentHasNoExtension();
         // SSH_AGENT_FAILURE is the protocol's "no such extension", which is
         // what every real ssh-agent says and always will: it signs SSH data
         // and knows nothing about Solana.
@@ -231,12 +232,36 @@ export async function ask(
 
 // -- low-level framing ------------------------------------------------------
 
+/**
+ * Thrown when the agent answers the Solana extension with a plain failure.
+ *
+ * That is SSH_AGENT_FAILURE, which PROTOCOL.agent defines as "no such
+ * extension" - which is what every real ssh-agent says and always will. It
+ * is an answer, not a fault, and it is carried as itself rather than as a
+ * sentence so that a caller can fall back instead of reporting it.
+ */
+export class AgentHasNoExtension extends Error {
+  constructor() {
+    super(
+      "this agent has no Solana extension, which is what every real " +
+        "ssh-agent says. Its ed25519 keys are still Solana accounts, and " +
+        "bin/sol-tx builds the transaction and asks the agent to sign it " +
+        "the ordinary way; this script only shows what the agent says, " +
+        "and cannot do that. If it is a browser agent, it needs a wallet " +
+        "connected on the page",
+    );
+    this.name = "AgentHasNoExtension";
+  }
+}
+
 /** One key the agent holds, in the form both scripts name it in. */
 export interface AgentKey {
   type: string;
   /** base58, for an ed25519 key; empty for anything that cannot sign Solana */
   address: string;
   comment: string;
+  /** The key as it came over the wire, needed to ask the agent to sign. */
+  blob: Uint8Array;
 }
 
 /**
@@ -302,6 +327,139 @@ export async function list(sockPath: string, verbose = false): Promise<AgentKey[
   }
 }
 
+/**
+ * Ask an ordinary agent to sign, for an agent that has no Solana extension.
+ *
+ * This is the path a plain ssh-agent takes, and it is the same one
+ * solana/agentsign.go takes on the Go side. The agent protocol has no
+ * operation for "sign this transaction": it signs whatever bytes it is given
+ * and knows nothing about what they are. So the transaction is built here and
+ * the agent is asked for a signature over the message, which is one thing an
+ * agent has understood since the protocol was written.
+ *
+ * The signature goes back in the slot the build left empty, and it does not
+ * follow it: a transaction has one signature region.
+ *
+ * @param sockPath  the agent socket
+ * @param req       the transaction to build and have signed
+ * @param keyBlob   the agent wire form of the signing key, as List reported it
+ * @param verbose   log every byte crossing the socket
+ */
+export async function signWithPlainAgent(
+  sockPath: string,
+  req: SolanaTxRequest,
+  keyBlob: Uint8Array,
+  verbose = false,
+): Promise<SolanaTxResponse> {
+  const unsigned = buildTransaction(req);
+  const message = messageOf(unsigned);
+
+  const conn = await Deno.connect({ path: sockPath, transport: "unix" });
+  let signature: Uint8Array;
+  try {
+    // byte 13, then the key and the data as SSH strings, then a zero flag
+    // word: no confirmation wanted, nothing to constrain.
+    const framed = new Uint8Array([
+      SSH_AGENTC_SIGN_REQUEST,
+      ...sshString(keyBlob),
+      ...sshString(message),
+      0, 0, 0, 0,
+    ]);
+    if (verbose) {
+      console.error(`[agent] the extension was refused; signing the message instead`);
+      console.error(`[agent] request  ${framed.length} bytes`);
+      console.error(`[agent]   sign request over ${message.length} message bytes`);
+    }
+    await writeFramed(conn, framed);
+
+    const reply = await readFramed(conn);
+    if (reply === null || reply.length === 0) {
+      throw new Error("the agent closed without signing");
+    }
+    if (reply[0] === SSH_AGENT_FAILURE) {
+      throw new Error(
+        "the agent refused to sign. It may not hold this key, or it may be " +
+          "locked - `ssh-add -l` will say which",
+      );
+    }
+    if (verbose) {
+      console.error(`[agent] reply    ${reply.length} bytes`);
+      console.error(`[agent]   hex: ${bytesToHex(reply).replace(/(..)/g, "$1 ")}`);
+    }
+    if (reply[0] !== SSH_AGENT_SIGN_RESPONSE) {
+      throw new Error(`the agent answered a signature request with ${reply[0]}`);
+    }
+    signature = signatureOf(readOneString(reply.subarray(1), "signature"));
+  } finally {
+    conn.close();
+  }
+
+  if (signature.length !== 64) {
+    throw new Error(`the agent returned a ${signature.length} byte signature, want 64`);
+  }
+
+  // The signature fills the empty slot the build left; it does not follow
+  // it. A transaction has one signature region.
+  const signed = new Uint8Array(unsigned.length);
+  signed.set(unsigned.subarray(0, 1)); // the signature count
+  signed.set(signature, 1); // the signature, in the slot the build left
+  signed.set(unsigned.subarray(65), 65); // the message, after both
+  if (verbose) {
+    console.error(`[agent] signed   ${signed.length} bytes, by an ordinary signature`);
+  }
+  return {
+    signature: bytesToHex(signature),
+    signedTransaction: bytesToHex(signed),
+  };
+}
+
+/** SSH string: a 4-byte big-endian length and then the bytes. */
+function sshString(s: string | Uint8Array): number[] {
+  const body = typeof s === "string" ? new TextEncoder().encode(s) : s;
+  const len = body.length;
+  return [
+    (len >>> 24) & 0xff, (len >>> 16) & 0xff, (len >>> 8) & 0xff, len & 0xff,
+    ...body,
+  ];
+}
+
+/**
+ * The 64 bytes out of an ssh wire-format signature.
+ *
+ * What an agent answers with is the whole structure rather than the signature
+ * alone:
+ *
+ *     [4][ssh-ed25519][4][64 bytes]
+ *
+ * so 83 bytes where 64 were expected, and both length prefixes have to be
+ * read and stepped over. Guessing instead leaves 68 or 67 bytes and every
+ * downstream check fails for a reason that points nowhere. The Go client
+ * reaches the same 64 bytes by unmarshalling the structure and taking what
+ * follows the name.
+ */
+function signatureOf(blob: Uint8Array): Uint8Array {
+  const view = new DataView(blob.buffer, blob.byteOffset, blob.byteLength);
+  if (blob.length < 8) {
+    throw new Error(`the signature is ${blob.length} bytes, too short to name an algorithm`);
+  }
+
+  const nameLength = view.getUint32(0, false);
+  const algo = new TextDecoder().decode(blob.subarray(4, 4 + nameLength));
+  if (algo !== "ssh-ed25519") {
+    throw new Error(`the agent signed with ${algo}, which this reader does not understand`);
+  }
+
+  const at = 8 + nameLength;
+  if (at > blob.length) {
+    throw new Error("the signature named a length past the end of its own structure");
+  }
+  const len = view.getUint32(4 + nameLength, false);
+  if (at + len > blob.length) {
+    throw new Error(`the signature claims ${len} bytes but has ${blob.length - at}`);
+  }
+  return blob.subarray(at, at + len);
+}
+
 /** Read one length-prefixed string, refusing a length past the end. */
 function readOneString(buf: Uint8Array, what: string): Uint8Array {
   if (buf.length < 4) throw new Error(`the answer carried no ${what}`);
@@ -357,7 +515,7 @@ function parseIdentities(buf: Uint8Array): AgentKey[] {
     // rather than send an empty string, and treating a missing one as a
     // length prefix is how the rest of the answer gets misread.
     const comment = at < buf.length ? decoder.decode(readString()) : "";
-    keys.push({ type: keyType(blob), address: ed25519Address(blob), comment });
+    keys.push({ type: keyType(blob), address: ed25519Address(blob), comment, blob });
   }
   return keys;
 }

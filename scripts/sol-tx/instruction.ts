@@ -20,7 +20,7 @@ const SYSTEM_PROGRAM_ID = "11111111111111111111111111111111";
 // is touched, no destination account is needed, and the fee is just the
 // base signature fee - which makes it the cheapest possible way to confirm
 // that the agent, the wallet, and the RPC are all talking to each other.
-const MEMO_PROGRAM_ID = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr";
+export const MEMO_PROGRAM_ID = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr";
 
 /**
  * Build an SPL Memo instruction. The signer is the only account; the memo
