@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/btwiuse/wssh/auth/siws"
 	gossh "golang.org/x/crypto/ssh"
 
 	"golang.org/x/crypto/ssh/agent"
@@ -502,4 +503,77 @@ func TestAgentWithNothingToBuildWithRefuses(t *testing.T) {
 	if _, err := ring.Extension(SolanaTxExtension, marshalRequest(t, testRequest(t))); err == nil {
 		t.Fatal("an agent that can do neither should not have answered")
 	}
+}
+
+// The payer is whoever signs, and when the session's own key is the signer
+// the agent already knows that. Asking for it makes the caller repeat back
+// something the answer to a previous question already established.
+func TestPayerDefaultsToTheSigningKey(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	ring, _ := mustKeyring(t, priv)
+
+	message := []byte("a message")
+	unsigned := append([]byte{1}, make([]byte, ed25519.SignatureSize)...)
+	unsigned = append(unsigned, message...)
+
+	var asked SolanaTxRequest
+	if err := WithSolana(ring, nil, func(req SolanaTxRequest) ([]byte, error) {
+		asked = req
+		return unsigned, nil
+	}); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+
+	raw, err := ring.Extension(SolanaTxExtension, marshalRequest(t, testRequest(t)))
+	if err != nil {
+		t.Fatalf("extension: %v", err)
+	}
+	var got SolanaTxResponse
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("answer is not readable: %v", err)
+	}
+	if got.Refusal != "" {
+		t.Fatalf("expected a signature, got %q", got.Refusal)
+	}
+
+	want := Base58EncodeForTest(t, pub)
+	if asked.Payer != want {
+		t.Errorf("payer came back as %q, want the signing key %q", asked.Payer, want)
+	}
+}
+
+// A payer that was named is left alone: the caller may be paying for someone
+// else, which is the whole reason the field exists.
+func TestAnExplicitPayerIsNotOverridden(t *testing.T) {
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	ring, _ := mustKeyring(t, priv)
+
+	message := []byte("a message")
+	unsigned := append([]byte{1}, make([]byte, ed25519.SignatureSize)...)
+	unsigned = append(unsigned, message...)
+
+	var asked SolanaTxRequest
+	if err := WithSolana(ring, nil, func(req SolanaTxRequest) ([]byte, error) {
+		asked = req
+		return unsigned, nil
+	}); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+
+	req := testRequest(t)
+	req.Payer = "someone-else"
+	if _, err := ring.Extension(SolanaTxExtension, marshalRequest(t, req)); err != nil {
+		t.Fatalf("extension: %v", err)
+	}
+	if asked.Payer != "someone-else" {
+		t.Errorf("an explicit payer was replaced with %q", asked.Payer)
+	}
+}
+
+func Base58EncodeForTest(t *testing.T, pub ed25519.PublicKey) string {
+	t.Helper()
+	return siws.Base58Encode(pub)
 }

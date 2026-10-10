@@ -362,6 +362,16 @@ func (t *SolanaTx) ExtensionHandler(signer gossh.Signer) func(name string, conte
 			})
 		}
 
+		// A transaction is paid for by the account that signs it. When this
+		// agent is the one signing, that account is known here and nowhere
+		// else - the page has no idea which key the session authenticated
+		// with - so it is filled in rather than asked for.
+		if req.Payer == "" {
+			if pub := ownPublicKey(signer); pub != nil {
+				req.Payer = siws.Base58Encode(pub)
+			}
+		}
+
 		// Built elsewhere, signed here. The page builds it because the
 		// serialisation belongs to the library that tracks Solana's format;
 		// the signature belongs here because the key is here.
