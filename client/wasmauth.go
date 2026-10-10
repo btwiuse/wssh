@@ -39,6 +39,11 @@ type credentials struct {
 	// back to the key's fingerprint.
 	WalletAddress string `json:"walletAddress"`
 
+	// SignIn asks for the session to be authenticated by the connected
+	// wallet. What the wallet signs is decided by the server and arrives on
+	// the socket; all this says is that the page is willing to ask it.
+	SignIn bool `json:"signIn"`
+
 	// ForwardAgent turns the keys above into an agent the session can ask to
 	// sign with. It is the browser's `ssh -A`: the keys stay here, and only
 	// signatures come back. Off unless the user asked for it.

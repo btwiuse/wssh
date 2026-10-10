@@ -22,24 +22,23 @@ import (
 	gossh "golang.org/x/crypto/ssh"
 )
 
-// standInForAWallet produces a sign-in the way a wallet would, without a wallet.
+// standInForAWallet is a signer that answers the way a wallet would, without a
+// wallet.
 //
-// Everything here is the same arithmetic a wallet does: build the message from
-// the fields the server asked for, sign it, hand back the bytes. The only
+// Everything here is the same arithmetic a wallet does: fill in the account,
+// build the message from the fields the server asked for, sign it. The only
 // thing missing is the popup.
-func standInForAWallet(t *testing.T, priv ed25519.PrivateKey, in siws.SIWSInput) string {
-	t.Helper()
+func standInForAWallet(priv ed25519.PrivateKey) client.SIWSSigner {
+	return func(in siws.SIWSInput) ([]byte, []byte, error) {
+		address, err := addressOf(priv)
+		if err != nil {
+			return nil, nil, err
+		}
+		in.Address = address
 
-	// The wallet fills in the account it is signing for. The server never
-	// supplies this, so the stand-in has to know its own address.
-	address, err := addressOf(ed25519.PublicKey(priv[32:]))
-	if err != nil {
-		t.Fatalf("address: %v", err)
+		message := []byte(in.Format())
+		return message, ed25519.Sign(priv, message), nil
 	}
-	in.Address = address
-
-	message := []byte(in.Format())
-	return siws.EncodeSIWS(message, ed25519.Sign(priv, message))
 }
 
 // The point of the whole thing: a client that owns a Solana account can reach a
@@ -48,18 +47,15 @@ func standInForAWallet(t *testing.T, priv ed25519.PrivateKey, in siws.SIWSInput)
 func TestWalletSignInAuthenticates(t *testing.T) {
 	authorized := newAuthorizedAccount(t)
 	server := startWalletServer(t, [][]byte{authorized.pub})
-	challenge := server.challenge(t)
-
-	priv := authorized.priv
-	token := standInForAWallet(t, priv, challenge)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
 	var out strings.Builder
 	sess, err := client.Dial(ctx, client.Options{
-		URL:  server.url + "?auth=" + token,
-		User: "tester",
+		URL:        server.url,
+		User:       "tester",
+		SIWSSigner: standInForAWallet(authorized.priv),
 		OnData: func(p []byte) {
 			out.Write(p)
 		},
@@ -91,7 +87,6 @@ func TestWalletSignInAuthenticates(t *testing.T) {
 func TestWalletSignInIsRequiredWhenConfigured(t *testing.T) {
 	authorized := newAuthorizedAccount(t)
 	server := startWalletServer(t, [][]byte{authorized.pub})
-	challenge := server.challenge(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -104,23 +99,17 @@ func TestWalletSignInIsRequiredWhenConfigured(t *testing.T) {
 		t.Error("a client with no sign-in should not have connected")
 	}
 
-	// A token signed by an account that is not on the list.
+	// An account that is not on the list, refused with the reason rather than
+	// a closed connection.
 	stranger := newAuthorizedAccount(t)
-	if _, err := client.Dial(ctx, client.Options{
-		URL:  server.url + "?auth=" + standInForAWallet(t, stranger.priv, challenge),
-		User: "tester", OnData: func([]byte) {}, OnClose: func(error) {},
-	}); err == nil {
-		t.Error("an unauthorized account should not have connected")
-	}
-
-	// A token whose bytes have been tampered with.
-	good := standInForAWallet(t, authorized.priv, challenge)
-	bad := good[:len(good)-4] + "AAAA"
-	if _, err := client.Dial(ctx, client.Options{
-		URL: server.url + "?auth=" + bad, User: "tester",
+	_, err := client.Dial(ctx, client.Options{
+		URL: server.url, User: "tester", SIWSSigner: standInForAWallet(stranger.priv),
 		OnData: func([]byte) {}, OnClose: func(error) {},
-	}); err == nil {
-		t.Error("a tampered sign-in should not have connected")
+	})
+	if err == nil {
+		t.Error("an unauthorized account should not have connected")
+	} else if !strings.Contains(err.Error(), "not authorized") {
+		t.Errorf("the refusal should say why, got %v", err)
 	}
 }
 
@@ -130,19 +119,24 @@ func TestWalletSignInIsRequiredWhenConfigured(t *testing.T) {
 func TestWalletSignInIsBoundToTheDomain(t *testing.T) {
 	authorized := newAuthorizedAccount(t)
 	server := startWalletServer(t, [][]byte{authorized.pub})
-	challenge := server.challenge(t)
-
-	elsewhere := challenge
-	elsewhere.Domain = "somewhere-else.example"
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	if _, err := client.Dial(ctx, client.Options{
-		URL:  server.url + "?auth=" + standInForAWallet(t, authorized.priv, elsewhere),
-		User: "tester", OnData: func([]byte) {}, OnClose: func(error) {},
-	}); err == nil {
+	// The message names somewhere else. A wallet would have refused to sign
+	// it; one that signs it anyway still must not get in.
+	_, err := client.Dial(ctx, client.Options{
+		URL: server.url, User: "tester",
+		SIWSSigner: func(in siws.SIWSInput) ([]byte, []byte, error) {
+			in.Domain = "somewhere-else.example"
+			return standInForAWallet(authorized.priv)(in)
+		},
+		OnData: func([]byte) {}, OnClose: func(error) {},
+	})
+	if err == nil {
 		t.Error("a sign-in naming another domain should not have connected")
+	} else if !strings.Contains(err.Error(), "domain") {
+		t.Errorf("the refusal should name the domain, got %v", err)
 	}
 }
 
@@ -155,21 +149,28 @@ func TestWalletSignInExpires(t *testing.T) {
 	issued := time.Now().Add(-2 * time.Hour)
 	server.config.Now = func() time.Time { return issued }
 
-	challenge := server.challenge(t)
 	// The server's clock moves on; the message does not.
 	server.config.Now = func() time.Time { return time.Now() }
 	server.config.Lifetime = 0
 
-	token := standInForAWallet(t, authorized.priv, challenge)
-
+	// The server's clock moves on; the message is built when the challenge
+	// arrives, so the only thing that can make this old is the clock inside
+	// the signer, which is what a captured sign-in looks like.
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	if _, err := client.Dial(ctx, client.Options{
-		URL: server.url + "?auth=" + token, User: "tester",
+	_, err := client.Dial(ctx, client.Options{
+		URL: server.url, User: "tester",
+		SIWSSigner: func(in siws.SIWSInput) ([]byte, []byte, error) {
+			in.IssuedAt = issued.Format(time.RFC3339)
+			return standInForAWallet(authorized.priv)(in)
+		},
 		OnData: func([]byte) {}, OnClose: func(error) {},
-	}); err == nil {
+	})
+	if err == nil {
 		t.Error("an expired sign-in should not have connected")
+	} else if !strings.Contains(err.Error(), "issued") {
+		t.Errorf("the refusal should say it was old, got %v", err)
 	}
 }
 
@@ -260,8 +261,9 @@ func (s *walletServer) challenge(t *testing.T) siws.SIWSInput {
 // addressOf renders a public key the way a wallet names an account. It lives in
 // the test because the package deliberately has no encoder: everything it needs
 // is read back out of the message a wallet signed.
-func addressOf(pub ed25519.PublicKey) (string, error) {
+func addressOf(priv ed25519.PrivateKey) (string, error) {
 	const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+	pub := ed25519.PublicKey(priv[32:])
 	n := new(big.Int).SetBytes(pub)
 	out := make([]byte, 0, 44)
 	radix, mod := big.NewInt(58), new(big.Int)

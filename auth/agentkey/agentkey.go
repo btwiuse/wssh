@@ -22,6 +22,7 @@ package agentkey
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
 	"fmt"
@@ -82,6 +83,11 @@ func Keyring(signers []gossh.Signer) (Agent, error) {
 type keyring struct {
 	mu      sync.RWMutex
 	signers []gossh.Signer
+
+	// solana, when set, answers the transaction extension. It is nil on a
+	// keyring that cannot sign one, which is the ordinary case and not an
+	// error: the extension is simply refused.
+	solana *SolanaTx
 }
 
 func (r *keyring) List() ([]*agent.Key, error) {
@@ -120,6 +126,56 @@ func (r *keyring) Signers() ([]gossh.Signer, error) {
 
 	return slices.Clone(r.signers), nil
 }
+
+// Extension answers the extensions this agent knows about and refuses the rest.
+//
+// Refusing the rest matters as much as answering this one: an agent that
+// answered every extension the same way would be indistinguishable from one
+// that had no idea what it was being asked, which is exactly the confusion a
+// standard tool would land in.
+func (r *keyring) Extension(name string, contents []byte) ([]byte, error) {
+	if r.solana == nil {
+		return nil, agent.ErrExtensionUnsupported
+	}
+
+	r.mu.RLock()
+	signers := slices.Clone(r.signers)
+	r.mu.RUnlock()
+
+	if len(signers) == 0 {
+		return nil, agent.ErrExtensionUnsupported
+	}
+	// One wallet is one key, so the extension is answered by the only key
+	// there is. With several there is nothing to disambiguate with and
+	// guessing would be worse than refusing.
+	if len(signers) != 1 {
+		return nil, errors.New("this agent holds several keys and cannot tell which one to sign with")
+	}
+
+	// The public key has to come back as raw bytes, because that is what the
+	// signature is checked against, and the ssh wrapper is not that.
+	pub, ok := signers[0].PublicKey().(gossh.CryptoPublicKey)
+	if !ok {
+		return nil, errors.New("the agent's key is not a crypto key")
+	}
+	raw, ok := pub.CryptoPublicKey().(ed25519.PublicKey)
+	if !ok {
+		return nil, errors.New("the agent's key is not ed25519")
+	}
+	return r.solana.ExtensionHandler(raw)(name, contents)
+}
+
+// SignWithFlags is Sign with no flags. The agent protocol's flags carry RSA
+// scheme negotiation, which an ed25519 key has no use for; refusing them is
+// more honest than ignoring them.
+func (r *keyring) SignWithFlags(key gossh.PublicKey, data []byte, flags agent.SignatureFlags) (*gossh.Signature, error) {
+	if flags != 0 {
+		return nil, fmt.Errorf("this agent does not sign with flags: %d", flags)
+	}
+	return r.Sign(key, data)
+}
+
+var _ agent.ExtendedAgent = (*keyring)(nil)
 
 func (r *keyring) Add(agent.AddedKey) error     { return errFixed }
 func (r *keyring) Remove(gossh.PublicKey) error { return errFixed }

@@ -20,6 +20,7 @@ import (
 	"syscall/js"
 	"time"
 
+	"github.com/btwiuse/wssh/auth/agentkey"
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -148,9 +149,19 @@ func jsConnect(_ js.Value, args []js.Value) any {
 			return
 		}
 
+		// Signing in with a wallet is not the same as using its key for SSH.
+		// The wallet is on this page, so this is the only place that can ask
+		// it; the exchange itself is in Go and only needs somewhere to put
+		// the answer.
+		var walletSIWSSigner SIWSSigner
+		if creds.SignIn {
+			walletSIWSSigner = walletSignerFn()
+		}
+
 		// A connected wallet joins the same keyring. It is a signer like any
 		// other here; what makes it different is where the private half
 		// lives, which is entirely on the other side of the bridge.
+		var walletRing agentkey.Agent
 		if creds.WalletPublicKey != "" {
 			wallet, err := walletSigner(creds.WalletPublicKey, creds.WalletAddress)
 			if err != nil {
@@ -160,20 +171,39 @@ func jsConnect(_ js.Value, args []js.Value) any {
 			}
 			auth = append(auth, gossh.PublicKeys(wallet))
 			signers = append(signers, wallet)
+
+			// The same keyring answers Solana transactions, so anything in
+			// the session can ask the wallet to sign one. There is no switch
+			// for this: connecting a wallet and forwarding it is already the
+			// decision, and a remembered approval would hand the wallet open
+			// to whatever got as far as a shell.
+			walletRing, err = agentkey.Keyring([]gossh.Signer{wallet})
+			if err != nil {
+				post(map[string]any{"type": "error",
+					"message": "could not prepare the wallet for transactions: " + err.Error()})
+				return
+			}
+			if err := agentkey.WithSolana(walletRing, solanaAsker(), 0); err != nil {
+				post(map[string]any{"type": "error",
+					"message": "could not offer Solana transactions: " + err.Error()})
+				return
+			}
 		}
 
 		sess, err := Dial(context.Background(), Options{
-			Auth:    auth,
-			URL:     url,
-			User:    user,
-			Cols:    cols,
-			Rows:    rows,
-			Command: command,
+			Auth:       auth,
+			SIWSSigner: walletSIWSSigner,
+			URL:        url,
+			User:       user,
+			Cols:       cols,
+			Rows:       rows,
+			Command:    command,
 			// Wrapping in ConfirmingSigner is what makes forwarding
 			// acceptable from a browser: the keys stay here, and nothing is
 			// signed without a yes first. Every signature asks again; a yes
 			// is never remembered.
 			AgentSigners: confirmAll(signers, creds.ForwardAgent, confirmSignature),
+			AgentKeyring: walletRing,
 			OnData:       postData,
 			OnClose: func(err error) {
 				// Forget the session first. The page keeps delivering keystrokes

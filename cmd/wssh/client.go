@@ -155,12 +155,21 @@ func clientOptions(url, username string, identities []string, passwordAuth bool,
 	opts.Auth = auth
 	opts.AgentKeyPath = agentKey
 
+	// The CLI runs in a terminal, so a refusal is worth a line on stderr. The
+	// session carries on without a signing key either way, which is exactly
+	// why nothing else would mention it.
+	opts.AgentNotice = func(refused error) {
+		if refused != nil {
+			fmt.Fprintln(os.Stderr, "wssh: "+refused.Error())
+		}
+	}
+
 	if signInKey != "" {
 		key, err := client.LoadSignInKey(signInKey)
 		if err != nil {
 			return nil, err
 		}
-		opts.SIWSKey = key
+		opts.SIWSSigner = client.SIWSSignIn(key)
 	}
 
 	opts.HostKeyCallback, err = clientHostKeyCallback(knownHostsPath, insecureHostKey)

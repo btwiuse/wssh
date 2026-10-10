@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -216,6 +215,10 @@ func serve(opts serveOptions) error {
 		if len(opts.Origins) > 0 && !anyOrigin {
 			log.Info("restricting origins", "patterns", opts.Origins)
 		}
+		if walletAuth != nil && walletAuth.Open {
+			log.Warn("any Solana account may sign in: anyone holding any wallet gets " +
+				"a shell on this port")
+		}
 		if len(opts.AgentKeys) > 0 {
 			log.Warn("signing keys loaded: anyone who can reach this port can sign with them")
 		}
@@ -235,9 +238,7 @@ func serve(opts serveOptions) error {
 		// The challenge has to be reachable without authenticating, or
 		// there would be no way to get the thing you authenticate with. It
 		// carries no secret: it is a nonce and a deadline.
-		if walletAuth != nil {
-			mux.HandleFunc("/auth/siws", walletChallenge(walletAuth))
-		}
+
 	}
 
 	if opts.Assets != nil {
@@ -347,37 +348,11 @@ func addAuthFlags(cmd *cobra.Command, cfg *auth.Config) {
 		"an accepted password given inline (visible in ps; prefer --password-file)")
 }
 
-// walletChallenge serves the sign-in request a wallet is asked to sign.
-//
-// The domain is taken from the request rather than fixed at startup: it is what
-// the wallet will check against the page it was asked from, so a server
-// reachable under two names has to challenge for the one actually used.
-func walletChallenge(cfg *siws.SIWSAuth) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			w.Header().Set("Allow", http.MethodGet)
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		input, err := cfg.Challenge(r.Host)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		// No caching: a stale challenge is a challenge that has already
-		// been answered, and one that expires before it is read.
-		w.Header().Set("Cache-Control", "no-store")
-		if err := json.NewEncoder(w).Encode(input); err != nil {
-			log.Debug("could not write the sign-in challenge", "error", err)
-		}
-	}
-}
-
 // addWalletFlags registers the wallet sign-in flags shared by the subcommands.
 func addWalletFlags(cmd *cobra.Command, opts *serveOptions) {
 	cmd.Flags().StringSliceVar(&opts.AuthorizedAddresses, "authorized-addresses", nil,
-		"Solana accounts allowed to sign in, as SSH ed25519 public keys or hex; "+
+		"Solana accounts allowed to sign in: an address (5cyy...), an SSH ed25519 "+
+			"public key, or hex; "+
 			"repeatable")
 	cmd.Flags().StringVar(&opts.WalletStatement, "wallet-statement", "",
 		"one line of text a wallet shows above the sign-in request")
@@ -389,18 +364,18 @@ func buildWalletAuth(opts serveOptions) (*siws.SIWSAuth, error) {
 	if len(opts.AuthorizedAddresses) == 0 {
 		return nil, nil
 	}
-	addresses, err := siws.ParseAuthorizedAddresses(opts.AuthorizedAddresses)
+	addresses, open, err := siws.ParseAuthorizedAddresses(opts.AuthorizedAddresses)
 	if err != nil {
 		return nil, err
 	}
-	if len(addresses) == 0 {
+	if !open && len(addresses) == 0 {
 		return nil, nil
 	}
 	statement := opts.WalletStatement
 	if statement == "" {
 		statement = "Sign in to this server"
 	}
-	return &siws.SIWSAuth{Addresses: addresses, Statement: statement}, nil
+	return &siws.SIWSAuth{Addresses: addresses, Open: open, Statement: statement}, nil
 }
 
 // addAgentFlags registers the --agent-keys flag shared by the subcommands.

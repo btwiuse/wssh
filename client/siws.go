@@ -4,109 +4,115 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"net/url"
 	"os"
-	"time"
 
 	gossh "golang.org/x/crypto/ssh"
 
 	"github.com/btwiuse/wssh/auth/siws"
+	"github.com/coder/websocket"
 )
 
-// DefaultSIWSChallengePath is where a wssh server publishes the sign-in request
-// it wants a wallet to sign.
+// SIWSSigner answers a server's sign-in request with a message and a
+// signature over it.
 //
-// It is a convention rather than something negotiated. A client that cannot
-// fetch it has no way to learn the domain, the nonce or the deadline, and those
-// are exactly the parts that have to come from the server.
-const DefaultSIWSChallengePath = "/auth/siws"
+// It is a callback rather than a key because the key is not always ours to
+// hold. A command line client has a file and can sign the bytes itself; a
+// browser has a wallet extension that has to be asked, across a bridge, while
+// the person holding it reads what they are approving. Both are the same call
+// from here.
+type SIWSSigner func(challenge siws.SIWSInput) (message, signature []byte, err error)
 
-// siwsChallengeTimeout bounds the fetch. A server slow enough to take longer has
-// already spent part of the challenge's lifetime, and the caller is about to
-// have to answer a wallet prompt on top of that.
-const siwsChallengeTimeout = 10 * time.Second
-
-// SIWSSignIn fetches a sign-in request, answers it with an ed25519 key, and
-// returns a token to present to the server.
+// doSignIn runs the exchange over an open WebSocket, before any SSH byte is
+// sent.
 //
-// The key never leaves this process. What comes back is a message and a
-// signature over it; what goes out is a signed message, which is all the
-// server needs and all the wallet was asked for.
-//
-// The challenge is fetched rather than composed. Domain, nonce and deadline have
-// to be the server's: a client that picked its own domain would be asking a
-// wallet to vouch for whichever host it liked.
-func SIWSSignIn(serverURL, challengePath string, key ed25519.PrivateKey) (string, error) {
-	if len(key) != ed25519.PrivateKeySize {
-		return "", fmt.Errorf("sign-in key is %d bytes, want %d", len(key), ed25519.PrivateKeySize)
-	}
-	if challengePath == "" {
-		challengePath = DefaultSIWSChallengePath
-	}
-
-	endpoint, err := httpOrigin(serverURL, challengePath)
+// It returns false when the client has nothing to say, which is the ordinary
+// case for a client that did not ask to sign in: the exchange has to be able
+// to be absent, or a server with no wallet sign-in configured would leave every
+// client waiting for a question that never comes.
+func doSignIn(ctx context.Context, conn *websocket.Conn, signer SIWSSigner) (bool, error) {
+	challenge, err := readSIWSFrame(ctx, conn, siwsFrameTimeout)
 	if err != nil {
-		return "", err
+		return false, err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), siwsChallengeTimeout)
-	defer cancel()
+	switch challenge.Kind {
+	case siwsKindReady:
+		return true, nil
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	case siwsKindError:
+		return false, errors.New(challenge.Reason)
+
+	case siwsKindChallenge:
+		// Fall through to answer it.
+
+	default:
+		return false, fmt.Errorf("the server sent %q where a sign-in request was expected", challenge.Kind)
+	}
+
+	if challenge.Challenge == nil {
+		return false, errors.New("the server sent an empty sign-in request")
+	}
+	if signer == nil {
+		// The server asked and this client cannot answer. Say so rather than
+		// going quiet, which would leave it waiting out the whole exchange
+		// before finding out what was obvious to both sides at the start.
+		_ = writeSIWSFrame(ctx, conn, siwsFrame{
+			Kind:   siwsKindError,
+			Reason: "this client has no wallet to sign in with",
+		})
+		return false, errors.New("this client has no wallet to sign in with")
+	}
+	input := *challenge.Challenge
+
+	message, signature, err := signer(input)
 	if err != nil {
-		return "", fmt.Errorf("build the challenge request: %w", err)
+		// Say why on the socket rather than just hanging up: the server can
+		// then log it against the address it was asking about.
+		_ = writeSIWSFrame(ctx, conn, siwsFrame{
+			Kind:   siwsKindError,
+			Reason: "the wallet did not sign: " + err.Error(),
+		})
+		return false, err
 	}
-	resp, err := http.DefaultClient.Do(req)
+
+	if err := writeSIWSFrame(ctx, conn, siwsFrame{
+		Kind:      siwsKindSignIn,
+		Message:   message,
+		Signature: signature,
+	}); err != nil {
+		return false, err
+	}
+
+	answer, err := readSIWSFrame(ctx, conn, siwsFrameTimeout+siwsFrameTimeout)
 	if err != nil {
-		return "", fmt.Errorf("fetch the sign-in challenge: %w", err)
+		return false, err
 	}
-	defer resp.Body.Close() //nolint:errcheck
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("the server answered the sign-in challenge with %s", resp.Status)
+	switch answer.Kind {
+	case siwsKindReady:
+		return true, nil
+	case siwsKindError:
+		return false, errors.New(answer.Reason)
+	default:
+		return false, fmt.Errorf("the server answered a sign-in with %q", answer.Kind)
 	}
-
-	var input siws.SIWSInput
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&input); err != nil {
-		return "", fmt.Errorf("read the sign-in challenge: %w", err)
-	}
-	if input.Domain == "" || input.Nonce == "" {
-		return "", fmt.Errorf("the server sent a sign-in challenge with no domain or nonce")
-	}
-
-	// The account is filled in here, not asked for: the server that chose it
-	// would be asking a wallet to prove something other than who is asking.
-	input.Address = siws.Base58Encode(key.Public().(ed25519.PublicKey))
-
-	message := []byte(input.Format())
-	return siws.EncodeSIWS(message, ed25519.Sign(key, message)), nil
 }
 
-// httpOrigin turns a WebSocket address into an HTTP one for a given path.
-//
-// Only the scheme changes. A ws:// or wss:// address names the same host the
-// sign-in message will be checked against, and replacing it with anything else
-// would change what the message has to say.
-func httpOrigin(wsURL, path string) (string, error) {
-	parsed, err := url.Parse(wsURL)
-	if err != nil {
-		return "", fmt.Errorf("the server address is not a URL: %w", err)
+// SIWSSignIn returns a signer backed by a key this process holds.
+func SIWSSignIn(key ed25519.PrivateKey) SIWSSigner {
+	return func(challenge siws.SIWSInput) ([]byte, []byte, error) {
+		if challenge.Domain == "" || challenge.Nonce == "" {
+			return nil, nil, errors.New("the server sent an incomplete sign-in request")
+		}
+		// The account is named here rather than asked for: a server that chose
+		// it would be asking a wallet to prove something other than who is
+		// asking.
+		challenge.Address = siws.Base58Encode(key.Public().(ed25519.PublicKey))
+
+		message := []byte(challenge.Format())
+		return message, ed25519.Sign(key, message), nil
 	}
-	switch parsed.Scheme {
-	case "ws", "http":
-		parsed.Scheme = "http"
-	case "wss", "https":
-		parsed.Scheme = "https"
-	default:
-		return "", fmt.Errorf("cannot fetch a sign-in challenge from a %q address", parsed.Scheme)
-	}
-	parsed.Path = path
-	parsed.RawQuery = ""
-	parsed.Fragment = ""
-	return parsed.String(), nil
 }
 
 // LoadSignInKey reads an ed25519 private key for signing in.

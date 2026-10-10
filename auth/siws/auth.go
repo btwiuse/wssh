@@ -39,8 +39,23 @@ import (
 type SIWSAuth struct {
 	// Addresses is the allow list, as raw ed25519 public keys. Anything not on
 	// it is refused, so connecting this at all is opt-in per account rather
-	// than opt-in per server.
+	// than opt-in per server. Empty is meaningless on its own: see Open.
 	Addresses [][]byte
+
+	// Open accepts any account that can sign, which is what `*` on the command
+	// line means. It is the dapp model - holding a wallet proves you are
+	// someone, not who.
+	//
+	// Worth being clear about what that costs, because the name suggests less
+	// than it does. The username in an SSH session is chosen by the client, so
+	// an open wallet sign-in is not a way to be told apart from another wallet
+	// holder: it is a way for anyone holding any wallet at all to reach the
+	// shell this server offers. That is what `*` means everywhere else in this
+	// program too.
+	Open bool
+
+	// MaxAge is how old a sign-in may be before it stops being accepted.
+	MaxAge time.Duration
 
 	// URI is what the message is about. Left empty it is omitted, which is
 	// what a wallet does when it is not given one.
@@ -74,7 +89,12 @@ func (c SIWSAuth) lifetime() time.Duration {
 const siwsLifetime = 60 * time.Second
 
 // Enabled reports whether there is anything to accept.
-func (c SIWSAuth) Enabled() bool { return len(c.Addresses) > 0 }
+func (c SIWSAuth) Enabled() bool { return c.Open || len(c.Addresses) > 0 }
+
+// Policy is the check this configuration performs.
+func (c SIWSAuth) Policy() Policy {
+	return Policy{Allowed: c.Addresses, Open: c.Open, MaxAge: c.MaxAge}
+}
 
 // Challenge is the sign-in request handed to a wallet.
 func (c SIWSAuth) Challenge(domain string) (SIWSInput, error) {
@@ -111,27 +131,37 @@ func (c SIWSAuth) Challenge(domain string) (SIWSInput, error) {
 //
 // The address is returned as the wallet wrote it, read back out of the message
 // it signed, rather than re-encoded here.
-func (c SIWSAuth) Verify(message, signature []byte, domain string) (ed25519.PublicKey, string, error) {
-	parsed, err := VerifySIWS(message, signature, domain, c.Addresses, c.now())
-	if err != nil {
-		return nil, "", err
+func (c SIWSAuth) Verify(message, signature []byte, domain string) (string, error) {
+	parsed, _, err := VerifySIWS(message, signature, domain, c.Policy(), c.now())
+	if parsed.Address != "" {
+		return parsed.Address, err
 	}
-	key, err := base58Decode(parsed.Address)
-	if err != nil {
-		return nil, "", err
-	}
-	return ed25519.PublicKey(key), parsed.Address, nil
+	return "", err
 }
+
+// AnyAddress is the --authorized-addresses value that accepts every account.
+// It is a star for the same reason --origins takes one.
+const AnyAddress = "*"
 
 // ParseAuthorizedAddresses reads an allow list.
 //
-// Both forms a Solana user is likely to have are accepted: an SSH public key,
-// which is what a wallet's key or ssh-add -L produces, and the bare hex of the
-// key. A base58 address is not handled here on purpose - decoding that alphabet
-// inside an authentication path is a bad trade, and a caller who has one can
-// send hex instead.
-func ParseAuthorizedAddresses(entries []string) ([][]byte, error) {
-	var keys [][]byte
+// Three forms name one account, and all three are accepted because the same
+// account turns up in all three and asking anyone to convert one they already
+// have is a pointless step: a Solana address in base58, an SSH ed25519 public
+// key, and the bare hex of the key. All three are the same 32 bytes, and none
+// is normalised into another; each is read in its own encoding and compared as
+// bytes.
+//
+// `*` accepts every account, which is a different thing entirely from naming
+// none, and returns open rather than an empty list so the two cannot be
+// confused.
+func ParseAuthorizedAddresses(entries []string) (addresses [][]byte, open bool, err error) {
+	for _, entry := range entries {
+		if strings.TrimSpace(entry) == AnyAddress {
+			return nil, true, nil
+		}
+	}
+
 	for _, entry := range entries {
 		entry = strings.TrimSpace(entry)
 		if entry == "" {
@@ -140,20 +170,29 @@ func ParseAuthorizedAddresses(entries []string) ([][]byte, error) {
 		if pub, _, _, _, err := gossh.ParseAuthorizedKey([]byte(entry)); err == nil {
 			crypto, ok := pub.(gossh.CryptoPublicKey)
 			if !ok {
-				return nil, fmt.Errorf("%q is not a crypto key", entry)
+				return nil, false, fmt.Errorf("%q is not a crypto key", entry)
 			}
 			raw, ok := crypto.CryptoPublicKey().(ed25519.PublicKey)
 			if !ok {
-				return nil, fmt.Errorf("%q is not an ed25519 key", entry)
+				return nil, false, fmt.Errorf("%q is not an ed25519 key", entry)
 			}
-			keys = append(keys, raw)
+			addresses = append(addresses, raw)
 			continue
 		}
-		raw, err := hex.DecodeString(entry)
-		if err != nil || len(raw) != ed25519.PublicKeySize {
-			return nil, fmt.Errorf("%q is neither an SSH ed25519 public key nor a hex key", entry)
+		if raw, err := hex.DecodeString(entry); err == nil && len(raw) == ed25519.PublicKeySize {
+			addresses = append(addresses, raw)
+			continue
 		}
-		keys = append(keys, raw)
+		// An address, which is what a person reads. A miss is a refusal rather
+		// than a fallback: guessing at an account is the last thing an allow
+		// list should do.
+		raw, err := Base58Decode(entry)
+		if err != nil || len(raw) != ed25519.PublicKeySize {
+			return nil, false, fmt.Errorf(
+				"%q is not an ed25519 public key, a Solana address, a 64-character hex key, or %q",
+				entry, AnyAddress)
+		}
+		addresses = append(addresses, raw)
 	}
-	return keys, nil
+	return addresses, false, nil
 }

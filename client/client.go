@@ -20,7 +20,6 @@ import (
 	neturl "net/url"
 	"os"
 	"strconv"
-	"strings"
 	"sync"
 
 	"github.com/btwiuse/wssh/auth/agentkey"
@@ -90,8 +89,17 @@ type Options struct {
 	// out signatures for things the user does on the remote side.
 	AgentKeyPath string
 
-	// SIWSKey, when set, signs in to the server with a Solana account before
-	// the session starts, instead of authenticating over SSH.
+	// SIWSSigner, when set, is asked to answer a server's sign-in request
+	// before the session starts, instead of authenticating over SSH.
+	//
+	// It is a callback rather than a key because the key is not always ours to
+	// hold: a command line client has a file, a browser has a wallet extension
+	// that has to be asked across a bridge while its holder reads what they
+	// are approving.
+	SIWSSigner SIWSSigner
+
+	// SIWSKey signs in with a Solana account this process holds. It is
+	// SIWSSigner for the common case where there is a file.
 	//
 	// The key signs a short readable message the server asked for. It never
 	// crosses, and SSH's own authentication is not involved: the signature
@@ -102,9 +110,14 @@ type Options struct {
 	// are still offered.
 	SIWSKey ed25519.PrivateKey
 
-	// SIWSChallengePath is where to fetch the sign-in request. Empty means
-	// the conventional path, which is what a wssh server publishes.
-	SIWSChallengePath string
+	// AgentNotice, when set, is called with the outcome of offering an agent to
+	// the server: nil if it was accepted, or the reason it was not.
+	AgentNotice AgentNotice
+
+	// AgentKeyring is the keyring AgentSigners came from, when there is
+	// something more on it than signing. A keyring can answer extensions the
+	// agent protocol does not define, and this is how one reaches the server.
+	AgentKeyring agentkey.Agent
 
 	// AgentSigners are offered to the server as a keyring for the session,
 	// and for anything it runs, to sign with.
@@ -175,27 +188,44 @@ func Dial(ctx context.Context, opts Options) (*Session, error) {
 	// Bound by the caller's context, and cancelled when the session ends.
 	ctx, cancel := context.WithCancel(ctx)
 
-	// A wallet sign-in has to be in the URL that is dialled, not applied
-	// afterwards: the server reads it from the request that opens the socket,
-	// and a browser cannot set headers on a WebSocket.
-	dialURL := opts.URL
-	if len(opts.SIWSKey) > 0 {
-		token, err := SIWSSignIn(opts.URL, opts.SIWSChallengePath, opts.SIWSKey)
-		if err != nil {
-			cancel()
-			return nil, err
-		}
-		sep := "?"
-		if strings.Contains(dialURL, "?") {
-			sep = "&"
-		}
-		dialURL += sep + "auth=" + neturl.QueryEscape(token)
-	}
-
-	wsConn, _, err := websocket.Dial(ctx, dialURL, nil)
+	// The subprotocol is how a client says it is willing to sign in, and it is
+	// echoed back only by a server that will ask. That is what keeps the
+	// exchange out of the way: against an ordinary server this client goes
+	// straight into SSH without waiting to find out whether anyone was going
+	// to ask it anything.
+	wsConn, _, err := websocket.Dial(ctx, opts.URL, &websocket.DialOptions{
+		Subprotocols: []string{SIWSSubprotocol},
+	})
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("dial websocket: %w", err)
+	}
+
+	// A wallet sign-in is answered on the socket itself, before any SSH byte
+	// moves, which is how public key authentication works too. Nothing
+	// sensitive goes in the URL, so it does not end up in proxy logs, browser
+	// history or a process list.
+	// Read the negotiated subprotocol off the connection, not off the HTTP
+	// response: in a browser the response is synthesised with a status code and
+	// nothing else, so a header check silently reads as "no", and the client
+	// goes straight into SSH while the server is still waiting to ask it
+	// something.
+	if wsConn.Subprotocol() == SIWSSubprotocol {
+		signer := opts.SIWSSigner
+		if signer == nil && len(opts.SIWSKey) > 0 {
+			signer = SIWSSignIn(opts.SIWSKey)
+		}
+		done, err := doSignIn(ctx, wsConn, signer)
+		switch {
+		case err != nil:
+			cancel()
+			_ = wsConn.Close(websocket.StatusNormalClosure, "")
+			return nil, fmt.Errorf("sign in: %w", err)
+		case !done:
+			cancel()
+			_ = wsConn.Close(websocket.StatusNormalClosure, "")
+			return nil, errors.New("the server did not accept the sign-in")
+		}
 	}
 
 	// SSH is a self-contained protocol on a byte stream, so the WebSocket only
@@ -263,8 +293,15 @@ func Dial(ctx context.Context, opts Options) (*Session, error) {
 	// forwarding; only the far end's ability to ask for a signature is
 	// missing. This package also cannot log: it is compiled for js/wasm as
 	// well, and the charm logger drags in bubbletea, which has no js build.
+	// Whether the agent was offered, and refused. The session is an ordinary
+	// one either way, but a user who asked for a signing key and got nothing
+	// is owed an explanation rather than silence.
+	var agentRefused error
 	if len(agentSigners) > 0 {
-		_ = offerAgent(client, agentSigners)
+		agentRefused = offerAgent(client, opts.AgentKeyring, agentSigners)
+	}
+	if opts.AgentNotice != nil {
+		opts.AgentNotice(agentRefused)
 	}
 
 	sshSess, err := client.NewSession()
@@ -328,8 +365,18 @@ func Dial(ctx context.Context, opts Options) (*Session, error) {
 	return s, nil
 }
 
-// offerAgent tells the server that this connection has a keyring, and registers
-// the handler that will answer when it asks for a signature.
+// AgentNotice is told what became of an agent offered to the server, or nil if
+// none was. It exists so the refusal can be shown rather than swallowed: a
+// session works perfectly well without a signing key, which is exactly why
+// nothing else would ever say so.
+//
+// It is a hook rather than a log call because this package is compiled for
+// js/wasm too, and the charm logger drags in bubbletea, which has no js build.
+type AgentNotice func(refused error)
+
+// Options.AgentNotice, when set, is called with the outcome of offering an
+// agent to the server. A nil argument means it was accepted.
+// AgentNotice is told what became of an agent offered to the server.
 //
 // The channel runs the other way round from what the name suggests: the
 // client asks, and the *server* opens the channel back. agent.ForwardToAgent
@@ -342,12 +389,17 @@ func Dial(ctx context.Context, opts Options) (*Session, error) {
 // is answered by asking them, so a Signer that blocks until the user says yes
 // costs the far end a wait rather than handing over a key.
 //
-// The caller may ignore an error: a server with no forwarding support simply
-// declines, and the session is an ordinary one.
-func offerAgent(client *ssh.Client, signers []ssh.Signer) error {
-	ring, err := agentkey.Keyring(signers)
-	if err != nil {
-		return fmt.Errorf("build agent keyring: %w", err)
+// A refusal is not fatal. A server without forwarding simply declines, and the
+// session is an ordinary one - but the caller is handed the reason so it can
+// say so, because "I asked for a key to sign with and nothing happened" is the
+// same symptom as a server that is simply configured not to allow it.
+func offerAgent(client *ssh.Client, ring agentkey.Agent, signers []ssh.Signer) error {
+	if ring == nil {
+		var err error
+		ring, err = agentkey.Keyring(signers)
+		if err != nil {
+			return fmt.Errorf("build agent keyring: %w", err)
+		}
 	}
 
 	// Handler first: the server may dial back the moment it agrees, and a
@@ -367,7 +419,9 @@ func offerAgent(client *ssh.Client, signers []ssh.Signer) error {
 		return fmt.Errorf("request agent forwarding: %w", err)
 	}
 	if !ok {
-		return errors.New("the server declined agent forwarding")
+		return errors.New(
+			"the server declined agent forwarding: it needs --forward-agent " +
+				"to make a session's keys signable")
 	}
 	return nil
 }

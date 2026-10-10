@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
+	gossh "golang.org/x/crypto/ssh"
 	"math/big"
 	"strings"
 	"testing"
@@ -21,7 +23,7 @@ const (
 )
 
 func TestBase58DecodesARealAddress(t *testing.T) {
-	got, err := base58Decode(knownAddr)
+	got, err := Base58Decode(knownAddr)
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -37,8 +39,8 @@ func TestBase58RejectsWhatItCannotRead(t *testing.T) {
 	// 0, O, I and l are deliberately not in the alphabet: a mistyped address
 	// has to be refused, not quietly resolved to some other account.
 	for _, bad := range []string{"", "0OIl", "abc0def", "not-an-address"} {
-		if _, err := base58Decode(bad); err == nil {
-			t.Errorf("base58Decode(%q) should have failed", bad)
+		if _, err := Base58Decode(bad); err == nil {
+			t.Errorf("Base58Decode(%q) should have failed", bad)
 		}
 	}
 }
@@ -182,7 +184,7 @@ func TestVerifySIWSAcceptsAGoodAnswer(t *testing.T) {
 	message := []byte(in.Format())
 	sig := ed25519.Sign(priv, message)
 
-	parsed, err := VerifySIWS(message, sig, "wssh.example", [][]byte{pub}, issued.Add(time.Minute))
+	parsed, _, err := VerifySIWS(message, sig, "wssh.example", Policy{Allowed: [][]byte{pub}}, issued.Add(time.Minute))
 	if err != nil {
 		t.Fatalf("verify: %v", err)
 	}
@@ -221,7 +223,7 @@ func TestVerifySIWSRejectsEverythingElse(t *testing.T) {
 		"a message that is not one of ours": {[]byte("please sign in"), sig, "wssh.example", [][]byte{pub}},
 	}
 	for name, tt := range tests {
-		if _, err := VerifySIWS(tt.message, tt.sig, tt.domain, tt.allowed, now); err == nil {
+		if _, _, err := VerifySIWS(tt.message, tt.sig, tt.domain, Policy{Allowed: tt.allowed}, now); err == nil {
 			t.Errorf("%s should not have verified", name)
 		}
 	}
@@ -241,12 +243,12 @@ func TestVerifySIWSRefusesAnExpiredMessage(t *testing.T) {
 		ExpiresAt: expires.Format(time.RFC3339),
 	}.Format())
 
-	if _, err := VerifySIWS(message, ed25519.Sign(priv, message),
-		"wssh.example", [][]byte{pub}, expires.Add(-time.Second)); err != nil {
+	if _, _, err := VerifySIWS(message, ed25519.Sign(priv, message),
+		"wssh.example", Policy{Allowed: [][]byte{pub}}, expires.Add(-time.Second)); err != nil {
 		t.Fatalf("should still be valid before expiry: %v", err)
 	}
-	if _, err := VerifySIWS(message, ed25519.Sign(priv, message),
-		"wssh.example", [][]byte{pub}, expires.Add(time.Second)); err == nil {
+	if _, _, err := VerifySIWS(message, ed25519.Sign(priv, message),
+		"wssh.example", Policy{Allowed: [][]byte{pub}}, expires.Add(time.Second)); err == nil {
 		t.Fatal("an expired message should not verify")
 	}
 }
@@ -324,4 +326,239 @@ func equalBytes(a, b []byte) bool {
 		}
 	}
 	return true
+}
+
+// An allow list is written by people, and the same account turns up as a
+// wallet's SSH public key, as the address a wallet displays, and as hex. All
+// three name the same 32 bytes and all three have to work, because asking
+// anyone to convert one they already have is a step with no purpose behind it.
+func TestParseAuthorizedAddressesTakesEveryForm(t *testing.T) {
+	key, err := hex.DecodeString(knownKeyHex)
+	if err != nil {
+		t.Fatalf("hex: %v", err)
+	}
+	want := []byte(key)
+
+	forms := map[string]string{
+		"solana address": knownAddr,
+		"hex":            knownKeyHex,
+		"upper hex":      strings.ToUpper(knownKeyHex),
+		"ssh public key": "ssh-ed25519 " + knownAddrSSHKeyBlob(t) + " someone@example",
+	}
+	for name, entry := range forms {
+		t.Run(name, func(t *testing.T) {
+			got, open, err := ParseAuthorizedAddresses([]string{entry})
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if open {
+				t.Fatalf("%q was read as accept-any rather than naming an account", entry)
+			}
+			if len(got) != 1 {
+				t.Fatalf("expected 1 key, got %d", len(got))
+			}
+			if !equalBytes(got[0], want) {
+				t.Errorf("got %x, want %x", got[0], want)
+			}
+		})
+	}
+}
+
+// An allow list that guesses is worse than one that refuses, so anything that
+// is not one of the three forms has to be an error rather than a near miss.
+func TestParseAuthorizedAddressesRefusesAnythingElse(t *testing.T) {
+	for _, bad := range []string{
+		"not-a-key", "0OIl", "abc0def",
+		// Right alphabet, wrong length: a truncated address must not match.
+		"5cyyvrzC3N3Kz1vU1iA9symxyMpKWFPSU3AmBdt9X",
+	} {
+		if _, _, err := ParseAuthorizedAddresses([]string{bad}); err == nil {
+			t.Errorf("%q should not have been accepted", bad)
+		}
+	}
+}
+
+func knownAddrSSHKeyBlob(t *testing.T) string {
+	t.Helper()
+	raw, err := hex.DecodeString(knownKeyHex)
+	if err != nil {
+		t.Fatalf("hex: %v", err)
+	}
+	pub, err := gossh.NewPublicKey(ed25519.PublicKey(raw))
+	if err != nil {
+		t.Fatalf("wrap: %v", err)
+	}
+	return string(gossh.MarshalAuthorizedKey(pub))
+}
+
+// `*` accepts any account, which is the dapp model: holding a wallet proves
+// you are someone, not who.
+func TestAnyAccountSignsIn(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	now := time.Date(2026, 10, 10, 6, 0, 0, 0, time.UTC)
+
+	message := []byte(SIWSInput{
+		Domain: "wssh.example", Address: encodeBase58ForTest(t, pub),
+		Nonce: "abc123", IssuedAt: now.Format(time.RFC3339),
+	}.Format())
+
+	if _, _, err := VerifySIWS(message, ed25519.Sign(priv, message),
+		"wssh.example", Policy{Open: true}, now); err != nil {
+		t.Fatalf("an unknown account should be accepted: %v", err)
+	}
+}
+
+// Open is not a blanket pass. Everything that does not depend on who is
+// signing still has to hold.
+func TestOpenStillChecksEverythingElse(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	_, strangerPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	now := time.Date(2026, 10, 10, 6, 0, 0, 0, time.UTC)
+
+	message := []byte(SIWSInput{
+		Domain: "wssh.example", Address: encodeBase58ForTest(t, pub),
+		Nonce: "abc123", IssuedAt: now.Format(time.RFC3339),
+	}.Format())
+
+	tests := map[string]struct {
+		domain string
+		sig    []byte
+	}{
+		"a different domain":           {"evil.example", ed25519.Sign(priv, message)},
+		"a signature from another key": {"wssh.example", ed25519.Sign(strangerPriv, message)},
+		"a truncated signature":        {"wssh.example", make([]byte, 10)},
+	}
+	for name, tt := range tests {
+		if _, _, err := VerifySIWS(message, tt.sig, tt.domain, Policy{Open: true}, now); err == nil {
+			t.Errorf("%s should not have verified", name)
+		}
+	}
+
+	expired := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC)
+	old := []byte(SIWSInput{
+		Domain: "wssh.example", Address: encodeBase58ForTest(t, pub),
+		Nonce: "abc123", IssuedAt: expired.Format(time.RFC3339),
+	}.Format())
+	if _, _, err := VerifySIWS(old, ed25519.Sign(priv, old), "wssh.example",
+		Policy{Open: true}, now); err == nil {
+		t.Error("a message from three hours ago should not verify, open or not")
+	}
+}
+
+// A refusal has to name the account. One that cannot be acted on is the whole
+// problem the caller is trying to avoid.
+func TestRefusalNamesTheAccount(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	now := time.Date(2026, 10, 10, 6, 0, 0, 0, time.UTC)
+	address := encodeBase58ForTest(t, pub)
+
+	message := []byte(SIWSInput{
+		Domain: "wssh.example", Address: address,
+		Nonce: "abc123", IssuedAt: now.Format(time.RFC3339),
+	}.Format())
+
+	parsed, _, err := VerifySIWS(message, ed25519.Sign(priv, message),
+		"wssh.example", Policy{}, now)
+	if err == nil {
+		t.Fatal("expected a refusal")
+	}
+	if !errors.Is(err, ErrNotAuthorized) {
+		t.Errorf("got %v, want ErrNotAuthorized", err)
+	}
+	if parsed.Address != address {
+		t.Errorf("the refusal does not name the account: got %q, want %q", parsed.Address, address)
+	}
+}
+
+func TestParseAuthorizedAddressesUnderstandsAny(t *testing.T) {
+	addresses, open, err := ParseAuthorizedAddresses([]string{"*"})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !open {
+		t.Error("* should accept any account")
+	}
+	if len(addresses) != 0 {
+		t.Errorf("* should not also name accounts, got %d", len(addresses))
+	}
+
+	// Naming nothing is not the same as accepting everything, and the two have
+	// to be distinguishable.
+	addresses, open, err = ParseAuthorizedAddresses(nil)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if open {
+		t.Error("naming no accounts should not accept every account")
+	}
+	if len(addresses) != 0 {
+		t.Errorf("expected no accounts, got %d", len(addresses))
+	}
+}
+
+// A wallet does not necessarily carry the expiry the challenge asked for, so
+// age is bounded by the issue time instead of trusted to arrive. Without this,
+// a sign-in without an expiry would work forever.
+func TestSignInExpiresEvenWithoutAnExpiryInTheMessage(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	issued := time.Date(2026, 10, 10, 5, 0, 0, 0, time.UTC)
+	message := []byte(SIWSInput{
+		Domain: "wssh.example", Address: encodeBase58ForTest(t, pub),
+		Nonce: "abc123", IssuedAt: issued.Format(time.RFC3339),
+	}.Format())
+	sig := ed25519.Sign(priv, message)
+
+	// No Expiration Time anywhere in it, which is what a wallet produced when
+	// the challenge was not obeyed on that point.
+	if strings.Contains(string(message), "Expiration") {
+		t.Fatal("the test message should carry no expiry")
+	}
+	policy := Policy{Allowed: [][]byte{pub}}
+	if _, _, err := VerifySIWS(message, sig, "wssh.example", policy,
+		issued.Add(time.Minute)); err != nil {
+		t.Fatalf("fresh enough should verify: %v", err)
+	}
+	if _, _, err := VerifySIWS(message, sig, "wssh.example", policy,
+		issued.Add(DefaultMaxAge+time.Second)); err == nil {
+		t.Error("an old sign-in with no expiry should not verify")
+	}
+}
+
+// The System Program's address decodes to thirty-two zero bytes, which is what
+// makes it a special case in base58: the value is zero and the length lives
+// entirely in the leading '1's. A decoder that confuses the two refuses every
+// transfer.
+func TestBase58DecodesTheSystemProgram(t *testing.T) {
+	const systemProgram = "11111111111111111111111111111111"
+
+	got, err := Base58Decode(systemProgram)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got) != ed25519.PublicKeySize {
+		t.Fatalf("decoded %d bytes, want %d", len(got), ed25519.PublicKeySize)
+	}
+	for i, b := range got {
+		if b != 0 {
+			t.Fatalf("byte %d is %d, want 0", i, b)
+		}
+	}
+	if len(got) != ed25519.PublicKeySize {
+		t.Fatal("a 32 character address should decode to 32 bytes")
+	}
 }

@@ -51,6 +51,14 @@ const (
 // and it is the first thing a person reads.
 const siwsHeader = "wants you to sign in with your Solana account:"
 
+// ErrNotAuthorized means the account that signed is not on the allow list.
+//
+// It is a distinct error rather than only a message because it is the one
+// people hit, and the one where the fix is obvious: add the account. Callers
+// use it to answer that differently from a sign-in that failed for any other
+// reason.
+var ErrNotAuthorized = errors.New("account is not authorized")
+
 // SIWSInput is the request handed to a wallet's signIn.
 //
 // Every field except the address is chosen by the server. The address is the
@@ -247,76 +255,113 @@ func isSIWSLabel(label string) bool {
 	return false
 }
 
+// Policy says which accounts may sign in.
+//
+// It is a type rather than a bare list because "any account" has to be
+// something the caller asked for explicitly. An empty list and an open list
+// look identical in a [][]byte, and the difference between them is whether
+// anyone with a wallet gets in.
+type Policy struct {
+	// Allowed is the list of accounts, as raw ed25519 public keys.
+	Allowed [][]byte
+
+	// Open accepts any account that can sign. It is the dapp model: connecting
+	// proves you hold a wallet, not that you are on a list.
+	Open bool
+
+	// MaxAge is how old a sign-in may be. It is what bounds replay, because a
+	// wallet does not necessarily carry the expiry the challenge asked for:
+	// one observed in the wild rendered the message with no expiry line at
+	// all, so a message that carries none would otherwise never expire.
+	MaxAge time.Duration
+}
+
+// DefaultMaxAge is how old a sign-in is allowed to be.
+const DefaultMaxAge = 5 * time.Minute
+
+func (p Policy) maxAge() time.Duration {
+	if p.MaxAge > 0 {
+		return p.MaxAge
+	}
+	return DefaultMaxAge
+}
+
 // VerifySIWS checks a wallet's answer to a sign-in request.
 //
-// pub is the account the signature was checked against, which the caller
-// obtained from the wallet and has already authorized. expectedDomain is the
-// host this server is being reached at, and the message has to name it: that
-// is what stops a message captured here from being presented elsewhere, and
-// what stops a page from borrowing this server's name.
+// The account the message names is checked against the policy, the domain
+// against the one this connection actually arrived at, the expiry against the
+// clock, and the signature against the account - in that order, so the most
+// useful refusal is the first one reached.
 //
-// A failed check returns what went wrong. It is deliberately specific: "the
-// domain does not match" and "the signature is wrong" are different problems
-// with different fixes, and the person reading it is usually the operator.
+// The parsed message comes back even when the check fails, because the account
+// is readable from it and a refusal that cannot say which account was refused is
+// a refusal nobody can act on.
 func VerifySIWS(message, signature []byte, expectedDomain string,
-	authorized [][]byte, now time.Time) (SIWSInput, error) {
+	policy Policy, now time.Time) (SIWSInput, ed25519.PublicKey, error) {
 
 	if len(signature) != ed25519.SignatureSize {
-		return SIWSInput{}, fmt.Errorf("signature is %d bytes, want %d", len(signature), ed25519.SignatureSize)
+		return SIWSInput{}, nil,
+			fmt.Errorf("signature is %d bytes, want %d", len(signature), ed25519.SignatureSize)
 	}
 
 	parsed, err := ParseSIWS(message)
 	if err != nil {
-		return SIWSInput{}, err
+		return SIWSInput{}, nil, err
+	}
+
+	// The account, read before anything else so a refusal can name it.
+	named, err := Base58Decode(parsed.Address)
+	if err != nil {
+		return parsed, nil, fmt.Errorf("the account named in the message is unreadable: %w", err)
+	}
+	if len(named) != ed25519.PublicKeySize {
+		return parsed, nil, fmt.Errorf("the message names a %d byte account", len(named))
 	}
 
 	if !strings.EqualFold(parsed.Domain, expectedDomain) {
-		return SIWSInput{}, fmt.Errorf("message is for domain %q, not %q", parsed.Domain, expectedDomain)
+		return parsed, nil, fmt.Errorf("message is for domain %q, not %q", parsed.Domain, expectedDomain)
 	}
 
-	// The account named in the message has to be the one that signed it.
-	// Otherwise a valid signature over a message about someone else would be
-	// accepted for whoever signed it.
-	named, err := base58Decode(parsed.Address)
-	if err != nil {
-		return SIWSInput{}, fmt.Errorf("the account named in the message is unreadable: %w", err)
-	}
-	if len(named) != ed25519.PublicKeySize {
-		return SIWSInput{}, fmt.Errorf("the message names a %d byte account", len(named))
-	}
-	if !containsKey(authorized, named) {
-		return SIWSInput{}, fmt.Errorf("account %s is not authorized", parsed.Address)
+	if !policy.Open && !containsKey(policy.Allowed, named) {
+		return parsed, nil, fmt.Errorf("%w: %s", ErrNotAuthorized, parsed.Address)
 	}
 
 	issued, err := time.Parse(time.RFC3339, parsed.IssuedAt)
 	if err != nil {
-		return SIWSInput{}, fmt.Errorf("issue time is unreadable: %w", err)
+		return parsed, nil, fmt.Errorf("issue time is unreadable: %w", err)
 	}
 	// Allow a little clock skew, but not a message issued in the future. A
 	// message from the future is either a replay or a badly set clock, and
 	// neither is a reason to accept it.
 	if issued.After(now.Add(skewTolerance)) {
-		return SIWSInput{}, fmt.Errorf("this sign-in claims to have been issued at %s", issued.Format(time.RFC3339))
+		return parsed, nil, fmt.Errorf("this sign-in claims to have been issued at %s",
+			issued.Format(time.RFC3339))
+	}
+
+	// And not one that is old. The expiry in the message is the better check
+	// where the wallet carried it, but one in the wild did not, so age is
+	// bounded here rather than trusted to arrive.
+	if age := now.Sub(issued); age > policy.maxAge() {
+		return parsed, nil, fmt.Errorf("this sign-in was issued %s ago; the limit is %s",
+			age.Round(time.Second), policy.maxAge())
 	}
 
 	if parsed.ExpiresAt != "" {
 		expires, err := time.Parse(time.RFC3339, parsed.ExpiresAt)
 		if err != nil {
-			return SIWSInput{}, fmt.Errorf("expiry is unreadable: %w", err)
+			return parsed, nil, fmt.Errorf("expiry is unreadable: %w", err)
 		}
 		if !expires.After(now) {
-			return SIWSInput{}, fmt.Errorf("this sign-in expired at %s", expires.Format(time.RFC3339))
+			return parsed, nil, fmt.Errorf("this sign-in expired at %s", expires.Format(time.RFC3339))
 		}
 	}
 
-	// The signature covers the account the message names, and the caller has
-	// already checked that account against its allow list. Checking it here as
-	// well is what stops a signature by an unauthorized key being read as an
-	// authorized one.
-	if !ed25519.Verify(named, message, signature) {
-		return SIWSInput{}, errors.New("the signature does not match the account it names")
+	// The signature covers the account the message names. Checking it last
+	// means everything cheap and specific has already been said.
+	if !ed25519.Verify(ed25519.PublicKey(named), message, signature) {
+		return parsed, nil, errors.New("the signature does not match the account it names")
 	}
-	return parsed, nil
+	return parsed, ed25519.PublicKey(named), nil
 }
 
 // EncodeSIWS packs a wallet's answer into one string, so it can travel in the
@@ -354,7 +399,10 @@ const base58Alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwx
 // compare the result against an allow list of exact 32-byte keys. A mistake
 // here therefore fails closed: wrong bytes match nothing. It is still written
 // defensively, and pinned by tests against a real address.
-func base58Decode(s string) ([]byte, error) {
+// Base58Decode reads a Solana address. It is exported because the agent
+// and the sign-in path both speak base58, and one tested decoder is better
+// than two.
+func Base58Decode(s string) ([]byte, error) {
 	if s == "" {
 		return nil, errors.New("empty")
 	}
@@ -370,15 +418,18 @@ func base58Decode(s string) ([]byte, error) {
 		n.Add(n, mod.SetInt64(int64(i)))
 	}
 
-	// A leading '1' means a leading zero byte, and big.Int drops those.
+	// A leading '1' means a leading zero byte, and big.Int drops those. The
+	// System Program's address is all of them, so this is not an edge case:
+	// refusing it would refuse every transfer.
 	leading := 0
 	for leading < len(s) && s[leading] == base58Alphabet[0] {
 		leading++
 	}
-	if leading+1 > len(s) {
+	raw := n.Bytes()
+	if leading+len(raw) > 1024 {
 		return nil, errors.New("address is out of range")
 	}
-	return append(make([]byte, leading), n.Bytes()...), nil
+	return append(make([]byte, leading), raw...), nil
 }
 
 // Base58Encode writes bytes the way a wallet names an account: the same bytes in

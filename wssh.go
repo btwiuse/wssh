@@ -179,7 +179,7 @@ func NewServer(opts Options) (*Server, error) {
 	}
 
 	if opts.WalletAuth != nil && opts.WalletAuth.Enabled() {
-		installWalletAuth(sessions, opts.WalletAuth, opts.Logger)
+		installWalletAuth(sessions, opts.WalletAuth)
 	}
 
 	if opts.Agent != nil {
@@ -207,8 +207,19 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A client that is willing to sign in says so by offering this
+	// subprotocol, and it is echoed back only when this server will ask. That
+	// is what keeps the exchange out of the way of an ordinary connection: a
+	// client that sees no subprotocol goes straight into SSH without waiting
+	// to find out whether anyone was going to ask it anything.
+	var subprotocols []string
+	if s.opts.WalletAuth != nil && s.opts.WalletAuth.Enabled() {
+		subprotocols = []string{SIWSSubprotocol}
+	}
+
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		OriginPatterns: s.opts.OriginPatterns,
+		Subprotocols:   subprotocols,
 		// The payload is already encrypted. Compressing it burns CPU on both
 		// ends and leaks plaintext length over the wire.
 		CompressionMode: websocket.CompressionDisabled,
@@ -224,19 +235,31 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// A wallet sign-in happens here, over the same WebSocket, before any SSH
+	// byte moves. It is in band for the same reason public key authentication
+	// is: the connection is already open, so the server can ask a question and
+	// get an answer on it, and a refused sign-in can say why.
+	//
+	// Doing it here rather than in the URL is what keeps the credential out of
+	// proxy logs, browser history and the address bar. It also means there is
+	// no second endpoint and no separate protocol on the side.
+	var authorized bool
+	if s.opts.WalletAuth != nil && s.opts.WalletAuth.Enabled() {
+		authorized = s.exchangeSignIn(ctx, conn, r.Host)
+		if !authorized {
+			// The reason has already gone back over the socket, in full.
+			_ = conn.Close(websocket.StatusPolicyViolation, "sign-in refused")
+			return
+		}
+	}
+
 	// A wallet sign-in arrives in the query string, because a browser cannot
 	// set headers on a WebSocket. It rides along on the connection rather than
 	// being checked here: this handler is the one place that can see the HTTP
 	// request, and the SSH server has already started by the time it returns.
 	var netConn net.Conn = websocket.NetConn(ctx, conn, websocket.MessageBinary)
-	if s.opts.WalletAuth != nil && s.opts.WalletAuth.Enabled() {
-		netConn = &walletConn{
-			Conn:  netConn,
-			token: r.URL.Query().Get(walletAuthQuery),
-			// The domain a wallet will be asked to name is the one this
-			// client reached, not one fixed at startup.
-			host: r.Host,
-		}
+	if authorized {
+		netConn = &walletConn{Conn: netConn, authorized: true}
 	}
 	defer netConn.Close() //nolint:errcheck
 
@@ -253,33 +276,30 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// walletAuthQuery is the query parameter a wallet sign-in arrives in.
-const walletAuthQuery = "auth"
-
 // walletAddressKey marks a connection that arrived with a verified wallet
 // sign-in. It is read by the config hook below, and by nothing else.
 const walletAddressKey = "wssh.wallet-address"
 
-// walletConn carries a sign-in token to the point where it can be checked.
+// walletConn carries a completed sign-in to the point where it is needed.
 //
-// The SSH server builds its own context per connection and never sees the HTTP
-// request, so anything from the request has to travel on the connection itself.
+// The SSH server builds its own context per connection, having already started
+// the handshake by the time anything can be attached to it, so the fact that
+// the sign-in worked has to ride in on the connection itself.
 type walletConn struct {
 	net.Conn
-	token string
-	host  string
+	authorized bool
 }
 
 // installWalletAuth makes a verified wallet sign-in into a completed SSH
 // authentication.
 //
-// The trick is that SSH's own authentication cannot be satisfied by a wallet:
-// its challenge is binary and the wallet will not sign it. So the check happens
-// before the handshake, and the handshake is then told not to ask. Nothing
-// about the SSH protocol changes; a connection that arrives with a valid
-// sign-in is simply allowed through the way an unauthenticated server allows
-// everything, except that here it had to prove something first.
-func installWalletAuth(srv *ssh.Server, cfg *siws.SIWSAuth, logger *log.Logger) {
+// SSH's own authentication cannot be satisfied by a wallet: its challenge is
+// binary and a wallet will not sign it. So the exchange above answers a
+// different question, and the handshake is then told not to ask one. Nothing
+// about the SSH protocol changes; a connection that has proved itself is let
+// through the way an unauthenticated server allows everything, except that here
+// it had to prove something first.
+func installWalletAuth(srv *ssh.Server, cfg *siws.SIWSAuth) {
 	prevConn := srv.ConnCallback
 	srv.ConnCallback = func(ctx ssh.Context, conn net.Conn) net.Conn {
 		if prevConn != nil {
@@ -288,30 +308,10 @@ func installWalletAuth(srv *ssh.Server, cfg *siws.SIWSAuth, logger *log.Logger) 
 			}
 		}
 		carrier, ok := conn.(*walletConn)
-		if !ok || carrier.token == "" {
-			// No sign-in offered. Whatever else this server accepts, it
-			// accepts on its own terms.
+		if !ok || !carrier.authorized {
 			return conn
 		}
-
-		message, signature, err := siws.DecodeSIWS(carrier.token)
-		if err != nil {
-			logger.Debug("wallet sign-in unreadable", "error", err)
-			return nil
-		}
-		_, address, err := cfg.Verify(message, signature, carrier.host)
-		if err != nil {
-			logger.Debug("wallet sign-in refused", "error", err)
-			// A sign-in that was offered and did not check out ends the
-			// connection rather than falling through. Falling through would
-			// turn a failed wallet sign-in into an ordinary connection on
-			// any server that is not otherwise locked, which is the opposite
-			// of what offering one means.
-			return nil
-		}
-
-		ctx.SetValue(walletAddressKey, address)
-		logger.Debug("wallet sign-in accepted", "address", address)
+		ctx.SetValue(walletAddressKey, true)
 		return conn
 	}
 
