@@ -20,7 +20,7 @@ func goldenRequest(t *testing.T) agentkey.SolanaTxRequest {
 	}
 	return agentkey.SolanaTxRequest{
 		Blockhash: "B1P9Y4gHoGaSX9FS6nUeAb5Jx3ATjNPGmc7YE4jfEQUZ",
-		Payer:     payer,
+		Signer:    payer,
 		Instructions: []agentkey.SolanaInstruction{{
 			ProgramID:  MemoProgramID,
 			Accounts:   []agentkey.SolanaAccount{{Address: payer, IsSigner: true, IsWritable: true}},
@@ -57,8 +57,8 @@ func TestBuiltTransactionCarriesTheFeePayer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the built transaction cannot be read back: %v", err)
 	}
-	if who != goldenRequest(t).Payer {
-		t.Errorf("fee payer reads back as %q, want %q", who, goldenRequest(t).Payer)
+	if who != goldenRequest(t).Signer {
+		t.Errorf("fee payer reads back as %q, want %q", who, goldenRequest(t).Signer)
 	}
 }
 
@@ -79,7 +79,7 @@ func TestBuildRefusesASignerItDoesNotHave(t *testing.T) {
 // because the payer is the key that is going to sign.
 func TestBuildRefusesWithoutAPayer(t *testing.T) {
 	req := goldenRequest(t)
-	req.Payer = ""
+	req.Signer = ""
 	if _, err := BuildTransaction(req); err == nil {
 		t.Error("a transaction with no fee payer should have been refused")
 	}

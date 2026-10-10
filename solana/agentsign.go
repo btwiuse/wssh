@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/btwiuse/wssh/auth/agentkey"
-	"github.com/btwiuse/wssh/auth/siws"
 	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 )
@@ -57,15 +56,15 @@ func SignWithAgent(ctx context.Context, sockPath string, req agentkey.SolanaTxRe
 	// offer there is nothing to decide, and taking it is the difference
 	// between this working in a session and this working only when the
 	// account happens to be named.
-	if req.Payer == "" {
+	if req.Signer == "" {
 		payer, err := soleKeyOn(conn)
 		if err != nil {
 			return resp, err
 		}
-		req.Payer = payer
+		req.Signer = payer
 	}
 
-	payer, err := decode32(req.Payer, "payer")
+	payer, err := decode32(req.Signer, "payer")
 	if err != nil {
 		return resp, err
 	}
@@ -85,7 +84,7 @@ func SignWithAgent(ctx context.Context, sockPath string, req agentkey.SolanaTxRe
 
 	answer, err := conn.Sign(key, message)
 	if err != nil {
-		return resp, fmt.Errorf("the agent did not sign with %s: %w", req.Payer, err)
+		return resp, fmt.Errorf("the agent did not sign with %s: %w", req.Signer, err)
 	}
 	sig := answer.Blob
 	if len(sig) != ed25519.SignatureSize {
@@ -125,25 +124,22 @@ func soleKeyOn(conn agent.ExtendedAgent) (string, error) {
 	default:
 		return "", fmt.Errorf(
 			"the agent holds %d keys and signs with whichever one is named, "+
-				"so pass --payer with the account to use", len(keys))
+				"so pass --signer with the account to use", len(keys))
 	}
 
 	// An agent hands keys back in the wire form the protocol uses, which is
 	// the algorithm name and then the key body, each under its own four-byte
-	// length. For ed25519 the body is the 32 raw bytes an account address is
-	// made of, but they are behind both lengths and not only the first.
-	if keys[0].Format != gossh.KeyAlgoED25519 {
-		return "", fmt.Errorf(
-			"the only key the agent holds is a %s, and an account address can "+
-				"only be named for an ed25519 key", keys[0].Format)
+	// length. gossh.ParsePublicKey is the reader for that, and going through
+	// the parsed key rather than slicing lengths off the bytes by hand is what
+	// lets the account be named by the same code that names it anywhere else,
+	// so the answer here cannot drift from what a listing would have printed.
+	pub, err := gossh.ParsePublicKey(keys[0].Blob)
+	if err != nil {
+		return "", fmt.Errorf("the only key the agent holds is not in the shape the protocol describes: %w", err)
 	}
-	blob := keys[0].Blob
-	const algo = gossh.KeyAlgoED25519
-	const lenPrefix = 4
-	if len(blob) < 2*lenPrefix+len(algo)+ed25519.PublicKeySize ||
-		string(blob[lenPrefix:lenPrefix+len(algo)]) != algo {
-		return "", errors.New("the only key the agent holds is not in the shape the protocol describes")
+	address, err := AddressFor(pub)
+	if err != nil {
+		return "", fmt.Errorf("the only key the agent holds names no account: %w", err)
 	}
-	start := 2*lenPrefix + len(algo)
-	return siws.Base58Encode(blob[start : start+ed25519.PublicKeySize]), nil
+	return address, nil
 }

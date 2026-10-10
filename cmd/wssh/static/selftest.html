@@ -304,10 +304,10 @@ async function phase2() {
   }
   say('blockhash ' + bh + (RPC ? ' (live)' : ' (fixed; nothing is broadcast)'));
 
-  // To and payer are both this key: a transaction whose fee payer it is not
+  // To and signer are both this key: a transaction whose fee payer it is not
   // will not send, and the point here is the shape not the money.
   const cmd = `${BIN} transfer --to ${key.address} --lamports ${LAMPORTS} ` +
-              `--blockhash ${bh} --payer ${key.address}`;
+              `--blockhash ${bh} --signer ${key.address}`;
   say('$ ' + cmd);
 
   acc = '';

@@ -11,6 +11,7 @@
 // Every byte on the wire is annotated in verbose mode, which is what makes
 // this script useful for debugging a wallet connection that is misbehaving.
 
+
 export interface SolanaAccount {
   address: string;
   isSigner: boolean;
@@ -27,7 +28,8 @@ export interface SolanaInstruction {
 export interface SolanaTxRequest {
   blockhash: string;
   label?: string;
-  payer?: string;
+  /** The key that signs. Also the fee payer: Solana requires that. */
+  signer?: string;
   instructions: SolanaInstruction[];
 }
 

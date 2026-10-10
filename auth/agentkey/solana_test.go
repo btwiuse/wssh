@@ -552,8 +552,8 @@ func TestPayerDefaultsToTheSigningKey(t *testing.T) {
 	}
 
 	want := Base58EncodeForTest(t, pub)
-	if asked.Payer != want {
-		t.Errorf("payer came back as %q, want the signing key %q", asked.Payer, want)
+	if asked.Signer != want {
+		t.Errorf("payer came back as %q, want the signing key %q", asked.Signer, want)
 	}
 }
 
@@ -576,12 +576,12 @@ func TestAnExplicitPayerIsNotOverridden(t *testing.T) {
 	}
 
 	req := testRequest(t)
-	req.Payer = "someone-else"
+	req.Signer = "someone-else"
 	if _, err := ring.Extension(SolanaTxExtension, marshalRequest(t, req)); err != nil {
 		t.Fatalf("extension: %v", err)
 	}
-	if asked.Payer != "someone-else" {
-		t.Errorf("an explicit payer was replaced with %q", asked.Payer)
+	if asked.Signer != "someone-else" {
+		t.Errorf("an explicit payer was replaced with %q", asked.Signer)
 	}
 }
 

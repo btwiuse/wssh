@@ -33,14 +33,17 @@ import (
 // refused rather than approximated - a transaction missing one of its
 // signatures is one the cluster rejects with nothing that points here.
 func BuildTransaction(req agentkey.SolanaTxRequest) ([]byte, error) {
-	if req.Payer == "" {
-		return nil, errors.New("no fee payer: this path signs with a key it holds, so it has to be named")
+	if req.Signer == "" {
+		return nil, errors.New("no signer: this path signs with a key it holds, so it has to be named")
 	}
 	blockhash, err := decode32(req.Blockhash, "blockhash")
 	if err != nil {
 		return nil, err
 	}
-	payer, err := decode32(req.Payer, "payer")
+	// The named signer is the fee payer, and not because the caller said so
+	// twice: Solana requires the fee payer to be a required signer, so a
+	// transaction with one signer has that signer paying.
+	payer, err := decode32(req.Signer, "signer")
 	if err != nil {
 		return nil, err
 	}

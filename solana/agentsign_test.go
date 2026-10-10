@@ -40,7 +40,7 @@ func TestSignWithAPlainSSHAgent(t *testing.T) {
 	// key, so both have to move together.
 	addr := siws.Base58Encode(pub)
 	req := goldenRequest(t)
-	req.Payer = addr
+	req.Signer = addr
 	req.Instructions[0].Accounts[0].Address = addr
 
 	resp, err := SignWithAgent(context.Background(), sock, req)
@@ -68,8 +68,8 @@ func TestSignWithAPlainSSHAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the result cannot be read back: %v", err)
 	}
-	if who != req.Payer {
-		t.Errorf("the signed transaction reads back a payer of %q, want %q", who, req.Payer)
+	if who != req.Signer {
+		t.Errorf("the signed transaction reads back a payer of %q, want %q", who, req.Signer)
 	}
 }
 

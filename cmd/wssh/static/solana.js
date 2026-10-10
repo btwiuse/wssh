@@ -62,7 +62,10 @@ const MEMO_PROGRAM_ID = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
  * @typedef {Object} TxRequest
  * @property {string} blockhash              base58
  * @property {string} [label]                free text shown beside the transaction
- * @property {string} [payer]                base58; empty means the connected wallet pays
+ * @property {string} [signer]               base58; the key that signs. It is also the
+ *                                           fee payer, because Solana requires the fee
+ *                                           payer to be a required signer. Empty means
+ *                                           the connected wallet chooses.
  * @property {RequestedInstruction[]} instructions
  */
 
@@ -147,6 +150,11 @@ export async function signSolanaTransaction(serialised, buildOnly = false) {
     return { refusal: `${WEB3_URL} loaded but has no Transaction on it` };
   }
 
+  // The request names the key that signs, not the account that pays: Solana
+  // requires the fee payer to be a required signer, so with one signer the two
+  // are the same account, and saying so here beats having the reader work out
+  // which of the two the field really is.
+  //
   // Without a wallet there is no fee payer to name, so the session's own key
   // pays. It is the key that signed in, so it is the one the transaction has
   // to name as well.
@@ -156,8 +164,8 @@ export async function signSolanaTransaction(serialised, buildOnly = false) {
   // payer is therefore the one the request named, regardless of whether a
   // wallet happens to be connected.
   const payer = buildOnly
-    ? request.payer
-    : (provider?.publicKey?.toBase58?.() || request.payer);
+    ? request.signer
+    : (provider?.publicKey?.toBase58?.() || request.signer);
   if (!payer) {
     return { refusal: 'no fee payer: connect a wallet, or say which key to pay with' };
   }

@@ -173,11 +173,8 @@ func jsConnect(_ js.Value, args []js.Value) any {
 				return
 			}
 			auth = append(auth, gossh.PublicKeys(wallet))
-			// Marked as the wallet so that a session holding both it and an
-			// imported SSH key can say which is which. Every ed25519 key in
-			// an agent is a Solana account, so the address alone would not
-			// distinguish them - the point is that this one is the connected
-			// wallet and not a key the user imported.
+			// Labelled as the wallet, so that a session holding both it and
+			// an imported SSH key can say which is which.
 			keys = append(keys, agentkey.Key{Signer: wallet, Comment: walletComment(creds)})
 		}
 

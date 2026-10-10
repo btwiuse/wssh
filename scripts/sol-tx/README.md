@@ -44,7 +44,7 @@ Flags mirror the Go command:
 | `--rpc <url>`  | RPC endpoint; overrides `--network`                    |
 | `--network`    | `mainnet` (default), `testnet`, `devnet`, or a URL     |
 | `--blockhash`  | build against this blockhash; fetch when empty         |
-| `--payer`      | fee payer (base58); default is the connected wallet    |
+| `--signer`     | key that signs (base58), and so pays the fee; default is the connected wallet |
 | `--label`      | free text shown beside the transaction                 |
 | `--send`       | broadcast through `--rpc` and wait for confirmation    |
 | `--verbose`     | log every step on stderr                               |

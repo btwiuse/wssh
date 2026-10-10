@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-
 	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 
@@ -46,10 +45,17 @@ type SolanaTxRequest struct {
 	// trusted: the decoded instructions are shown beside it, not instead.
 	Label string `json:"label,omitempty"`
 
-	// Payer is the account that pays the fee, when the session is signing for
-	// itself rather than handing the transaction to a wallet. Empty means a
-	// connected wallet pays.
-	Payer string `json:"payer,omitempty"`
+	// Signer is the account whose key must sign this transaction: which key
+	// in the agent should be used. Empty means nobody named one, and a
+	// connected wallet picks.
+	//
+	// It was called Payer, and that conflated two roles the field was
+	// answering. It decides *who signs*; the fee payer follows from it
+	// because Solana requires the fee payer to be a required signer - not
+	// the other way round, and not because the caller said so. Naming a
+	// signer is the question a caller actually has; the account that ends
+	// up paying is a consequence.
+	Signer string `json:"signer,omitempty"`
 
 	Instructions []SolanaInstruction `json:"instructions"`
 }
@@ -102,8 +108,6 @@ type SolanaTxResponse struct {
 // refused reports whether this is an answer of no.
 func (r SolanaTxResponse) refused() bool { return r.Refusal != "" }
 
-// ownPublicKey is the ed25519 key an agent holds, or nil if it is something
-// else. Everything else here is checked against it.
 func ownPublicKey(signer gossh.Signer) ed25519.PublicKey {
 	crypto, ok := signer.PublicKey().(gossh.CryptoPublicKey)
 	if !ok {
@@ -138,7 +142,8 @@ type SolanaTx struct {
 	Ask SolanaAsk
 
 	// Build makes an unsigned transaction, for an agent whose key is local.
-	// Used when Ask is nil.
+	// Used when the payer names a key this agent holds that is not the
+	// wallet's, and when there is no wallet at all.
 	Build SolanaBuild
 
 	// MaxInstructions bounds what one request may ask for. It is a sanity
@@ -361,18 +366,36 @@ func (t *SolanaTx) ExtensionHandler(signer gossh.Signer) func(name string, conte
 		// authenticates with - signs here, because it is the same kind of key
 		// and refusing it on the grounds that it did not come from a wallet
 		// would be refusing arithmetic.
+		//
+		// A named payer decides which of the two, and it has to: a browser
+		// forwards the imported SSH keys and the wallet in one agent, so
+		// "there is a wallet" says nothing about who should sign. Asking the
+		// wallet for a transaction that named somebody else's account would
+		// hand back a signature over the wrong fee payer, and the caller
+		// would have no way to tell.
 		if t.Ask != nil {
+			// The wallet picks which of its accounts signs.
 			resp, used, err := t.Ask(req)
 			if err != nil {
-				return json.Marshal(SolanaTxResponse{
-					Refusal: fmt.Sprintf("the wallet did not sign: %v", err),
-				})
+				// Carried as it stands, not wrapped. The page already says
+				// "the wallet did not sign" when that is what happened, and
+				// prefixing it here again is how a refusal arrived as
+				// "the wallet did not sign: the wallet did not sign: User
+				// rejected the request." Worse, not every failure here is a
+				// signing failure: "no fee payer: connect a wallet" is not,
+				// and calling it one is simply false.
+				return json.Marshal(SolanaTxResponse{Refusal: err.Error()})
 			}
 			if used == nil || !bytes.Equal(used, ownPublicKey(signer)) {
 				return json.Marshal(SolanaTxResponse{
 					Refusal: "the answer was signed by a key this agent does not hold",
 				})
 			}
+			// A payer that was named has to be the one that signed. The
+			// wallet picks its own account, and picking a different one from
+			// the one asked for is an answer to a different question - the
+			// caller would be handed a signature whose fee payer is not the
+			// account it named, and nothing downstream could tell.
 			if err := VerifySolanaTx(resp, ownPublicKey(signer)); err != nil {
 				return json.Marshal(SolanaTxResponse{Refusal: err.Error()})
 			}
@@ -390,9 +413,9 @@ func (t *SolanaTx) ExtensionHandler(signer gossh.Signer) func(name string, conte
 		// agent is the one signing, that account is known here and nowhere
 		// else - the page has no idea which key the session authenticated
 		// with - so it is filled in rather than asked for.
-		if req.Payer == "" {
+		if req.Signer == "" {
 			if pub := ownPublicKey(signer); pub != nil {
-				req.Payer = siws.Base58Encode(pub)
+				req.Signer = siws.Base58Encode(pub)
 			}
 		}
 
@@ -415,7 +438,25 @@ func (t *SolanaTx) ExtensionHandler(signer gossh.Signer) func(name string, conte
 			})
 		}
 
-		out := append([]byte{byte(len(signatures))}, signed.Blob...)
+		// One signature goes in here, so a transaction with room for more
+		// cannot be filled. Filling the first slot and declaring the count
+		// the page asked for produces a transaction that is short by whole
+		// signatures, with the message glued to the end of the signature
+		// region - and it produced no error at all, which is how a request
+		// asking for two signers came back looking signed.
+		//
+		// The page can build one (it allocates a slot per signer); signing
+		// one needs a key per signer, and every one of them has to be in
+		// this agent. Until that is true, say so.
+		if len(signatures) != 1 {
+			return json.Marshal(SolanaTxResponse{
+				Refusal: fmt.Sprintf(
+					"this transaction needs %d signatures and only one key is here to sign with; "+
+						"every required signer has to be in the agent", len(signatures)),
+			})
+		}
+
+		out := append([]byte{1}, signed.Blob...)
 		return json.Marshal(SolanaTxResponse{
 			Signature:         signed.Blob,
 			SignedTransaction: append(out, message...),

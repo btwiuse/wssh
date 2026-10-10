@@ -54,7 +54,7 @@ func newSolTxCmd() *cobra.Command {
 		network   string
 		blockhash string
 		label     string
-		payer     string
+		signer    string
 		to        string
 		sol       string
 		lamports  uint64
@@ -112,7 +112,7 @@ Examples:
 Output:
   The account that paid is read back out of the signed transaction and
   printed to stderr, because it is not always the one that was asked
-  for: with --payer empty the wallet chooses, and which wallet chose is
+  for: with --signer empty the wallet chooses, and which wallet chose is
   worth seeing after the fact. With --send the signature goes to stdout
   on its own and the explorer's link to stderr, so
   SIG=$(sol-tx ... --send) is one clean line.`,
@@ -141,20 +141,20 @@ Output:
 			logf(verbose, "[sol-tx] rpc=%s", endpoint)
 			logf(verbose, "[sol-tx] mode=%s", mode)
 
+			ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+			defer cancel()
+
 			req, err := buildSolTxRequest(solTxRequest{
 				mode:     mode,
 				sockPath: sockPath, rpcURL: effectiveRPC(rpcURL, network), blockhash: blockhash, label: label,
 				to: to, sol: sol, lamports: lamports,
-				program: program, accounts: accounts, data: data, payer: payer,
+				program: program, accounts: accounts, data: data, signer: signer,
 				memo:    memo,
 				verbose: verbose,
 			})
 			if err != nil {
 				return err //nolint:wrapcheck
 			}
-
-			ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
-			defer cancel()
 
 			// The browser may be waiting on a person to read a wallet
 			// prompt, so nothing here should time out in a hurry.
@@ -166,7 +166,7 @@ Output:
 
 			// Which account actually paid, read out of the bytes that were
 			// signed rather than out of the request. Those differ whenever
-			// --payer was empty and the wallet chose, and which wallet chose
+			// --signer was empty and the wallet chose, and which wallet chose
 			// is the thing worth being able to see after the fact.
 			if resp.SignedTransaction != nil {
 				if who, ferr := solana.FeePayer(resp.SignedTransaction); ferr == nil {
@@ -219,8 +219,9 @@ Output:
 		"named cluster to use when --rpc is empty: mainnet, testnet, devnet, or a custom URL")
 	cmd.Flags().StringVar(&blockhash, "blockhash", "",
 		"blockhash to build against; fetched from --rpc when absent")
-	cmd.Flags().StringVar(&payer, "payer", "",
-		"base58 account to pay the fee with; defaults to the connected wallet")
+	cmd.Flags().StringVar(&signer, "signer", "",
+		"base58 account whose key signs, and therefore pays the fee; "+
+			"defaults to the connected wallet, or with no wallet to the one key in the agent")
 	cmd.Flags().StringVar(&label, "label", "",
 		"one line of text shown beside the transaction; not trusted")
 
@@ -243,15 +244,15 @@ Output:
 }
 
 type solTxRequest struct {
-	mode                                               string
-	sockPath, rpcURL, network, blockhash, label, payer string
-	to, sol, memo                                      string
-	lamports                                           uint64
-	program                                            string
-	accounts                                           []string
-	data                                               string
-	send                                               bool
-	verbose                                            bool
+	mode                                                string
+	sockPath, rpcURL, network, blockhash, label, signer string
+	to, sol, memo                                       string
+	lamports                                            uint64
+	program                                             string
+	accounts                                            []string
+	data                                                string
+	send                                                bool
+	verbose                                             bool
 }
 
 // resolveNetwork turns the friendly --network name into an RPC URL. The
@@ -321,13 +322,14 @@ func hostOfURL(rawURL string) string {
 }
 
 func buildSolTxRequest(in solTxRequest) (agentkey.SolanaTxRequest, error) {
-	// Naming the payer is what lets the session sign for itself: with no wallet
-	// behind it, the account that authenticated the session is the one that can
-	// pay, and a transaction whose fee payer it is not will not send.
+	// Naming the signer is what lets the session sign for itself: with no
+	// wallet behind it, the account that authenticated the session is the one
+	// that can sign, and a transaction whose fee payer is anybody else will
+	// not send - Solana requires the fee payer to sign.
 	req := agentkey.SolanaTxRequest{
 		Blockhash: in.blockhash,
 		Label:     in.label,
-		Payer:     in.payer,
+		Signer:    in.signer,
 	}
 
 	switch {

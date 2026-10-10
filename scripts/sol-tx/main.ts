@@ -33,7 +33,7 @@ interface TransferArgs {
   to: string;
   lamports: number;
   blockhash?: string;
-  payer?: string;
+  signer?: string;
   label?: string;
 }
 
@@ -43,7 +43,7 @@ interface CallArgs {
   accounts: string[];
   data: string;
   blockhash?: string;
-  payer?: string;
+  signer?: string;
   label?: string;
 }
 
@@ -51,7 +51,7 @@ interface MemoArgs {
   mode: "memo";
   memo: string;
   blockhash?: string;
-  payer?: string;
+  signer?: string;
   label?: string;
 }
 
@@ -80,7 +80,8 @@ Options:
   --rpc <url>        RPC endpoint; takes precedence over --network
   --network <name>   mainnet | testnet | devnet | custom URL; default mainnet
   --blockhash <bh>   blockhash to build against; fetched when absent
-  --payer <addr>     base58 fee payer; defaults to the connected wallet
+  --signer <addr>    base58 key that signs, and therefore pays the fee; defaults
+                     to the connected wallet
   --label <text>     free text shown beside the transaction
   --send             broadcast through --rpc and wait for confirmation
   --verbose          log every step on stderr
@@ -153,7 +154,7 @@ const parsed = parseArgs(argv.slice(1), {
     "rpc",
     "network",
     "blockhash",
-    "payer",
+    "signer",
     "label",
     "to",
     "sol",
@@ -190,7 +191,7 @@ if (mode === "transfer") {
     to: parsed.to,
     lamports,
     blockhash: parsed.blockhash,
-    payer: parsed.payer,
+    signer: parsed.signer,
     label: parsed.label,
   };
 } else if (mode === "call") {
@@ -205,7 +206,7 @@ if (mode === "transfer") {
     accounts: parsed.account as string[],
     data: parsed.data,
     blockhash: parsed.blockhash,
-    payer: parsed.payer,
+    signer: parsed.signer,
     label: parsed.label,
   };
 } else {
@@ -215,7 +216,7 @@ if (mode === "transfer") {
     mode: "memo",
     memo: parsed.memo,
     blockhash: parsed.blockhash,
-    payer: parsed.payer,
+    signer: parsed.signer,
     label: parsed.label,
   };
 }
@@ -241,7 +242,7 @@ if (global.verbose) {
 // For memo we send an empty accounts list: the wssh agent protocol
 // accepts it for the memo program (because the memo program only takes
 // a signer and the wallet fills the signer itself), and the browser-side
-// transaction builder has the same carve-out. --payer is left empty so
+// transaction builder has the same carve-out. --signer is left empty so
 // the wallet decides.
 const instructions: agent.SolanaInstruction[] =
   modeArgs.mode === "transfer"
@@ -261,7 +262,7 @@ if (!blockhash) {
 const req: agent.SolanaTxRequest = {
   blockhash,
   label: modeArgs.label,
-  payer: modeArgs.payer,
+  signer: modeArgs.signer,
   instructions,
 };
 
@@ -319,7 +320,7 @@ Deno.exit(0);
 // ---------------------------------------------------------------------------
 
 // reportFeePayer says which account actually paid, read out of the signed
-// bytes rather than out of the request. Those differ whenever --payer was
+// bytes rather than out of the request. Those differ whenever --signer was
 // empty and the wallet chose, and which wallet chose is the thing worth
 // being able to see after the fact. Unreadable bytes say nothing rather
 // than naming something that is not there.
