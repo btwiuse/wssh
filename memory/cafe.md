@@ -440,17 +440,20 @@ bar of all five and highlights the one you are on, and `tab` walks it:
 
 ```
               ╭─────────╮╭──────────╮╭────────╮╭──────╮
-  RouterCafe  │ deposit ││ api keys ││ routes ││ help │                          router.cafe 0.1.6
+  RouterCafe  │ deposit ││ api keys ││ models ││ help │                          router.cafe 0.1.6
 ┌─────────────┴─────────┴┴──────────┴┴────────┴┴──────┴────────────────────────────────────────────┐
-│                          _____             _             _____       __          │
-│                         |  __ \           | |           / ____|     / _|        │
-│                       | |__) |___  _   _| |_ ___ _ __| |     __ _| |_ ___        │
-│                      |  _  // _ \ | | | | __/ _ \ '__| |    / _` |  _/ _ \      │
-│                       | | \ \ (_) | |_| | ||  __/ |  | |___| (_| | ||  __/      │
-│                      |_|  \\_\\___/ \\__,_|\\__|\\___|_|   \\_____|\\__,_|_| \\___|     │
-│                                                                        │
-│  account    6YSosJ…AsrUKL                                               │
-│  balance    $0.00                                                       │
+│                         ████            █             ███       ██      │
+│                         █  █  ██  █  █ ██   ███  ███ █     ██  ██   ███ │
+│                         █  █ █  █ █  █ █  █ █  █ █   █     ███ ██   █  █│
+│                         ████ █  █ █  █ █  █ ████ █   █    █  █ █    ████│
+│                        █   █  ██   ██   ██   ██  █    ███  ██  █     ██ │
+│  account    6YSosJgvtiXpLMyhcm7q77AngnrjxurFfyoLijAsrUKL  gear@gear.local  proven
+│  balance    $0.00                                                                                │
+│                                                                                                  │
+│  export OPENAI_BASE_URL=https://api.router.cafe/v1                                               │
+│  export OPENAI_API_KEY=rc_live_…                                                                 │
+│                                                                                                  │
+│  hjkl to move through a list                                                                     │
 ```
 
 **RouterCafe is the first tab, and the only one drawn without a border.** It
@@ -604,22 +607,29 @@ area rather than worked out from the position - a bar whose clicks are indexed
 against `screens` navigates to the wrong page the moment anything is added to
 either side of the tabs.
 
-**The wordmark is a wordmark, not a layout**: `RouterCafe` in figlet's **default
-face**, 51 columns and five lines, generated once and pasted in.
+**The wordmark is drawn in `█` and a space, and nothing else.**
 
-The face is the default one because it is the one somebody recognises. `big`
-is perfectly legible and was tried first, and it was reported back as "变形" -
-deformed - which is the right word for it: its R is `|__|` and `_|` where the
-default's is `/ ___|` and `___`, which is a different enough letter that the
-word reads as a different word. Three-line shadow faces are worse still: at
-that size the strokes of the letters run into the strokes beside them.
+Four versions of it came first, all of them figlet: `smshadow`, `big`, and the
+default face. Each had a byte-for-byte test behind it saying the drawn mark was
+character-identical to the source it was pasted from. **Every one of those
+tests passed and the mark still did not read.**
 
-**It is compared against the literal character for character** once it has been
-drawn, with the centring taken back off first -
-`TestTheWordmarkIsDrawnExactlyAsItIsWritten`. Every character in it is
-load-bearing: a backslash or a space turned into an escape, a line trimmed or
-re-centred one column out, and the word stops being the word - which looks like
-a font choice and is not one.
+The reason is that `|`, `_`, `/` and `\` only look like strokes when the
+terminal's font joins them. In a font that does not, the word is a row of loose
+marks, and no choice of face fixes that - **the face is not where the letter
+shapes are, the terminal is.** Swapping fonts three times was treating a
+rendering problem as a typeface problem, which is what the byte test was
+specifically there to rule out and did not, because the bytes were always
+right.
+
+Blocks are two cells that tile in any monospace font there is, so the word reads
+everywhere. It is also how `crush` draws its own wordmark, which is where the
+idea came from, and it suits a program whose whole chrome is `─│┌┐└┘├┤` anyway.
+
+The test still holds and is worth more now: the drawn mark is compared against
+the literal character for character with the centring taken off first. Every
+character in it is load-bearing, and a backslash turned into an escape or a line
+re-centred one column out looks exactly like a font choice.
 It is on the home page, which is the page the RouterCafe tab opens, and
 clickable - a logo you cannot click is a logo that is only decoration. Clickable
 over **all six of its lines**, not the first: the mark is taller than the bar,
