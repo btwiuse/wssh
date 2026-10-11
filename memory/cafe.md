@@ -885,7 +885,7 @@ character, not three dots**: `…` is a single cell in a terminal and `...` is
 three, so a key shown with dots is three columns wider than the abbreviation it
 stands for - and `shortAddress`, `shortSig` and `fit` have always said it the
 other way. - the shape of the key rather than the
-shape of a label. `rc_live_` in front of four characters says "here is a key"
+shape of a label. Four characters of one says "here is a key"
 without saying *which*, and the eight are eight characters of a 192-bit secret,
 which narrows nothing. `Key.Prefix` is the first four, `Key.Label` the last
 four, and `Key.Hint()` puts them together; a key minted before `Prefix` existed

@@ -104,7 +104,7 @@ func TestMintResolveRevoke(t *testing.T) {
 		t.Errorf("Resolve gave account %q, want acct", addr)
 	}
 
-	if _, err := l.Resolve("rc_live_not-a-real-key"); err == nil {
+	if _, err := l.Resolve("rc_not-a-real-key"); err == nil {
 		t.Error("an unknown key resolved; that is the whole thing the check is for")
 	}
 

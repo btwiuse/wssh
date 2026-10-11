@@ -84,7 +84,7 @@ func TestRouterRefusesWithoutAKey(t *testing.T) {
 	if _, err := l.MintKey("acct", ""); err != nil {
 		t.Fatalf("MintKey: %v", err)
 	}
-	rec = call(t, r, "rc_live_nope", `{"model":"cheap","messages":[]}`)
+	rec = call(t, r, "rc_nope", `{"model":"cheap","messages":[]}`)
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("an unknown key gave %d, want 401", rec.Code)
 	}

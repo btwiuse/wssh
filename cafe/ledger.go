@@ -303,11 +303,12 @@ func (l *Ledger) mutable(address string) *Account {
 // APIKeyPrefix is what a RouterCafe key looks like at a glance, and what makes
 // one recognisable in a shell history or a leaked config.
 //
-// It is not what a key is *shown* as: a key is shown as `rc_abcd...wxyz`, which
-// drops this constant middle because a constant carries no information. The
-// key really is `rc_live_` and then random, and the listing shows four
-// characters from either end of the part that is not.
-const APIKeyPrefix = "rc_live_"
+// `rc_` and then the random part, so that a key and the listing of it are the
+// same shape: `rc_abcd...wxyz` is what an actual key looks like, with eight
+// characters of it shown. A longer prefix is a constant carrying no
+// information - every key has it - and it sat between the reader and the part
+// that differs.
+const APIKeyPrefix = "rc_"
 
 // MaxKeys is how many API keys one account may hold.
 //
@@ -377,11 +378,10 @@ func (l *Ledger) MintKey(address, label string) (string, error) {
 
 // Hint is how a key is shown in a listing: rc_abcd...wxyz.
 //
-// Shaped like the key rather than like a label, because `rc_live_` in front of
-// four characters says "here is a key" without saying *which*, and the prefix
-// is eight characters of the whole thing - four more than before, which still
-// narrows nothing and does let somebody find their own key in a list. The
-// constant middle of the key is dropped, because a constant carries none.
+// Shaped like the key rather than like a label, because four characters of one
+// says "here is a key" without saying *which*. Eight of them - four from either
+// end - is still nothing against a 192-bit secret, and is enough for somebody
+// to find their own key in a list.
 //
 // Three dots rather than the one ellipsis character `shortAddress` uses: a key
 // is not a string this program is truncating, it is an abbreviation somebody is
@@ -410,6 +410,11 @@ func prefixFor(key string) string {
 // The fallback is the answer to "which of my keys is this" for someone who
 // minted three and named none, and it is four characters of a 192-bit secret,
 // which narrows nothing.
+//
+// **Four characters and nothing else.** It used to put its own `...` in front of
+// them, which is what Hint's separator doubles: every unnamed key was shown as
+// `rc_abcd......wxyz`, six dots, on every screen, every time - and the test
+// missed it because it built a Key by hand rather than through here.
 func labelFor(key, label string) string {
 	if trimmed := strings.TrimSpace(label); trimmed != "" {
 		return trimmed
@@ -417,7 +422,7 @@ func labelFor(key, label string) string {
 	if len(key) <= 4 {
 		return key
 	}
-	return "..." + key[len(key)-4:]
+	return key[len(key)-4:]
 }
 
 // RevokeKey removes a key by its digest, and reports whether it was there.

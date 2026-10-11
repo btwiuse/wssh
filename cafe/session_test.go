@@ -1053,7 +1053,7 @@ func TestCopyIsOnlyOfferedWhenThereIsSomethingToCopy(t *testing.T) {
 	if strings.Contains(m.footer(), "copy key") {
 		t.Error("y is offered with no key on screen")
 	}
-	m.fresh = "rc_live_abc"
+	m.fresh = "rc_abc"
 	if !strings.Contains(m.footer(), "copy key") {
 		t.Error("y is not offered with a key on screen")
 	}
@@ -1774,6 +1774,42 @@ func TestTheTwoLinesOfAKeyRowLineUp(t *testing.T) {
 	}
 }
 
+// A key is abbreviated with **one** run of three dots.
+//
+// It was six, on every screen, for every key, and the test missed it for a
+// month: it built a Key by hand - `Label: "wxyz"` - which is a shape
+// labelFor never produces, because labelFor put its own `...` in front of the
+// last four characters and Hint put another after the prefix. So the test
+// asserted about a key that could not exist and the screen said
+// `rc_abcd......wxyz` every time.
+func TestAKeyIsAbbreviatedWithOneRunOfThreeDots(t *testing.T) {
+	// Minted, not hand-built: the shape under test is the one the ledger
+	// actually produces, and a hand-built one is how this got through.
+	for range 32 {
+		key, err := newAPIKey()
+		if err != nil {
+			t.Fatalf("newAPIKey: %v", err)
+		}
+		k := Key{Label: labelFor(key, ""), Prefix: prefixFor(key)}
+		if n := strings.Count(k.Hint(), "."); n != 3 {
+			t.Errorf("a key shows %q with %d dots, want exactly three", k.Hint(), n)
+		}
+	}
+	// A key somebody named shows the name, and still one run of three.
+	named := Key{Label: "laptop", Prefix: "abcd"}
+	if got, want := named.Hint(), "rc_abcd...laptop"; got != want {
+		t.Errorf("a named key shows as %q, want %q", got, want)
+	}
+	// A key minted before the prefix existed falls back rather than showing a
+	// second run of dots where the prefix would be.
+	if got, want := (Key{Label: "3333"}).Hint(), "rc_...3333"; got != want {
+		t.Errorf("a key with no prefix shows as %q, want %q", got, want)
+	}
+	if strings.Contains(named.Hint(), "\u2026") {
+		t.Error("a key is abbreviated with an ellipsis character rather than three dots")
+	}
+}
+
 // The key in the export line is in the shape the list above shows it in. The
 // two are read together and a person pastes whichever one they believed.
 func TestTheExportedKeyLooksLikeTheListedOne(t *testing.T) {
@@ -1827,25 +1863,6 @@ func TestAnAccountHoldsAtMostTenKeys(t *testing.T) {
 	}
 	if _, err := l.MintKey(treasuryAddress, ""); err != nil {
 		t.Errorf("minting after a revoke: %v", err)
-	}
-}
-
-// A key is abbreviated with three dots. It is not a string this program is
-// truncating, it is an abbreviation somebody is going to read character by
-// character, and the one ellipsis character the rest of the program uses is
-// not three times narrower than it is here.
-func TestAKeyIsAbbreviatedWithThreeDots(t *testing.T) {
-	k := Key{Label: "wxyz", Prefix: "abcd"}
-	if got, want := k.Hint(), "rc_abcd...wxyz"; got != want {
-		t.Errorf("a key shows as %q, want %q", got, want)
-	}
-	// A key minted before the prefix existed falls back rather than showing a
-	// second run of dots where the prefix would be.
-	if got, want := (Key{Label: "3333"}).Hint(), "rc_...3333"; got != want {
-		t.Errorf("a key with no prefix shows as %q, want %q", got, want)
-	}
-	if strings.Contains(k.Hint(), "\u2026") {
-		t.Errorf("a key is abbreviated with an ellipsis character: %q", k.Hint())
 	}
 }
 
