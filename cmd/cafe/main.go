@@ -107,6 +107,9 @@ private key stays on your machine and this server asks your agent to sign.`,
 		SilenceErrors: true,
 		Version:       version,
 		RunE: func(_ *cobra.Command, _ []string) error {
+			if opts.RequireKey {
+				opts.AllowAnonymous = false
+			}
 			return serve(opts)
 		},
 	}

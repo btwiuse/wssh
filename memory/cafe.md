@@ -133,11 +133,35 @@ Two different problems, and they are not the same message:
 | an RSA or ECDSA key | this key names no account, and the command that fixes it |
 | no key at all | the client is refused during authentication |
 
-The third row cannot be fixed without giving up everything in the first. SSH
-tries `none` before `publickey`, so a server that accepts a connection carrying
-no key is accepting **everyone** on every key's account, and the handshake ends
-before a key is ever offered. There is no version of "let them in with no key"
-that still knows who they are.
+The third row is what `--allow-anonymous` exists for, and it is **on by
+default**. It admits the connection and then works out who it is by asking the
+forwarded agent to sign a nonce this process made up: the keys in the agent are
+listed, one is picked, and a signature that verifies is what makes it an
+account. With no agent there is nothing to prove and nowhere to keep a balance,
+so the session is shown how to get a key and given nothing else.
+
+**The cost, stated once and plainly**: a client sends `none` first as a probe,
+so a server that accepts it ends the handshake before a public key is ever
+offered. Every connection then arrives with `PublicKey() == nil`, including the
+ones that carried a key, and **no client-side flag changes that** -
+`-i ~/.ssh/id_ed25519` and `-o PreferredAuthentications=publickey` were both
+measured and both still authenticated as "none". `-A` is what makes the
+difference, because the agent is reachable after the handshake and the key file
+is not.
+
+| Connection | Result |
+|---|---|
+| `ssh -A` with the key in the agent | adopts it, signed, and opens the account |
+| `ssh -A -i key` with the key in the agent | the same |
+| `ssh -i key` with no `-A` | the notice: `-i` alone cannot work from now on |
+| `ssh` with no key and no agent | the notice |
+
+`--require-key` turns it off and restores a plain refusal, for an operator who
+would rather nobody without a key hear from the server at all.
+
+`wssh.Options.AllowNoAuth` is the switch underneath. It composes with the
+wallet sign-in hook rather than replacing it, so opening the door does not
+quietly stop a browser wallet from being let through.
 
 The refusal screen wraps to the terminal it was given, command included: a
 half-printed command is the one thing it must never show, since that is the

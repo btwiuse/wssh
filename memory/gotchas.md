@@ -35,6 +35,9 @@ to look more reasonable.
   reports `dev`, and `upgrade` on either takes the newest release rather than
   refusing. That is deliberate: "dev" is older than everything published and
   behind nothing.
+- With `--allow-anonymous`, `-i` on the client does nothing: the handshake ends
+  on the `none` probe before a key is offered, so every connection is anonymous
+  and identity comes from the forwarded agent signing. Measured, not assumed.
 - A RouterCafe session refusing `uptime` with "does not run commands" is the
   product working, not a broken server. See `cafe.md`.
 - A refusal raised as an error from the agent has nowhere to go: the agent

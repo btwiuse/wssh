@@ -194,3 +194,20 @@ func snippet(s, needle string) string {
 	}
 	return s[start:end]
 }
+
+// A visitor who reaches this host with no key is a visitor to be shown how to
+// become a user. That is the default, so it is a default worth pinning: it is
+// also the switch that admits every connection with no key, and an operator who
+// would rather hear nothing from them has to be able to say so.
+func TestAnonymousAccessIsOnUnlessAskedOtherwise(t *testing.T) {
+	cmd := newCafeCmd()
+	if err := cmd.Flags().Parse(nil); err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got := cmd.Flags().Lookup("allow-anonymous").DefValue; got != "true" {
+		t.Errorf("--allow-anonymous defaults to %s", got)
+	}
+	if cmd.Flags().Lookup("require-key") == nil {
+		t.Error("there is no way to turn it off")
+	}
+}

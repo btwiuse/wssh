@@ -105,6 +105,21 @@ type Options struct {
 	// puts the socket in place before the environment is built.
 	ForwardAgent bool
 
+	// AllowNoAuth lets a connection through that authenticated with nothing.
+	//
+	// This is all or nothing and worth being blunt about. A client sends
+	// "none" first as a probe, so a server that accepts it ends the handshake
+	// before a public key is ever offered: every connection then arrives with
+	// no key, including the ones that carried one, and Session.PublicKey is
+	// empty for all of them.
+	//
+	// Which makes it a decision rather than a convenience. It is only safe
+	// where a session does not need to know who is asking. A session that
+	// bills, credits or stores per account has to establish identity some
+	// other way: cafe does it by adopting a key out of a forwarded agent and
+	// having that agent sign.
+	AllowNoAuth bool
+
 	// Logger receives session-level detail. Defaults to the charm default
 	// logger, which honours whatever level the process has set.
 	Logger *log.Logger
@@ -175,6 +190,23 @@ func NewServer(opts Options) (*Server, error) {
 
 	if opts.WalletAuth != nil && opts.WalletAuth.Enabled() {
 		installWalletAuth(sessions, opts.WalletAuth)
+	}
+
+	if opts.AllowNoAuth {
+		// Composed rather than assigned: the wallet path installs a config
+		// hook of its own, and overwriting it would quietly stop a wallet
+		// connection from being let through.
+		prev := sessions.ServerConfigCallback
+		sessions.ServerConfigCallback = func(ctx ssh.Context) *gossh.ServerConfig {
+			var config *gossh.ServerConfig
+			if prev != nil {
+				config = prev(ctx)
+			} else {
+				config = &gossh.ServerConfig{}
+			}
+			config.NoClientAuth = true
+			return config
+		}
 	}
 
 	if opts.Agent != nil {

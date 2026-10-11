@@ -110,6 +110,15 @@ type serveOptions struct {
 	// MaxReserveMicroUSD bounds what one request may hold against a balance.
 	MaxReserveMicroUSD cafe.MicroUSD
 
+	// AllowAnonymous admits a session that authenticated with nothing. On by
+	// default, because a visitor with no key is a visitor to be shown how to
+	// become a user rather than a connection to be turned away.
+	AllowAnonymous bool
+
+	// RequireKey is the inverse of AllowAnonymous, kept as its own switch so
+	// neither flag has to be written twice to be turned the other way.
+	RequireKey bool
+
 	// DryRunDeposits takes deposits without moving money: the amount is
 	// priced and shown and nothing is signed or broadcast. For a public
 	// instance that is obviously not the setting; it is here so the whole
@@ -166,6 +175,14 @@ func addServeFlags(cmd *cobra.Command, opts *serveOptions) {
 	cmd.Flags().StringVar(&opts.WalletStatement, "wallet-statement", "",
 		"one line of text a wallet shows above the sign-in request")
 
+	cmd.Flags().BoolVar(&opts.AllowAnonymous, "allow-anonymous", true,
+		"let a session in that arrived with no key at all; it adopts a key out of the "+
+			"forwarded agent by having the agent sign, or is told how to get one and is "+
+			"given nothing else. Turning it off makes every session need a key")
+	cmd.Flags().BoolVar(&opts.RequireKey, "require-key", false,
+		"refuse a connection that carries no key, and say nothing beyond the refusal. "+
+			"The opposite of --allow-anonymous, for an operator who would rather "+
+			"nobody without a key hear from the server at all")
 	cmd.Flags().BoolVar(&opts.ForwardAgent, "forward-agent", true,
 		"let sessions ask the connecting client to sign; this is how a deposit is signed, "+
 			"and turning it off leaves the deposit screen with nothing to ask")
@@ -214,9 +231,10 @@ func serve(opts *serveOptions) error {
 	}
 
 	sessions, err := cafe.New(cafe.Options{
-		Ledger:    ledger,
-		Treasury:  opts.Treasury,
-		Catalogue: cafe.DefaultCatalogue(),
+		Ledger:         ledger,
+		Treasury:       opts.Treasury,
+		Catalogue:      cafe.DefaultCatalogue(),
+		AllowAnonymous: opts.AllowAnonymous,
 	})
 	if err != nil {
 		return err //nolint:wrapcheck
@@ -262,6 +280,11 @@ func serve(opts *serveOptions) error {
 		OriginPatterns: opts.Origins,
 		WalletAuth:     walletAuth,
 		SSHOptions:     authOpts,
+		// The door, when the operator opens it. Admitting a connection that
+		// carries no key admits every connection that way, which is why it
+		// is a switch rather than the default and why it only makes sense
+		// alongside the agent adoption that makes identity recoverable.
+		AllowNoAuth: opts.AllowAnonymous,
 		// AllowTcpForwarding is deliberately absent and is not a flag:
 		// direct-tcpip lets a client name any destination and this server
 		// dials it, which on a public host is an open proxy into whatever

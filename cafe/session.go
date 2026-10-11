@@ -62,6 +62,15 @@ type Options struct {
 	// Catalogue is the routing table. Nil means DefaultCatalogue.
 	Catalogue *Catalogue
 
+	// AllowAnonymous lets a session in that proved nothing.
+	//
+	// Only safe together with the forwarded agent, and the two go together:
+	// admitting a connection that carries no key means admitting every
+	// connection that way, so identity has to come from the agent signing.
+	// A session with an agent adopts a key out of it; a session without one
+	// is told how to get that and given nothing else. See anonymous.go.
+	AllowAnonymous bool
+
 	// Logger receives session-level detail. Nil means the charm default.
 	Logger *log.Logger
 }
@@ -158,6 +167,33 @@ func (s *Server) handler() wishtea.Handler {
 
 // newModel works out which account this session is and builds its UI.
 func (s *Server) newModel(sess ssh.Session) tea.Model {
+	sockPath, _ := sess.Context().Value(agentkey.SSHAuthSockKey).(string)
+
+	// A connection that arrived with no key at all, checked first because
+	// it is the one case where there is nothing to refuse: there was no
+	// credential to turn away. It gets the screen that adopts a key out of a
+	// forwarded agent, or says how to get one.
+	//
+	// A connection that brought a key of the wrong type is not in this
+	// branch. It has proved it holds something, and telling that person to go
+	// and make a different key is the answer; anonymous access is for people
+	// who arrived with nothing, not with the wrong thing.
+	if s.opts.AllowAnonymous && sess.PublicKey() == nil && wssh.WalletAddress(sess.Context()) == "" {
+		return anonymousModel{
+			deps: deps{
+				SockPath:  sockPath,
+				Ctx:       sess.Context(),
+				Ledger:    s.opts.Ledger,
+				Treasury:  s.opts.Treasury,
+				Catalogue: s.opts.Catalogue,
+				Host:      Domain,
+			},
+			st:     newStyles(),
+			width:  80,
+			height: 24,
+		}
+	}
+
 	address, refusal := SessionAccount(sess)
 	if refusal != "" {
 		// No account, no session. Not a degraded mode to paper over with a
@@ -166,8 +202,6 @@ func (s *Server) newModel(sess ssh.Session) tea.Model {
 		// UI showing zeros it might act on.
 		return refuseModel{reason: refusal, width: 80}
 	}
-
-	sockPath, _ := sess.Context().Value(agentkey.SSHAuthSockKey).(string)
 
 	return model{
 		deps: deps{

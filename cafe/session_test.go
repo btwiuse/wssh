@@ -9,6 +9,7 @@ import (
 	"go/parser"
 	"go/token"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -19,8 +20,10 @@ import (
 	"charm.land/wish/v2"
 	"github.com/btwiuse/wssh"
 	"github.com/btwiuse/wssh/auth"
+	"github.com/btwiuse/wssh/auth/agentkey"
 	"github.com/btwiuse/wssh/solana"
 	gossh "golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/agent"
 )
 
 // This file is the one that says what the product is.
@@ -484,4 +487,215 @@ func stripForTest(s string) string {
 		i++
 	}
 	return out.String()
+}
+
+// A key that is adopted out of a forwarded agent has to be proved, not
+// believed: the agent is asked to sign a nonce this process made up, and a
+// signature that does not verify is not an account.
+//
+// This is the whole reason anonymous access can be a default. Admitting a
+// connection with no key admits every connection that way, so identity has to
+// come from something the client does rather than from something it says.
+func TestAdoptingAKeyProvesItWithASignature(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	sock := serveAgent(t, []ed25519.PrivateKey{priv})
+
+	d := deps{SockPath: sock, Ledger: testLedger(t), Catalogue: DefaultCatalogue()}
+	keys, err := agent.NewClient(dialUnix(t, sock)).List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	adoptable := orderableKeys(keys)
+	if len(adoptable) != 1 {
+		t.Fatalf("agent listed %d adoptable keys, want 1", len(adoptable))
+	}
+
+	msg := adoptCmd(d, adoptable[0])()
+	signed, ok := msg.(nonceSignedMsg)
+	if !ok {
+		t.Fatalf("adopt returned %T", msg)
+	}
+	if signed.err != nil {
+		t.Fatalf("a real key was not adopted: %v", signed.err)
+	}
+	want, _ := solana.AddressFor(mustPub(t, pub))
+	if signed.address != want {
+		t.Errorf("adopted the account %q, want %q", signed.address, want)
+	}
+}
+
+// An agent that will not sign is not an account. That is the negative of the
+// test above and the one that matters: the point is that a key has to be
+// demonstrably held, and the ordinary way that fails is an agent asked for a
+// key it does not have.
+func TestAdoptingFailsWhenTheAgentDoesNotHoldTheKey(t *testing.T) {
+	_, held, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	stranger, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	sock := serveAgent(t, []ed25519.PrivateKey{held})
+
+	d := deps{SockPath: sock, Ledger: testLedger(t), Catalogue: DefaultCatalogue()}
+	msg := adoptCmd(d, &agent.Key{
+		Format: gossh.KeyAlgoED25519,
+		Blob:   blobFor(t, stranger),
+	})()
+	signed, ok := msg.(nonceSignedMsg)
+	if !ok {
+		t.Fatalf("adopt returned %T", msg)
+	}
+	if signed.err == nil {
+		t.Fatal("an agent produced a signature for a key it does not hold")
+	}
+	if signed.address != "" {
+		t.Errorf("a failed adoption still named the account %q", signed.address)
+	}
+}
+
+// Only keys that name an account are offered. A list where one row is a
+// refusal is a list somebody tries every row of.
+func TestOnlyEd25519KeysAreOfferedForAdoption(t *testing.T) {
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	edPub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	rsaPub, err := gossh.NewPublicKey(&rsaKey.PublicKey)
+	if err != nil {
+		t.Fatalf("NewPublicKey: %v", err)
+	}
+	rsaBlob := gossh.Marshal(rsaPub)
+
+	got := orderableKeys([]*agent.Key{
+		{Format: gossh.KeyAlgoED25519, Blob: blobFor(t, edPub), Comment: "keep"},
+		{Format: gossh.KeyAlgoRSA, Blob: rsaBlob, Comment: "an rsa key"},
+		{Format: gossh.KeyAlgoED25519, Blob: nil, Comment: "a truncated blob"},
+		nil,
+	})
+	if len(got) != 1 {
+		t.Fatalf("offered %d keys, want just the one that names an account: %+v", len(got), got)
+	}
+	if got[0].Comment != "keep" {
+		t.Errorf("offered %q", got[0].Comment)
+	}
+}
+
+// The blob the agent protocol sends is the algorithm name and then the key
+// body, each under its own four-byte length. Reading it by hand and getting
+// that wrong means holding the wrong 32 bytes, and the failure has to be an
+// error rather than an address that belongs to nobody.
+func TestParsingAnAgentKeyBlob(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	blob := blobFor(t, pub)
+
+	got, err := parseEd25519Blob(blob)
+	if err != nil {
+		t.Fatalf("parseEd25519Blob: %v", err)
+	}
+	if !got.Equal(pub) {
+		t.Errorf("read back %x, want %x", got, pub)
+	}
+
+	for _, bad := range [][]byte{
+		nil,
+		{0, 0, 0},                              // ends inside a length
+		{0, 0, 0, 9, 'a', 'b', 'c'},            // claims more than it has
+		{0, 0, 0, 1, 's', 0, 0, 0, 2, 1, 2, 3}, // body is three bytes
+	} {
+		if _, err := parseEd25519Blob(bad); err == nil {
+			t.Errorf("a malformed blob was read as a key: %x", bad)
+		}
+	}
+}
+
+// serveAgent runs a real ssh-agent on a real socket holding the given keys.
+func serveAgent(t *testing.T, keys []ed25519.PrivateKey) string {
+	t.Helper()
+	// A short path on purpose: a unix socket address is capped at about a
+	// hundred bytes, and t.TempDir's is longer than that on macOS.
+	dir, err := os.MkdirTemp("", "cafe")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := filepath.Join(dir, "a.sock")
+
+	if len(keys) == 0 {
+		t.Fatal("serveAgent needs a key; agentkey.Keyring returns nil for an empty list and " +
+			"an agent server over it panics on the first request")
+	}
+	signers := make([]gossh.Signer, 0, len(keys))
+	for _, priv := range keys {
+		signer, err := gossh.NewSignerFromKey(priv)
+		if err != nil {
+			t.Fatalf("NewSignerFromKey: %v", err)
+		}
+		signers = append(signers, signer)
+	}
+	keyring, err := agentkey.Keyring(signers)
+	if err != nil { //nolint:wsl
+		t.Fatalf("Keyring: %v", err)
+	}
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() { //nolint:wsl
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go agent.ServeAgent(keyring, conn)
+		}
+	}()
+	return path
+}
+
+func dialUnix(t *testing.T, path string) net.Conn {
+	t.Helper()
+	conn, err := net.Dial("unix", path)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	return conn
+}
+
+func mustPub(t *testing.T, pub ed25519.PublicKey) gossh.PublicKey {
+	t.Helper()
+	out, err := gossh.NewPublicKey(pub)
+	if err != nil {
+		t.Fatalf("NewPublicKey: %v", err)
+	}
+	return out
+}
+
+// blobFor is the agent protocol's shape: the algorithm name and the key body,
+// each under its own four-byte length.
+//
+// The method on the key, not the package function: gossh.Marshal reaches for
+// struct tags by reflection and an ed25519 key is a defined []byte, so it
+// panics on exactly the key type this is about.
+func blobFor(t *testing.T, pub ed25519.PublicKey) []byte {
+	t.Helper()
+	sshPub, err := gossh.NewPublicKey(pub)
+	if err != nil {
+		t.Fatalf("NewPublicKey: %v", err)
+	}
+	return sshPub.Marshal()
 }
