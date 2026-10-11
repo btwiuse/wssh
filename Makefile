@@ -1,11 +1,11 @@
 # Build entry point.
 #
 # Bare `make` lists the targets. `make wssh` builds a working wssh, and that
-# dependency matters more than the wording suggests: cmd/wssh embeds the whole
-# static/ directory, so a binary built while ssh.wasm is missing compiles fine,
-# runs fine, and serves a page whose worker dies on a 404. Keeping the wasm a
-# prerequisite of the build is what turns that silent breakage into a build
-# that either produces it or fails.
+# dependency matters more than the wording suggests: package webui embeds the
+# whole static/ directory, so a binary built while ssh.wasm is missing compiles
+# fine, runs fine, and serves a page whose worker dies on a 404. Keeping the
+# wasm a prerequisite of the build is what turns that silent breakage into a
+# build that either produces it or fails.
 #
 # Note for scripts and CI: the default goal prints help and exits 0 having
 # built nothing. Name the target.
@@ -14,7 +14,7 @@
 
 GO     ?= go
 BIN    ?= bin
-STATIC := cmd/wssh/static
+STATIC := webui/static
 WASM   := $(STATIC)/ssh.wasm
 WASMJS := $(STATIC)/wasm_exec.js
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -25,6 +24,7 @@ import (
 	"github.com/btwiuse/wssh/auth/agentkey"
 	"github.com/btwiuse/wssh/auth/siws"
 	"github.com/btwiuse/wssh/shell"
+	"github.com/btwiuse/wssh/webui"
 	"github.com/spf13/cobra"
 	"github.com/webteleport/wtf"
 	gossh "golang.org/x/crypto/ssh"
@@ -34,9 +34,6 @@ import (
 // endpoint. It is a convention rather than a requirement: the page resolves it
 // relative to wherever it was loaded from.
 const DefaultSessionPath = "/ws"
-
-// sessionPathPlaceholder is replaced in index.html with the configured path.
-const sessionPathPlaceholder = "__WSSH_SESSION_PATH__"
 
 // AnyOrigin is the --origins value that turns the browser origin check off.
 //
@@ -253,7 +250,7 @@ func serve(opts serveOptions) error {
 	}
 
 	if opts.Assets != nil {
-		mux.Handle("/", noCache(frontEnd(opts.Assets, opts.SessionPath)))
+		mux.Handle("/", webui.Handler(opts.Assets, opts.SessionPath))
 	}
 
 	startRelays(opts.Relays, mux)
@@ -506,34 +503,6 @@ func openBrowser(url string) {
 	go func() { _ = cmd.Wait() }()
 }
 
-// frontEnd serves the embedded assets, telling the page where its session
-// endpoint is.
-//
-// The page resolves that relative to wherever it was loaded from rather than
-// being handed an absolute address, so the same build is correct on
-// localhost, behind a relay, or on a domain, with nothing reconfigured.
-func frontEnd(assets fs.FS, sessionPath string) http.Handler {
-	files := http.FileServer(http.FS(assets))
-	if sessionPath == "" {
-		sessionPath = DefaultSessionPath
-	}
-	page, err := fs.ReadFile(assets, "index.html")
-	if err != nil {
-		log.Debug("could not read index.html to template it", "error", err)
-		return files
-	}
-	templated := strings.ReplaceAll(string(page), sessionPathPlaceholder, sessionPath)
-
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" && r.URL.Path != "/index.html" {
-			files.ServeHTTP(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = io.WriteString(w, templated)
-	})
-}
-
 // startRelays exposes the handler through remote relays, which is how a
 // server stays reachable from a network it cannot be listened on from
 // directly. It is additive: the local listener is unaffected, so the same
@@ -550,15 +519,6 @@ func startRelays(relays []string, handler http.Handler) {
 			}
 		}()
 	}
-}
-
-// noCache keeps the browser from holding on to a stale wasm binary after a
-// rebuild, which otherwise shows up as a baffling version mismatch.
-func noCache(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		next.ServeHTTP(w, r)
-	})
 }
 
 // defaultAddr is the listen address when none is given.

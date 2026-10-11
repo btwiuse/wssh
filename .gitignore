@@ -16,8 +16,8 @@
 /wssh-proxy
 
 # WASM build output: rebuild with client/build.sh
-/cmd/wssh/static/ssh.wasm
-/cmd/wssh/static/wasm_exec.js
+/webui/static/ssh.wasm
+/webui/static/wasm_exec.js
 
 # Keys written into the working directory by a command with no --out-dir.
 # `wssh keygen id_ed25519` defaults to the current directory, and the selftest
