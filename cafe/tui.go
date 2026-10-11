@@ -1180,18 +1180,39 @@ func (m model) tabBar() (string, []span) {
 		break
 	}
 
-	// Three lines, each built the whole width of the window rather than
-	// padded out of blocks that happen to add up. It matters on the bottom
-	// one more than anywhere: that line is the top edge of the box, so a gap
-	// in it is a hole in the top of the frame with the page showing through,
-	// which is the one thing a frame cannot have.
+	// Three lines, each built the whole width of the window rather than padded
+	// out of blocks that happen to add up. It matters on the bottom one more
+	// than anywhere: that line is the top edge of the box, so a gap in it is a
+	// hole in the top of the frame with the page showing through, which is the
+	// one thing a frame cannot have.
+	//
+	// It opens with `┌` and not with a dash. That line is not a rule laid over
+	// a box, it is the box's own top edge: the corner is where the top edge
+	// turns down into the box's left wall, and without it the top line
+	// overhangs to the left of the box - a top edge with no top-left corner on
+	// it, which is the shape a frame is not allowed to be.
 	left, addr := lipgloss.Width(name), lipgloss.Width(address)
 	tail := max(0, m.width-left-tabs-1)
+	var edge string
+	if left == 0 {
+		// Nothing to the left of the tabs, so the first tab's own left wall is
+		// the box's left wall - it starts at column 0 - and its corner has to
+		// carry that wall continuing downwards as well as the rule. Which is
+		// the one thing the tabs example has to do, and the only case here
+		// where it still applies.
+		runes := []rune(rows[barLines-1])
+		runes[0] = '\u251c'
+		if m.view == screens[0].view {
+			runes[0] = '\u2502'
+		}
+		edge = string(runes)
+	} else {
+		edge = "\u250c" + strings.Repeat("\u2500", left-1) + rows[barLines-1]
+	}
 	bar := strings.Join([]string{
 		strings.Repeat(" ", left) + rows[0] + strings.Repeat(" ", tail+1),
 		name + rows[1] + strings.Repeat(" ", max(0, m.width-left-tabs-addr)) + address,
-		strings.Repeat("\u2500", left) + rows[barLines-1] +
-			strings.Repeat("\u2500", tail) + "\u2510",
+		edge + strings.Repeat("\u2500", tail) + "\u2510",
 	}, "\n")
 
 	clickable := make([]span, 0, len(screens)+1)

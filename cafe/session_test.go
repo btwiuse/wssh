@@ -1843,6 +1843,9 @@ func TestTheBarsEdgeSpansTheWholeWindow(t *testing.T) {
 			if w := lipgloss.Width(line); w != size[0] {
 				t.Errorf("%s: the top edge is %d columns of %d: %q", where, w, size[0], line)
 			}
+			if !strings.HasPrefix(line, "\u250c") {
+				t.Errorf("%s: the top edge has no corner at its left end: %q", where, line)
+			}
 			if !strings.HasSuffix(line, "\u2510") {
 				t.Errorf("%s: the top edge does not reach the corner: %q", where, line)
 			}
@@ -1850,7 +1853,7 @@ func TestTheBarsEdgeSpansTheWholeWindow(t *testing.T) {
 			// opening into the page. Anything else is a hole with the page
 			// showing through the top of the frame.
 			for _, r := range line {
-				if r != ' ' && !strings.ContainsRune("\u2500\u250c\u2510\u2514\u2518\u251c\u2524\u252c\u2534\u253c", r) {
+				if r != ' ' && !strings.ContainsRune("\u2500\u250c\u2510\u2514\u2518\u251c\u2524\u252c\u2534\u253c\u2502", r) {
 					t.Errorf("%s: the top edge has a hole in it at %q: %q", where, r, line)
 					break
 				}

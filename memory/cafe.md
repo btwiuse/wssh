@@ -388,6 +388,15 @@ name and the address are on the bar's own line**, not on one above it:
 │  balance    $0.00                                                        │
 ```
 
+**It opens with `┌`, and that is not decoration.** That line is not a rule laid
+over a box, it is the box's own top edge: the corner is where the top edge
+turns down into the box's left wall. With a dash there instead, the top line
+overhangs to the left of the box - a top edge with no top-left corner on it.
+When the name is dropped for want of room the tabs start at column 0 and the
+first tab's own wall *is* the box's wall, so its corner goes back to carrying
+the wall downwards (`│` or `├`), which is the one case where the tabs example's
+override still applies.
+
 **The bar's bottom line is the box's top edge, so it is built the whole width
 of the window** and not padded out of blocks that happen to add up. A gap in it
 is a hole in the top of the frame with the page showing through, which is the
