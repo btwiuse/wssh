@@ -78,7 +78,7 @@ opens a full-screen program: your balance, your API key, and a way to deposit
 SOL. The key it mints works with any OpenAI client:
 
     export OPENAI_BASE_URL=https://router.cafe/v1
-    export OPENAI_API_KEY=rc_live_...
+    export OPENAI_API_KEY=rc_abcd...wxyz
 
 **There is no shell here.** A session is a program, not a command line, and
 nothing typed at one is ever run: a command sent instead of a shell is refused

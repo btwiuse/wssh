@@ -131,16 +131,21 @@ func TestMintResolveRevoke(t *testing.T) {
 	}
 }
 
+// Minted keys are distinct, and the cap does not make them not: it is a cap on
+// how many an account holds, not on how many can be minted. So this revokes
+// between mints rather than minting past the cap and failing.
 func TestKeysAreDistinct(t *testing.T) {
 	l := testLedger(t)
 	seen := map[string]bool{}
 	for i := 0; i < 64; i++ {
 		key, err := l.MintKey("acct", "")
-		if err != nil {
-			t.Fatalf("MintKey: %v", err)
-		}
-		if seen[key] {
+		if err == nil && seen[key] {
 			t.Fatalf("minted the same key twice: %s", key)
+		}
+		for _, held := range l.Account("acct").Keys {
+			if _, err := l.RevokeKey("acct", held.Digest); err != nil {
+				t.Fatalf("RevokeKey: %v", err)
+			}
 		}
 		seen[key] = true
 	}

@@ -448,7 +448,7 @@ bar of all five and highlights the one you are on, and `tab` walks it:
 │  balance    $0.00                                                                                │
 │                                                                                                  │
 │  export OPENAI_BASE_URL=https://api.router.cafe/v1                                               │
-│  export OPENAI_API_KEY=rc_live_…                                                                 │
+│  export OPENAI_API_KEY=rc_abcd...wxyz                                                                 │
 ```
 
 **RouterCafe is the first tab, and the only one drawn without a border.** It
@@ -902,6 +902,13 @@ explained to somebody reading the screen. A marker that has to be explained is
 not a marker: whether an account can be spent from is a difference every action
 already refuses to make on its own, and the read-only banner says it when it
 is the only thing that is true.
+
+**An account holds at most ten keys.** `MaxKeys`, refused by `MintKey` before
+a key is generated, with the refusal saying what to do about it. Ten is more
+than anybody uses and few enough to read: a page of keys that scrolls forever is
+a page nobody has looked at, and the balance behind it is what is being
+protected. Revoking one makes room again, because the cap is on keys *held* and
+not on keys ever minted.
 
 **The export line is in the same shape**: `export OPENAI_API_KEY=rc_abcd...wxyz`,
 not the key's real wire prefix. The two are read together and somebody pastes

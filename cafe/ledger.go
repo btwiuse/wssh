@@ -302,7 +302,19 @@ func (l *Ledger) mutable(address string) *Account {
 
 // APIKeyPrefix is what a RouterCafe key looks like at a glance, and what makes
 // one recognisable in a shell history or a leaked config.
+//
+// It is not what a key is *shown* as: a key is shown as `rc_abcd...wxyz`, which
+// drops this constant middle because a constant carries no information. The
+// key really is `rc_live_` and then random, and the listing shows four
+// characters from either end of the part that is not.
 const APIKeyPrefix = "rc_live_"
+
+// MaxKeys is how many API keys one account may hold.
+//
+// Ten is more than anybody uses and few enough to read: a page of keys that
+// scrolls forever is a page nobody has looked at, and the balance behind it is
+// the thing being protected.
+const MaxKeys = 10
 
 // newAPIKey mints a key.
 //
@@ -335,13 +347,19 @@ func Digest(key string) string {
 // This is the only place a key exists in the clear. It is returned to the
 // caller, which shows it once; only the digest is kept.
 func (l *Ledger) MintKey(address, label string) (string, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	acct := l.mutable(address)
+	// A cap, because a balance is the thing being protected here and a page
+	// that can list keys without end is a page somebody scrolls forever. Ten is
+	// more than anybody uses and few enough to read.
+	if len(acct.Keys) >= MaxKeys {
+		return "", fmt.Errorf("this account already has %d keys; revoke one before minting another", MaxKeys)
+	}
 	key, err := l.keyf()
 	if err != nil {
 		return "", err
 	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	acct := l.mutable(address)
 	now := l.clock().UTC()
 	acct.Keys = append(acct.Keys, Key{
 		Digest:  Digest(key),
@@ -362,7 +380,8 @@ func (l *Ledger) MintKey(address, label string) (string, error) {
 // Shaped like the key rather than like a label, because `rc_live_` in front of
 // four characters says "here is a key" without saying *which*, and the prefix
 // is eight characters of the whole thing - four more than before, which still
-// narrows nothing and does let somebody find their own key in a list.
+// narrows nothing and does let somebody find their own key in a list. The
+// constant middle of the key is dropped, because a constant carries none.
 //
 // Three dots rather than the one ellipsis character `shortAddress` uses: a key
 // is not a string this program is truncating, it is an abbreviation somebody is

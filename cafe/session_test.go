@@ -1800,6 +1800,36 @@ func TestTheExportedKeyLooksLikeTheListedOne(t *testing.T) {
 	}
 }
 
+// Ten keys, and no more. A page of keys that scrolls forever is a page nobody
+// has looked at, and the balance behind it is the thing being protected.
+func TestAnAccountHoldsAtMostTenKeys(t *testing.T) {
+	l := testLedger(t)
+	for range MaxKeys {
+		if _, err := l.MintKey(treasuryAddress, ""); err != nil {
+			t.Fatalf("MintKey %d: %v", MaxKeys, err)
+		}
+	}
+	_, err := l.MintKey(treasuryAddress, "")
+	if err == nil {
+		t.Fatalf("a mint past %d keys succeeded", MaxKeys)
+	}
+	if !strings.Contains(err.Error(), "revoke one") {
+		t.Errorf("refusing to mint says %q, not what to do about it", err)
+	}
+	// And the account is left as it was, not with a key nobody can revoke.
+	if n := len(l.Account(treasuryAddress).Keys); n != MaxKeys {
+		t.Errorf("the account holds %d keys after the refusal, want %d", n, MaxKeys)
+	}
+	// Revoking one makes room again, because the cap is on keys held and not
+	// on keys ever minted.
+	if _, err := l.RevokeKey(treasuryAddress, l.Account(treasuryAddress).Keys[0].Digest); err != nil {
+		t.Fatalf("RevokeKey: %v", err)
+	}
+	if _, err := l.MintKey(treasuryAddress, ""); err != nil {
+		t.Errorf("minting after a revoke: %v", err)
+	}
+}
+
 // A key is abbreviated with three dots. It is not a string this program is
 // truncating, it is an abbreviation somebody is going to read character by
 // character, and the one ellipsis character the rest of the program uses is

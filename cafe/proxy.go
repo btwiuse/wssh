@@ -196,7 +196,7 @@ func (r *Router) authenticate(w http.ResponseWriter, req *http.Request) (string,
 	key := bearer(req)
 	if key == "" {
 		writeError(w, http.StatusUnauthorized, "no API key",
-			"send one as 'Authorization: Bearer rc_live_...'")
+			"send one as 'Authorization: Bearer rc_abcd...wxyz'")
 		return "", false
 	}
 	address, err := r.opts.Ledger.Resolve(key)
