@@ -14,6 +14,9 @@ already exists for it.
 | `cafe/tui.go` | The Bubble Tea program `ssh -A router.cafe` opens. Balance, API keys, deposit, the price list, and the help text that says what this is not. |
 | `cafe/proxy.go` | The OpenAI-compatible `/v1`. Passes the body through with two fields rewritten rather than decoding it into a struct, and bills by reservation. |
 | `cafe/catalog.go` | The routes and what they cost, in micro-USD per million tokens. `Model.Cost` is an integer multiply with a ceiling. |
+| `selfupdate/selfupdate.go` | Replacing the running binary with the newest release, shared by wssh and cafe. Every rule in it is one that broke an upgrade once: the asset pattern anchored at both ends, the archive name handed to the unpacker, the unversioned build taking the newest release, and the executable having to be called what the archive holds. One copy, because a second one drifts. |
+| `cmd/wssh/upgrade.go`, `cmd/cafe/upgrade.go` | The `upgrade` subcommand each binary registers. They hold only the two names that are specific to them: the repository and the binary. |
+| `webui/static/favicon.ico`, `webui/static/favicon-256.png` | RouterCafe's tab icon, embedded by cmd/cafe and served at the root. Not wssh's, which is inlined in the page instead. |
 | `cmd/cafe/` | The binary. `main.go` is the cobra root, `serve.go` wires the mux and the middleware, `landing.go` embeds the landing page and substitutes the treasury, the SOL price and the provider into it, `app.go` mounts the wssh browser terminal under `/app`. |
 | `cmd/cafe/static/index.html` | The landing page, which is also the pitch deck. One file, no build step, no font to download. |
 | `webui/webui.go` | The embedded browser front end, shared by `wssh` and `cafe`. `Assets`, `MissingWasm`, `Handler` (which owns the `__WSSH_SESSION_PATH__` substitution and the no-cache wrapper), and the `//go:generate` that builds the wasm. |

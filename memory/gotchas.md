@@ -31,6 +31,10 @@ to look more reasonable.
 - The agent channel handler has to be installed after the default channel
   handlers map is built, by mutating it in place. Anything installed through
   a `ssh.Option` is wiped. See `agent-forwarding.md`.
+- `go build ./cmd/wssh` and `go build ./cmd/cafe` both produce a binary that
+  reports `dev`, and `upgrade` on either takes the newest release rather than
+  refusing. That is deliberate: "dev" is older than everything published and
+  behind nothing.
 - A RouterCafe session refusing `uptime` with "does not run commands" is the
   product working, not a broken server. See `cafe.md`.
 - A refusal raised as an error from the agent has nowhere to go: the agent

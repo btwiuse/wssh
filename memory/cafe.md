@@ -105,6 +105,44 @@ The server logs a line saying so when `--tcp-addr` is not set, because an
 operator who starts it and then runs the command the landing page prints
 otherwise gets an HTTP 400 with nothing to explain it.
 
+## Upgrading
+
+`cafe upgrade` replaces the running binary with the newest release, and shares
+its implementation with `wssh upgrade` through package `selfupdate`. That
+sharing is not tidiness: every rule in there is one that broke an upgrade once,
+and a second copy of them is a second set to get wrong. A release carries four
+binaries whose asset names all end with the same platform suffix, which is the
+situation that produced the wrong-binary bug.
+
+A ledger is a file, not a release artefact, so an upgrade never touches one.
+
+## The tab icon
+
+RouterCafe serves its own mark at `/favicon.ico` and `/favicon-256.png`, out of
+the same embed as the landing page. `webui` carries a favicon placeholder that
+is filled with wssh's own unless the binary serving it says otherwise, so
+`/app` wears the same mark as the landing page rather than wssh's prompt.
+
+## A key that names no account
+
+Two different problems, and they are not the same message:
+
+| What arrived | What is said |
+|---|---|
+| an ed25519 key | nothing; it names an account and the UI opens |
+| an RSA or ECDSA key | this key names no account, and the command that fixes it |
+| no key at all | the client is refused during authentication |
+
+The third row cannot be fixed without giving up everything in the first. SSH
+tries `none` before `publickey`, so a server that accepts a connection carrying
+no key is accepting **everyone** on every key's account, and the handshake ends
+before a key is ever offered. There is no version of "let them in with no key"
+that still knows who they are.
+
+The refusal screen wraps to the terminal it was given, command included: a
+half-printed command is the one thing it must never show, since that is the
+line somebody is about to copy.
+
 ## What is not built
 
 The upstream is configured with one `--upstream` and one `--upstream-key`. With
