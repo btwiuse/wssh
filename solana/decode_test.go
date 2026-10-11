@@ -318,11 +318,11 @@ func appendCompactU16ForTest(dst []byte, n int) []byte {
 	}
 }
 
-// A System transfer that names one account is not a transfer. Rendering it as
-// one - "transfers N lamports to ?" - describes a transaction that cannot
-// exist, which is the one thing this reader must never do. Nothing is
-// described and the shortfall is said at the top instead.
-func TestATransferMissingItsSourceIsFlaggedNotDescribed(t *testing.T) {
+// sol-tx asks for a transfer with only the destination, because the request is
+// written before the signer is known. The builder inserts the fee payer as the
+// source, and what comes out has to be a whole transfer: a System transfer
+// naming one account is not a transaction the cluster will carry out.
+func TestABuiltTransferNamesBothAccounts(t *testing.T) {
 	pub, _, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatalf("generate: %v", err)
@@ -332,11 +332,9 @@ func TestATransferMissingItsSourceIsFlaggedNotDescribed(t *testing.T) {
 		t.Fatalf("generate: %v", err)
 	}
 	payerAddr := siws.Base58Encode(pub)
-	// One account, which is what sol-tx's transfer currently asks for.
-	ix, err := NewTransfer(TransferInstruction{
-		Lamports: 1000000000,
-		To:       siws.Base58Encode(dest),
-	})
+	destAddr := siws.Base58Encode(dest)
+
+	ix, err := NewTransfer(TransferInstruction{Lamports: 1000000000, To: destAddr})
 	if err != nil {
 		t.Fatalf("transfer: %v", err)
 	}
@@ -349,16 +347,91 @@ func TestATransferMissingItsSourceIsFlaggedNotDescribed(t *testing.T) {
 		t.Fatalf("build: %v", err)
 	}
 
+	msg, err := DecodeMessage(messageOf(unsigned))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	accounts := msg.Instructions[0].Accounts
+	if len(accounts) != 2 {
+		t.Fatalf("the transfer names %d accounts, want 2", len(accounts))
+	}
+	if accounts[0] != payerAddr {
+		t.Errorf("the source is %s, want the fee payer %s", accounts[0], payerAddr)
+	}
+	if accounts[1] != destAddr {
+		t.Errorf("the destination is %s, want %s", accounts[1], destAddr)
+	}
+
 	got := Summarise("key", messageOf(unsigned))
+	if strings.Contains(got, "cannot be carried out") {
+		t.Errorf("a whole transfer was called a broken one:\n%s", got)
+	}
+	if !strings.Contains(got, "transfers 1000000000 lamports to "+destAddr) {
+		t.Errorf("the summary does not say what the transfer does:\n%s", got)
+	}
+}
+
+// A short transfer is still impossible, and still has to be reported rather
+// than described - whatever put it together. Hand-built here so the builder's
+// fixing cannot hide the reader's checking.
+func TestATransferMissingItsSourceIsFlaggedNotDescribed(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	dest, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	payerAddr := siws.Base58Encode(pub)
+
+	got := Summarise("key", shortTransferMessage(t, payerAddr, siws.Base58Encode(dest)))
 	if strings.Contains(got, "?") {
-		t.Errorf("the summary guesses at a destination:\\n%s", got)
+		t.Errorf("the summary guesses at a destination:\n%s", got)
 	}
 	if !strings.Contains(got, "cannot be carried out") {
-		t.Errorf("the summary does not say the transaction is impossible:\\n%s", got)
+		t.Errorf("the summary does not say the transaction is impossible:\n%s", got)
 	}
-	if !strings.Contains(got, "1 of the 2 accounts") {
-		t.Errorf("the summary does not say what is missing:\\n%s", got)
+}
+
+// shortTransferMessage builds a System transfer naming only its destination,
+// hand by hand, so the reader's checking is tested apart from the builder's
+// fixing. The builder inserts the missing source, so the only way to produce
+// this shape is to write the bytes.
+func shortTransferMessage(t *testing.T, payer, dest string) []byte {
+	t.Helper()
+	sys := mustDecode32(t, SystemProgramID)
+
+	m := []byte{0x80, 1, 0, 2} // one writable signer, no read-only signers, two writable others
+	m = appendCompactU16ForTest(m, 3)
+	m = append(m, mustDecode32(t, payer)...)
+	m = append(m, sys...)
+	m = append(m, mustDecode32(t, dest)...)
+	m = append(m, make([]byte, 32)...) // blockhash
+	m = appendCompactU16ForTest(m, 1)  // one instruction
+	m = appendCompactU16ForTest(m, 1)  // calling the System program, account 1
+	m = appendCompactU16ForTest(m, 1)  // naming one account, where it needs two
+	m = appendCompactU16ForTest(m, 2)  // account index 2, the destination
+	data, err := siws.Base58Decode("3Bxs3zzLZLuLQEYX")
+	if err != nil {
+		t.Fatalf("transfer data: %v", err)
 	}
+	m = appendCompactU16ForTest(m, len(data))
+	m = append(m, data...)
+	m = appendCompactU16ForTest(m, 0) // no lookup tables
+	return m
+}
+
+func mustDecode32(t *testing.T, address string) []byte {
+	t.Helper()
+	raw, err := siws.Base58Decode(address)
+	if err != nil {
+		t.Fatalf("address %q: %v", address, err)
+	}
+	if len(raw) != 32 {
+		t.Fatalf("address %q is %d bytes", address, len(raw))
+	}
+	return raw
 }
 
 // And the ordinary case, where the accounts are all there, is described and

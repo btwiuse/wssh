@@ -30,6 +30,52 @@
 // list, so buildTransaction fills it in itself.
 const MEMO_PROGRAM_ID = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
 
+// System Program id: 32 zero bytes. Its instructions take a fixed set of
+// accounts, which is the one case where a missing one can be supplied here:
+// a transfer's source is whoever signs, and a request cannot name it because
+// the signer is not known when the request is written. See solana/build.go
+// and scripts/sol-tx/build.ts, which do the same thing.
+const SYSTEM_PROGRAM_ID = '11111111111111111111111111111111';
+
+// How many accounts each System instruction takes, by discriminant.
+const SYSTEM_ACCOUNTS = {
+  0: 2,  // CreateAccount
+  1: 2,  // Assign
+  2: 2,  // Transfer
+  3: 2,  // CreateAccountWithSeed
+  4: 1,  // AdvanceNonceAccount
+  5: 2,  // WithdrawNonceAccount
+  6: 1,  // InitializeNonceAccount
+  7: 1,  // AuthorizeNonceAccount
+  8: 2,  // Allocate
+  9: 0,  // AllocateWithSeed
+  10: 1, // AssignWithSeed
+  11: 2, // TransferWithSeed
+  12: 1, // UpgradeNonceAccount
+};
+
+/**
+ * Whether the fee payer is this instruction's first account.
+ *
+ * The System program is the one case where that is not a matter of the
+ * program's own interface. Everything else must name its accounts up front,
+ * which the check above enforces.
+ *
+ * @param {string} programId  the program being called
+ * @param {number} named      how many accounts the request listed
+ * @param {Uint8Array} data   the instruction's data
+ * @returns {boolean} true when the fee payer belongs at the front
+ */
+function sourceIsFeePayer(programId, named, data) {
+  if (programId !== SYSTEM_PROGRAM_ID) return false;
+  if (named >= 2 || data.length < 4) return false;
+  const discriminant = new DataView(
+    data.buffer, data.byteOffset, data.byteLength,
+  ).getUint32(0, true);
+  const needed = SYSTEM_ACCOUNTS[discriminant];
+  return needed !== undefined && needed > named;
+}
+
 // Types, in JSDoc, because the file is loaded by a page with no build step.
 //
 // These are the shapes that cross a boundary rather than the ones the library
@@ -317,6 +363,16 @@ function buildTransaction(request, web3, provider, payer) {
      throw err;
     }
 
+    let data;
+    try {
+      // Base58, because that is what the field carries. Read as hex it came
+      // out as eight bytes of nonsense instead of twelve - and a signature over
+      // nonsense verifies just as well as one over a transfer.
+      data = base58ToBytes(instruction.data || '');
+    } catch (err) {
+      throw new Error(`instruction ${i} has data that is not hex: ${err?.message || err}`);
+    }
+
     const keys = [];
     for (const [j, account] of instruction.accounts.entries()) {
      try {
@@ -331,16 +387,12 @@ function buildTransaction(request, web3, provider, payer) {
     }
     if (isMemo && keys.length === 0) {
      keys.push({ pubkey: feePayer, isSigner: true, isWritable: true });
-    }
-
-    let data;
-    try {
-      // Base58, because that is what the field carries. Read as hex it came
-      // out as eight bytes of nonsense instead of twelve - and a signature over
-      // nonsense verifies just as well as one over a transfer.
-      data = base58ToBytes(instruction.data || '');
-    } catch (err) {
-      throw new Error(`instruction ${i} has data that is not hex: ${err?.message || err}`);
+    } else if (sourceIsFeePayer(instruction.programId, keys.length, data)) {
+     // A transfer whose request named only its destination: the source is
+     // whoever signs, and that is the fee payer. Without this the
+     // transaction carries one account where the program needs two, which
+     // parses, verifies, and is rejected on chain.
+     keys.unshift({ pubkey: feePayer, isSigner: true, isWritable: true });
     }
 
     try {

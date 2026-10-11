@@ -2,6 +2,7 @@ package solana
 
 import (
 	"crypto/ed25519"
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -67,7 +68,17 @@ func BuildTransaction(req agentkey.SolanaTxRequest) ([]byte, error) {
 		}
 		progIdx := keys.intern(program)
 
-		accounts := make([]uint16, 0, len(ix.Accounts))
+		accounts := make([]uint16, 0, len(ix.Accounts)+1)
+		if sourceIsFeePayer(ix) {
+			// A System transfer's accounts are [source, destination] and
+			// the source is whoever signs, which is the fee payer - the
+			// request cannot name it because the signer is not known when
+			// the request is written. Inserting it here is the one place
+			// that knows both, and getting this wrong produces a
+			// transaction the cluster rejects with an account count that
+			// points nowhere near the cause.
+			accounts = append(accounts, 0)
+		}
 		for j, a := range ix.Accounts {
 			raw, err := decode32(a.Address, "account")
 			if err != nil {
@@ -132,6 +143,44 @@ func BuildTransaction(req agentkey.SolanaTxRequest) ([]byte, error) {
 	out := appendCompactU16(nil, 1)
 	out = append(out, make([]byte, ed25519.SignatureSize)...)
 	return append(out, msg...), nil
+}
+
+// systemAccountCount is how many accounts each System instruction takes.
+// A request may name fewer, and the missing one is the fee payer; anything
+// else missing is a transaction that cannot be carried out, which
+// DecodeMessage's reader reports rather than papering over.
+var systemAccountCount = map[uint32]int{
+	0:  2, // CreateAccount
+	1:  2, // Assign
+	2:  2, // Transfer
+	3:  2, // CreateAccountWithSeed
+	4:  1, // AdvanceNonceAccount
+	5:  2, // WithdrawNonceAccount
+	6:  1, // InitializeNonceAccount
+	7:  1, // AuthorizeNonceAccount
+	8:  2, // Allocate
+	9:  0, // AllocateWithSeed
+	10: 1, // AssignWithSeed
+	11: 2, // TransferWithSeed
+	12: 1, // UpgradeNonceAccount
+}
+
+// sourceIsFeePayer reports whether an instruction is a System instruction
+// whose first account is whoever signs, which the request leaves out.
+//
+// The System program is the one case where the answer is not a matter of the
+// program's own interface: a transfer's source is the signer, and the signer
+// is the fee payer, because Solana requires the fee payer to sign.
+func sourceIsFeePayer(ix agentkey.SolanaInstruction) bool {
+	if ix.ProgramID != SystemProgramID {
+		return false
+	}
+	data, err := siws.Base58Decode(ix.DataBase58)
+	if err != nil || len(data) < 4 {
+		return false
+	}
+	needed, known := systemAccountCount[binary.LittleEndian.Uint32(data[:4])]
+	return known && needed > len(ix.Accounts)
 }
 
 // keyTable interns account keys so the same one is named once, with the fee

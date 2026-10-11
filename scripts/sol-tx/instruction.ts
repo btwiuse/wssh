@@ -13,7 +13,11 @@ import { encodeBase58, isBase58 } from "./base58.ts";
 
 // System Program id: 32 zero bytes. The fixed address every transfer lands
 // on, so a hard-coded constant is more honest than reading it from a keypair.
-const SYSTEM_PROGRAM_ID = "11111111111111111111111111111111";
+//
+// Exported because the builder needs it: the System program's accounts are
+// fixed by the protocol rather than by the program's own interface, and a
+// transfer's source is whoever signs.
+export const SYSTEM_PROGRAM_ID = "11111111111111111111111111111111";
 
 // SPL Memo Program v2. A log-only program: the only thing it does is write
 // the supplied UTF-8 string into the transaction's log messages. No state

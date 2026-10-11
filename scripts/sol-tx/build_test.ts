@@ -24,6 +24,7 @@
 import { assertEquals, assertThrows } from "jsr:@std/assert";
 
 import { buildTransaction, messageOf, MEMO_PROGRAM_ID } from "./build.ts";
+import { SYSTEM_PROGRAM_ID } from "./instruction.ts";
 import { encodeBase58 } from "./base58.ts";
 import type { SolanaTxRequest } from "./agent.ts";
 
@@ -137,3 +138,57 @@ Deno.test("the payer is the first account key", () => {
   assertEquals(keyAt(1), MEMO_PROGRAM_ID);
   assertEquals(keyAt(2), other);
 });
+// A System transfer names [source, destination], and the request cannot name
+// the source because the signer is not known when the request is written. The
+// builder inserts the fee payer there.
+//
+// Getting this wrong does not fail loudly. It produces a transaction that
+// parses, verifies, and is rejected by the cluster for naming too few
+// accounts - which is why this is pinned rather than assumed.
+Deno.test("a transfer's source is the fee payer", () => {
+  const dest = "41AZvbsCJJoKT27SCLAd7HCNK7mdU2TA9LLUWwyjnyLA";
+  const req: SolanaTxRequest = {
+    blockhash: "B1P9Y4gHoGaSX9FS6nUeAb5Jx3ATjNPGmc7YE4jfEQUZ",
+    signer: PAYER,
+    instructions: [{
+      programId: SYSTEM_PROGRAM_ID,
+      // One account: the destination, which is all the request can name.
+      accounts: [{ address: dest, isSigner: false, isWritable: true }],
+      data: "3Bxs3zzLZLuLQEYX",
+    }],
+  };
+
+  // messageOf has already taken the signature section off, so this is the
+  // message rather than the whole transaction.
+  const msg = messageOf(buildTransaction(req));
+  assertEquals(msg[0], 0x80, "version");
+
+  // Three keys: the fee payer, the System program, the destination.
+  assertEquals(msg[4], 3, "three account keys");
+  const keyAt = (i: number) =>
+    encodeBase58(new Uint8Array(msg.subarray(5 + i * 32, 5 + (i + 1) * 32)));
+  assertEquals(keyAt(0), PAYER, "the fee payer is first");
+  assertEquals(keyAt(1), SYSTEM_PROGRAM_ID);
+
+  // The instruction names two accounts: index 0 and the destination.
+  const ixAt = 5 + 3 * 32 + 32; // keys, then blockhash
+  assertEquals(msg[ixAt], 1, "one instruction");
+  assertEquals(msg[ixAt + 1], 1, "calling the System program");
+  assertEquals(msg[ixAt + 2], 2, "two accounts");
+  assertEquals(msg[ixAt + 3], 0, "the source is account 0, the payer");
+  assertEquals(msg[ixAt + 4], 2, "and the destination is account 2");
+});
+
+// The rule is for transfers, not for everything. The memo program takes only
+// the signer and writes nothing, so a request naming one account is whole and
+// must be left alone - a source inserted here would make a memo name an
+// account the program does not take.
+Deno.test("the memo program is not given a source", () => {
+  const msg = messageOf(buildTransaction(goldenRequest()));
+  assertEquals(msg[ixAccountsAt(msg)], 1, "the memo's one account is left as it was");
+});;
+
+function ixAccountsAt(msg: Uint8Array): number {
+  const keyCount = msg[4];
+  return 5 + keyCount * 32 + 32 + 1 + 1; // keys, blockhash, count, program index
+}

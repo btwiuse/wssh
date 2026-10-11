@@ -22,7 +22,7 @@
 // invalid discriminator.
 
 import { decodeBase58 } from "./base58.ts";
-import { MEMO_PROGRAM_ID } from "./instruction.ts";
+import { MEMO_PROGRAM_ID, SYSTEM_PROGRAM_ID } from "./instruction.ts";
 import type { SolanaTxRequest } from "./agent.ts";
 
 const SIGNATURE_SIZE = 64;
@@ -60,6 +60,12 @@ export function buildTransaction(req: SolanaTxRequest): Uint8Array {
 
   const compiled = req.instructions.map((ix, i) => {
     const program = keys.intern(decode32(ix.programId, `instruction ${i} program id`));
+    // A System transfer names [source, destination] and the source is
+    // whoever signs, which is the fee payer - a request cannot name it
+    // because the signer is not known when the request is written. This is
+    // the same insertion solana/build.go does, and the Deno and Go
+    // transactions have to be the same bytes or the two commands stop
+    // agreeing about what they signed.
     const accounts = ix.accounts.map((a, j) => {
       const raw = decode32(a.address, `instruction ${i} account ${j}`);
       if (a.isSigner && !equalBytes(raw, payer)) {
@@ -73,6 +79,7 @@ export function buildTransaction(req: SolanaTxRequest): Uint8Array {
       }
       return keys.intern(raw);
     });
+    if (sourceIsFeePayer(ix, accounts.length)) accounts.unshift(0);
     return { program, accounts, data: decodeBase58(ix.data) };
   });
 
@@ -149,6 +156,44 @@ function readCompactU16(bytes: Uint8Array, offset: number): [number, number] {
     if ((b & 0x80) === 0) return [value, offset + i + 1];
   }
   throw new Error("the value is longer than a compact-u16 can be");
+}
+
+/** How many accounts each System instruction takes, by discriminant. */
+const SYSTEM_ACCOUNTS = new Map<number, number>([
+  [0, 2], // CreateAccount
+  [1, 2], // Assign
+  [2, 2], // Transfer
+  [3, 2], // CreateAccountWithSeed
+  [4, 1], // AdvanceNonceAccount
+  [5, 2], // WithdrawNonceAccount
+  [6, 1], // InitializeNonceAccount
+  [7, 1], // AuthorizeNonceAccount
+  [8, 2], // Allocate
+  [9, 0], // AllocateWithSeed
+  [10, 1], // AssignWithSeed
+  [11, 2], // TransferWithSeed
+  [12, 1], // UpgradeNonceAccount
+]);
+
+/**
+ * Whether the fee payer is this instruction's first account.
+ *
+ * The System program is the one case where that is not a matter of the
+ * program's own interface: a transfer's source is the signer, and Solana
+ * requires the fee payer to sign. See solana/build.go for the Go side.
+ */
+function sourceIsFeePayer(
+  ix: { programId: string; data: string },
+  named: number,
+): boolean {
+  if (ix.programId !== SYSTEM_PROGRAM_ID) return false;
+  if (named >= 2) return false;
+  const data = decodeBase58(ix.data || "");
+  if (data.length < 4) return false;
+  const discriminant =
+    (data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24)) >>> 0;
+  const needed = SYSTEM_ACCOUNTS.get(discriminant);
+  return needed !== undefined && needed > named;
 }
 
 /** Interns account keys so the same one is named once. */
