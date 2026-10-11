@@ -857,13 +857,19 @@ only signatures come back, and every signature asks you first."
       ${signature && html`
         <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
           <!--
-            Wide, because the longest line in the summary is a key
-            fingerprint and the next ones are base58 addresses. The cap
-            against the viewport is so a narrow window shrinks the dialog
-            rather than pushing the buttons off the side.
+            As wide as it needs to be, and no wider. The summary is a
+            handful of lines whose longest is a fingerprint or an address, so
+            a fixed width either breaks those down the middle or leaves a
+            pane of empty box around a two-line message.
+
+            w-fit sizes to the content, which for wrapped text means the
+            longest line that fits. The floor keeps the buttons and the
+            sentence above them readable; the cap is against the viewport so
+            a narrow window shrinks the dialog instead of pushing the
+            buttons off the side.
           -->
-          <div class="w-[42rem] max-w-[calc(100vw-2rem)] rounded border border-amber-600
-                      bg-slate-900 p-4 shadow-2xl">
+          <div class="w-fit min-w-[22rem] max-w-[calc(100vw-2rem)] rounded border
+                      border-amber-600 bg-slate-900 p-4 shadow-2xl">
             <h2 class="text-sm font-semibold text-amber-400 mb-1">Signing request</h2>
             <p class="text-xs text-slate-400 mb-2">
               Something in this session wants a signature from a key in this page.
