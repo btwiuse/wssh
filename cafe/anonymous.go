@@ -126,6 +126,14 @@ func (m anonymousModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		d.Address, d.Proven = msg.address, true
 		return intoAccount(d, m.width, m.height), nil
 
+	case pickKeyMsg:
+		if msg.row < 0 || msg.row >= len(m.keys) {
+			return m, nil
+		}
+		m.picked = msg.row
+		m.busy = "asking the agent to sign, so this key is really yours"
+		return m, adoptCmd(m.deps, m.keys[msg.row])
+
 	case tea.KeyPressMsg:
 		return m.onKey(msg)
 	}
@@ -220,7 +228,7 @@ func (m anonymousModel) openAddress() (tea.Model, tea.Cmd) {
 // ways in: a key the agent signed for is owned, an address somebody typed is
 // only named, and everything that changes an account reads that one field.
 func intoAccount(d deps, width, height int) model {
-	return model{
+	m := model{
 		deps:    d,
 		st:      newStyles(),
 		view:    screenHome,
@@ -228,6 +236,13 @@ func intoAccount(d deps, width, height int) model {
 		width:   width,
 		height:  height,
 	}
+	// The lists have to be built here, not only at construction. A session that
+	// arrived with nothing reaches the account screen through this function
+	// rather than through newModel, and a model with two zero-value lists in
+	// it renders an empty account screen with an empty key list and no routes,
+	// which reads as "you have no keys" rather than as "nothing was loaded".
+	m.syncLists()
+	return m
 }
 
 // isBase58 is the alphabet an address is written in. Zero, O, I and l are left
@@ -263,6 +278,7 @@ func (m anonymousModel) View() tea.View {
 		}
 	}
 
+	firstRow := strings.Count(b.String(), "\n")
 	for i, k := range m.keys {
 		marker, style := "  ", st.value
 		if i == m.picked {
@@ -297,8 +313,29 @@ func (m anonymousModel) View() tea.View {
 		b.WriteString(wrapText(m.notice.text, m.width, st.errText) + "\n\n")
 	}
 	b.WriteString(wrapText("ctrl+c to disconnect", m.width, st.dim) + "\n")
-	return ownedView(b.String())
+	v := ownedView(b.String())
+	// The same mouse the rest of the program answers to. This screen is the
+	// first thing a local run shows and the first thing a connection that
+	// proved nothing shows, so a click that did nothing here would be the most
+	// visible one that does nothing.
+	v.MouseMode = tea.MouseModeCellMotion
+	keys := len(m.keys)
+	v.OnMouse = func(msg tea.MouseMsg) tea.Cmd {
+		e := msg.Mouse()
+		if e.Button != tea.MouseLeft || e.X < 1 {
+			return nil
+		}
+		row := e.Y - firstRow
+		if row < 0 || row >= keys {
+			return nil
+		}
+		return func() tea.Msg { return pickKeyMsg{row} }
+	}
+	return v
 }
+
+// pickKeyMsg is a click on a row of the picker's list.
+type pickKeyMsg struct{ row int }
 
 // host is where to tell somebody to connect, which is this server's own name.
 func (d deps) host() string {

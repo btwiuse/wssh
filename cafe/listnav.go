@@ -258,7 +258,7 @@ func (m *model) paintFocus() {
 // the top would move the target out from under a following enter.
 func (m *model) syncLists() {
 	idx := m.apiKeys.Index()
-	m.routes = routesList(m.deps.Catalogue, m.listWidth(), m.listHeight(1), m.focus)
+	m.routes = routesList(m.deps.catalogue(), m.listWidth(), m.listHeight(1), m.focus)
 	m.apiKeys = keysList(m.account, m.listWidth(), m.listHeight(2), m.focus)
 	if n := len(m.account.Keys); n > 0 {
 		if idx >= n {

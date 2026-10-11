@@ -1377,3 +1377,147 @@ func mustEd25519(t *testing.T) gossh.PublicKey {
 	}
 	return out
 }
+
+// A click has to land on the tab it looks like it landed on, and on nothing
+// else. The bar changes width with the names in it, so this cannot be a fixed
+// map: it has to come from the frame that was actually drawn.
+func TestClickingTheBarSelectsThePageUnderneath(t *testing.T) {
+	m := model{st: newStyles(), view: screenHome, deps: deps{Catalogue: DefaultCatalogue(), Proven: true}, width: 100, height: 40}
+	m.syncLists()
+	_, where := m.frame()
+
+	for i, sp := range where.tabs {
+		got, ok := where.tabAt(sp.x0+1, where.tabLine+1)
+		if !ok || got != screens[i].view {
+			t.Errorf("a click inside tab %d gave %v (found=%v), want %v", i, got, ok, screens[i].view)
+		}
+		// Half-open: the right edge is the first column of the next tab, and
+		// belongs to it. Two tabs sharing a column is how a click lands on the
+		// page next door.
+		if i+1 < len(where.tabs) {
+			got, ok := where.tabAt(sp.x1, where.tabLine+1)
+			if !ok || got != screens[i+1].view {
+				t.Errorf("the right edge of tab %d gave %v, want tab %d", i, got, i+1)
+			}
+		}
+	}
+
+	// Anywhere else on the screen is not a page.
+	// Anywhere else on the screen is not a page: the brand line above the bar,
+	// and the page below it.
+	for _, pt := range [][2]int{{0, 0}, {50, where.tabLine + 3}, {5, 30}} {
+		if _, ok := where.tabAt(pt[0], pt[1]); ok {
+			t.Errorf("a click at %v selected a page", pt)
+		}
+	}
+}
+
+// A click in a list moves the cursor and focuses it. Both halves matter: a
+// cursor that moved but did not light up leaves it impossible to tell whether
+// anything will answer to the next keystroke.
+func TestClickingARowMovesTheCursorAndFocusesTheList(t *testing.T) {
+	m := model{
+		st: newStyles(), view: screenModels,
+		deps: deps{Catalogue: DefaultCatalogue(), Proven: true}, width: 100, height: 40,
+	}
+	m.syncLists()
+	m.focus = false
+	_, where := m.frame()
+	if where.perRow != 1 || where.rows == 0 {
+		t.Fatalf("the routes list reported %d rows of %d lines", where.rows, where.perRow)
+	}
+
+	row, ok := where.rowAt(40, where.listTop+2)
+	if !ok {
+		t.Fatalf("a click on the third row found nothing")
+	}
+	next, _ := m.Update(selectRowMsg{row: row})
+	got := next.(model)
+	if !got.focus {
+		t.Error("a click in a list did not focus it")
+	}
+	if at := got.routes.Index(); at != row {
+		t.Errorf("the cursor went to row %d, want %d", at, row)
+	}
+
+	// The keys list is two lines a row, so the arithmetic has to use that and
+	// not the routes' one.
+	ledger := testLedger(t)
+	for range 3 {
+		if _, err := ledger.MintKey(treasuryAddress, ""); err != nil {
+			t.Fatalf("MintKey: %v", err)
+		}
+	}
+	k := m
+	k.account = ledger.Account(treasuryAddress)
+	k.view = screenKeys
+	_, kw := k.frame()
+	if kw.perRow != 2 {
+		t.Errorf("the keys list reported %d lines per row, want 2", kw.perRow)
+	}
+	// Both lines of a key row are that row: the key is on the first and the
+	// dates on the second, and nobody aims at the first one.
+	if r, ok := kw.rowAt(40, kw.listTop+1); !ok || r != 0 {
+		t.Errorf("the second line of the first key gave row %d found=%v, want 0", r, ok)
+	}
+	if r, ok := kw.rowAt(40, kw.listTop+2); !ok || r != 1 {
+		t.Errorf("a click on the second key gave row %d found=%v, want 1", r, ok)
+	}
+}
+
+// A click on the border of the box is a click on the border, and a row on
+// another page is a row that is not there.
+func TestAClickOnNothingInParticularSelectsNothing(t *testing.T) {
+	m := model{
+		st: newStyles(), view: screenModels,
+		deps: deps{Catalogue: DefaultCatalogue(), Proven: true}, width: 100, height: 40,
+	}
+	m.syncLists()
+	_, where := m.frame()
+
+	if _, ok := where.rowAt(0, where.listTop); ok {
+		t.Error("a click on the left border selected a row")
+	}
+	if _, ok := where.rowAt(where.inside.x1, where.listTop); ok {
+		t.Error("a click past the right border selected a row")
+	}
+	if _, ok := where.rowAt(40, where.listTop-1); ok {
+		t.Error("a click on the line above the list selected a row")
+	}
+	if _, ok := where.rowAt(40, where.listTop+where.rows*where.perRow); ok {
+		t.Error("a click below the last visible row selected a row")
+	}
+}
+
+// The picker is the first thing a local run shows and the first thing a
+// connection that proved nothing shows, so a click that did nothing here would
+// be the most visible one that does nothing.
+func TestClickingAKeyInThePickerAdoptsIt(t *testing.T) {
+	_, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	sock := serveAgent(t, []ed25519.PrivateKey{priv})
+	m := anonymousModel{
+		deps:  deps{SockPath: sock, Ledger: testLedger(t), Catalogue: DefaultCatalogue()},
+		width: 80, height: 24,
+		keys: []*agent.Key{
+			{Format: gossh.KeyAlgoED25519, Blob: blobFor(t, priv.Public().(ed25519.PublicKey)), Comment: "one"},
+			{Format: gossh.KeyAlgoED25519, Blob: blobFor(t, priv.Public().(ed25519.PublicKey)), Comment: "two"},
+		},
+	}
+
+	// The click puts the cursor where the mouse landed; adoption is a separate
+	// step because it needs the agent to sign.
+	out, _ := m.Update(pickKeyMsg{row: 1})
+	got, ok := out.(anonymousModel)
+	if !ok {
+		t.Fatalf("a click in the picker gave %T", out)
+	}
+	if got.picked != 1 {
+		t.Errorf("the click left the cursor on row %d, want 1", got.picked)
+	}
+	if _, cmd := got.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})); cmd == nil {
+		t.Error("a clicked key did nothing when enter followed it")
+	}
+}

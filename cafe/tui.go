@@ -107,25 +107,39 @@ type styles struct {
 	// typed, and dimming it into the background would look like a bug.
 	caret lipgloss.Style
 	idle  lipgloss.Style
+
+	// tabIdle and tabActive are the two states of the bar at the top of every
+	// screen. They carry a bottom edge of their own rather than closing, so
+	// the current page looks joined to the content under it instead of boxed
+	// off from it.
+	tabIdle   lipgloss.Style
+	tabActive lipgloss.Style
+
+	// window is the page sitting in the box the bar opens into: bordered on
+	// three sides, deliberately not on the top, which is the tab's job.
+	window lipgloss.Style
 }
 
 func newStyles() styles {
 	return styles{
-		brand:    lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#34d399")),
-		brandDim: lipgloss.NewStyle().Foreground(lipgloss.Color("#334155")),
-		label:    lipgloss.NewStyle().Foreground(lipgloss.Color("#64748b")),
-		value:    lipgloss.NewStyle().Foreground(lipgloss.Color("#e2e8f0")),
-		money:    lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#f8fafc")),
-		dim:      lipgloss.NewStyle().Foreground(lipgloss.Color("#64748b")),
-		accent:   lipgloss.NewStyle().Foreground(lipgloss.Color("#38bdf8")),
-		warn:     lipgloss.NewStyle().Foreground(lipgloss.Color("#fbbf24")),
-		key:      lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#34d399")),
-		title:    lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#e2e8f0")),
-		errText:  lipgloss.NewStyle().Foreground(lipgloss.Color("#f87171")),
-		okText:   lipgloss.NewStyle().Foreground(lipgloss.Color("#34d399")),
-		box:      lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#1e293b")).Padding(0, 1),
-		caret:    lipgloss.NewStyle().Bold(true).Reverse(true).Foreground(lipgloss.Color("#0f172a")).Background(lipgloss.Color("#38bdf8")),
-		idle:     lipgloss.NewStyle().Foreground(lipgloss.Color("#94a3b8")),
+		brand:     lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#34d399")),
+		brandDim:  lipgloss.NewStyle().Foreground(lipgloss.Color("#334155")),
+		label:     lipgloss.NewStyle().Foreground(lipgloss.Color("#64748b")),
+		value:     lipgloss.NewStyle().Foreground(lipgloss.Color("#e2e8f0")),
+		money:     lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#f8fafc")),
+		dim:       lipgloss.NewStyle().Foreground(lipgloss.Color("#64748b")),
+		accent:    lipgloss.NewStyle().Foreground(lipgloss.Color("#38bdf8")),
+		warn:      lipgloss.NewStyle().Foreground(lipgloss.Color("#fbbf24")),
+		key:       lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#34d399")),
+		title:     lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#e2e8f0")),
+		errText:   lipgloss.NewStyle().Foreground(lipgloss.Color("#f87171")),
+		okText:    lipgloss.NewStyle().Foreground(lipgloss.Color("#34d399")),
+		box:       lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#1e293b")).Padding(0, 1),
+		caret:     lipgloss.NewStyle().Bold(true).Reverse(true).Foreground(lipgloss.Color("#0f172a")).Background(lipgloss.Color("#38bdf8")),
+		tabIdle:   lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color("#64748b")).Border(tabBorderWithBottom("\u2534", "\u2500", "\u2534"), true),
+		tabActive: lipgloss.NewStyle().Padding(0, 1).Bold(true).Foreground(lipgloss.Color("#34d399")).Border(tabBorderWithBottom("\u2518", " ", "\u2514"), true),
+		window:    lipgloss.NewStyle().Border(lipgloss.NormalBorder(), true).UnsetBorderTop().BorderForeground(lipgloss.Color("#334155")),
+		idle:      lipgloss.NewStyle().Foreground(lipgloss.Color("#94a3b8")),
 	}
 }
 
@@ -172,6 +186,19 @@ type deps struct {
 	// Ctx is the session's context, so a deposit stops when the client hangs
 	// up rather than holding a goroutine until its own deadline.
 	Ctx context.Context
+}
+
+// catalogue is the routing table, falling back to the default when there is
+// none.
+//
+// deps is built by hand in tests and by intoAccount on the path a session
+// that proved nothing arrives by, so "no catalogue" has to mean something
+// rather than being a nil pointer in the middle of a render.
+func (d deps) catalogue() *Catalogue {
+	if d.Catalogue == nil {
+		return DefaultCatalogue()
+	}
+	return d.Catalogue
 }
 
 // ctx returns the context a deposit runs under, falling back to the background
@@ -268,7 +295,38 @@ func (m model) Init() tea.Cmd {
 }
 
 func (m model) View() tea.View {
-	return ownedView(m.render())
+	content, where := m.frame()
+	v := ownedView(content)
+	// Cell motion rather than all-motion: clicks and drags, not every mouse
+	// movement reported. Over ssh this is the difference between a program
+	// that responds and one that floods the connection, and it still costs
+	// the terminal its own text selection, which is why it is on rather than
+	// on by default.
+	v.MouseMode = tea.MouseModeCellMotion
+	v.OnMouse = clickTo(where)
+	return v
+}
+
+// clickTo turns a click into an intent, given what the last frame drew.
+//
+// It is a closure over the frame's own layout rather than a fixed map,
+// because the bar changes width with the names in it and the list changes
+// height with how many rows are on the page. The only thing that can place a
+// click correctly is the thing that drew the thing being clicked.
+func clickTo(where clicks) func(tea.MouseMsg) tea.Cmd {
+	return func(msg tea.MouseMsg) tea.Cmd {
+		m := msg.Mouse()
+		if m.Button != tea.MouseLeft {
+			return nil
+		}
+		if view, ok := where.tabAt(m.X, m.Y); ok {
+			return func() tea.Msg { return gotoScreenMsg{view} }
+		}
+		if row, ok := where.rowAt(m.X, m.Y); ok {
+			return func() tea.Msg { return selectRowMsg{row} }
+		}
+		return nil
+	}
 }
 
 // refreshCmd reloads the account from the ledger.
@@ -372,11 +430,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, refreshCmd(m.deps)
 
+	case gotoScreenMsg:
+		return m.show(msg.view), nil
+
+	case selectRowMsg:
+		// A click on a row is a click on a list, so it also focuses one: a
+		// cursor that moved but did not light up leaves it impossible to tell
+		// whether anything will answer to the next keystroke.
+		if l := m.nav(); l != nil && msg.row < len(l.Items()) {
+			m.focus = true
+			l.Select(msg.row)
+			m.paintFocus()
+		}
+		return m, nil
+
 	case tea.KeyPressMsg:
 		return m.onKey(msg)
 	}
 	return m, nil
 }
+
+// gotoScreenMsg is a click on the bar asking for a page.
+type gotoScreenMsg struct{ view screen }
+
+// selectRowMsg is a click in a list asking for the row it landed on.
+type selectRowMsg struct{ row int }
 
 func (m model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// ^C always quits, whatever is on screen: a person holding a wallet
@@ -674,22 +752,29 @@ func parseSOL(text string) (uint64, error) {
 	return w*1_000_000_000 + f, nil
 }
 
-func (m model) render() string {
+// renderPage is the page content and everything that hangs off it, with no
+// frame around it: the box is applied by render so that its width and the
+// bar's width are decided in the same place.
+func (m model) renderPage() (string, int) {
 	var b strings.Builder
-	b.WriteString(m.header())
-	b.WriteString("\n" + m.tabBar())
 	if !m.deps.Proven && m.deps.Address != "" {
-		b.WriteString("\n  " + m.st.warn.Render("read-only: this address was named, not proved") + "\n")
+		b.WriteString("  " + m.st.warn.Render("read-only: this address was named, not proved") + "\n\n")
 	}
-	b.WriteString("\n\n")
 
+	// listAt is the line the page's first list row lands on, relative to the
+	// top of the page, or -1 for a page with no list.
+	listAt := -1
 	switch m.view {
 	case screenDeposit:
 		b.WriteString(m.renderDeposit())
 	case screenKeys:
-		b.WriteString(m.renderKeys())
+		var at int
+		b.WriteString(m.addRow(&at, m.renderKeys))
+		listAt = at
 	case screenModels:
-		b.WriteString(m.renderModels())
+		var at int
+		b.WriteString(m.addRow(&at, m.renderModels))
+		listAt = at
 	case screenHelp:
 		b.WriteString(m.renderHelp())
 	default:
@@ -709,8 +794,155 @@ func (m model) render() string {
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("\n" + m.footer())
-	return b.String()
+	return b.String(), listAt
+}
+
+// addRow adapts a page that reports where its list starts so the switch above
+// reads as one case per page rather than a case and a dance for the two that
+// carry a list.
+func (m model) addRow(at *int, page func() (string, int)) string {
+	text, first := page()
+	*at = first
+	return text
+}
+
+// frame is the brand line, the bar, and the page in the box underneath them.
+//
+// The box has no top edge and the current tab has a blank one, which is the
+// whole of what makes the two look joined rather than stacked: a bar floating
+// above a wall of text reads as chrome, and a bar whose current tab opens into
+// the page reads as navigation.
+func (m model) frame() (string, clicks) {
+	bar, spans := m.tabBar()
+	page, listAt := m.renderPage()
+	window := m.st.window.
+		Width(m.contentWidth() - 2).
+		Render(page)
+
+	perRow := m.listLinesPerRow()
+	where := clicks{
+		tabs:    spans,
+		tabLine: barTop,
+		rows:    m.visibleRows(perRow),
+		perRow:  perRow,
+		inside:  span{x0: 1, x1: m.contentWidth() - 1},
+	}
+	// The page starts on the line after the bar's underline, and the box has no
+	// top edge, so the page's own line count is the terminal's line count from
+	// there on. A list's rows therefore sit at a known absolute line without
+	// anybody having to remember what the page printed above them.
+	if listAt >= 0 {
+		where.listTop = barTop + barLines + listAt
+	}
+	return m.header() + "\n" + bar + "\n" + window + "\n" + m.footer(), where
+}
+
+// barLines is how many lines the bar occupies: the top of the first tab, the
+// labels, and the bottom edge that joins the active one to the page.
+const barLines = 3
+
+// clicks is what the last frame put on screen and where, so that a mouse
+// event carrying coordinates can be turned into an intent.
+//
+// Rebuilt on every frame, because the thing it describes - which tab is
+// current, which row the cursor is on - differs on every frame, and a click
+// against yesterday's layout is worse than no click at all.
+type clicks struct {
+	tabs    []span
+	tabLine int
+
+	// listTop is the line the current page's first list row is on, perRow is
+	// how many terminal lines a row occupies, and rows is how many are actually
+	// on screen rather than how many exist: clicking a row that is on another
+	// page is a click on nothing.
+	listTop int
+	rows    int
+	perRow  int
+
+	// inside is the horizontal extent of the box, so a click on its border is
+	// not a click on the row behind the border.
+	inside span
+}
+
+// barTop is where the bar starts counting from: the brand line is line 0 and
+// the bar is drawn on the two after it.
+const barTop = 1
+
+// tabAt returns the page a click on line y column x landed on.
+func (c clicks) tabAt(x, y int) (screen, bool) {
+	// The bar is three lines: the top of the box, the labels, the bottom edge.
+	// A click on any of them is a click on the tab.
+	if y < c.tabLine || y > c.tabLine+2 {
+		return 0, false
+	}
+	for i, sp := range c.tabs {
+		if sp.contains(x) {
+			return screens[i].view, true
+		}
+	}
+	return 0, false
+}
+
+// rowAt returns the row index a click landed on within the list, if any.
+func (c clicks) rowAt(x, y int) (int, bool) {
+	if c.perRow == 0 || c.rows == 0 || !c.inside.contains(x) {
+		return 0, false
+	}
+	// The list sits inside the box, so its first row is two lines down from the
+	// top of the box: the border, then the blank line the page starts with.
+	off := y - c.listTop
+	if off < 0 {
+		return 0, false
+	}
+	row := off / c.perRow
+	if row >= c.rows {
+		return 0, false
+	}
+	return row, true
+}
+
+// rowHeights is how many rows the list on screen has, and listLinesPerRow how
+// many terminal lines each occupies. Both zero on a page with no list, which
+// is how rowAt says no without needing to know which pages have one.
+func (m model) rowHeights() int {
+	switch m.view {
+	case screenKeys:
+		return len(m.account.Keys)
+	case screenModels:
+		return len(m.routes.Items())
+	}
+	return 0
+}
+
+// visibleRows is how many rows of the list are on screen, which is the list's
+// own height rather than the number of items: forty routes on a short terminal
+// show a handful of them and the rest are a page away.
+func (m model) visibleRows(perRow int) int {
+	if perRow == 0 {
+		return 0
+	}
+	total := m.rowHeights()
+	shown := m.routes.Height()
+	if m.view == screenKeys {
+		shown = m.apiKeys.Height()
+	}
+	if shown <= 0 {
+		return 0
+	}
+	if total > shown {
+		total = shown
+	}
+	return total
+}
+
+func (m model) listLinesPerRow() int {
+	switch m.view {
+	case screenKeys:
+		return 2
+	case screenModels:
+		return 1
+	}
+	return 0
 }
 
 func (m model) header() string {
@@ -731,20 +963,57 @@ func (m model) header() string {
 // screen could not show the same letters as shortcuts and mean them. A bar
 // shows where you are and where you can go, and cannot go stale the way a
 // legend does.
-func (m model) tabBar() string {
-	var b strings.Builder
-	b.WriteString("  ")
+func (m model) tabBar() (string, []span) {
+	rendered := make([]string, 0, len(screens))
+	spans := make([]span, 0, len(screens))
+	x := 0
 	for i, s := range screens {
-		if i > 0 {
-			b.WriteString("  " + m.st.dim.Render("\u2502") + "  ")
-		}
+		style := m.st.tabIdle
 		if s.view == m.view {
-			b.WriteString(m.st.caret.Render(" " + s.name + " "))
-		} else {
-			b.WriteString(m.st.dim.Render(" " + s.name + " "))
+			style = m.st.tabActive
 		}
+		// The ends have to close the run rather than each close themselves, or
+		// the first tab grows a corner in the middle of the bar. This is the
+		// tabs example's treatment: the leftmost keeps its left wall, the
+		// rightmost keeps its right one, and only the outer corners change.
+		border, _, _, _, _ := style.GetBorder()
+		first, last, active := i == 0, i == len(screens)-1, s.view == m.view
+		switch {
+		case first && active:
+			border.BottomLeft = "\u2502"
+		case first && !active:
+			border.BottomLeft = "\u251c"
+		case last && active:
+			border.BottomRight = "\u2502"
+		case last && !active:
+			border.BottomRight = "\u2524"
+		}
+		cell := style.Border(border).Render(s.name)
+		rendered = append(rendered, cell)
+
+		w := lipgloss.Width(cell)
+		spans = append(spans, span{x0: x, x1: x + w})
+		x += w
 	}
-	return b.String()
+	return lipgloss.JoinHorizontal(lipgloss.Top, rendered...), spans
+}
+
+// span is a run of terminal columns something clickable occupies.
+type span struct{ x0, x1 int }
+
+// contains reports whether a column falls inside, half-open: the right edge is
+// the first column of whatever comes next.
+func (s span) contains(x int) bool { return x >= s.x0 && x < s.x1 }
+
+// tabBorderWithBottom is a rounded border with its bottom edge replaced, which
+// is what makes an active tab look joined to the page under it instead of
+// closed off from it.
+func tabBorderWithBottom(left, middle, right string) lipgloss.Border {
+	border := lipgloss.RoundedBorder()
+	border.BottomLeft = left
+	border.Bottom = middle
+	border.BottomRight = right
+	return border
 }
 
 func (m model) footer() string {
@@ -791,7 +1060,7 @@ func (m model) renderHome() string {
 	b.WriteString("  " + m.st.dim.Render("export OPENAI_API_KEY=rc_live_…") + "\n")
 
 	b.WriteString("\n  " + m.st.title.Render("cheapest routes") + "\n")
-	models := m.deps.Catalogue.Models()
+	models := m.deps.catalogue().Models()
 	for i, route := range models {
 		if i >= 3 {
 			break
@@ -869,9 +1138,10 @@ func (m model) focusHint() string {
 	return m.st.key.Render("tab") + m.st.dim.Render(" to type an amount")
 }
 
-func (m model) renderKeys() string {
+func (m model) renderKeys() (string, int) {
 	var b strings.Builder
 	b.WriteString("  " + m.st.title.Render("api keys") + "\n\n")
+	first := strings.Count(b.String(), "\n") + 1
 	b.WriteString(m.apiKeys.View() + "\n")
 	b.WriteString("  " + m.st.key.Render("n") + m.st.dim.Render(" mint a new key    ") +
 		m.st.key.Render("enter") + m.st.dim.Render(" revoke the selected one") + "\n")
@@ -881,17 +1151,21 @@ func (m model) renderKeys() string {
 	if m.fresh != "" {
 		b.WriteString("\n  " + m.st.key.Render("y") + m.st.dim.Render(" copy the key above") + "\n")
 	}
-	return b.String()
+	return b.String(), first
 }
 
-func (m model) renderModels() string {
+func (m model) renderModels() (string, int) {
 	var b strings.Builder
 	b.WriteString("  " + m.st.title.Render("routes") + "\n\n")
+	// Counted, not assumed: a click has to keep landing on the right row when
+	// the title above it grows a line. The component prints its own status bar
+	// before the rows, so the first row is one past what has been written.
+	first := strings.Count(b.String(), "\n") + 1
 	b.WriteString(m.routes.View() + "\n")
 	b.WriteString("  " + m.st.dim.Render("ask for one by putting its name in \"model\". Prices are per million tokens,") + "\n")
 	b.WriteString("  " + m.st.dim.Render("and what they are is the rate your balance is actually billed at.") + "\n")
 	b.WriteString("\n  " + m.listHint("") + "\n")
-	return b.String()
+	return b.String(), first
 }
 
 // listHint says what the list above it will answer to, and it depends on

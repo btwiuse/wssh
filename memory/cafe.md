@@ -290,8 +290,20 @@ There are no keys that jump between pages. The top of every screen carries a
 bar of all five and highlights the one you are on, and `tab` walks it:
 
 ```
-  balance  │  deposit  │  api keys  │  routes  │  help
+╭─────────╮╭─────────╮╭──────────╮╭────────╮╭──────╮
+│ balance ││ deposit ││ api keys ││ routes ││ help │
+│         └┴─────────┴┴──────────┴┴────────┴┴──────┤
+│  account    6YSosJ…AsrUKL                            │
+│  balance    $0.00                                    │
 ```
+
+The bar is drawn with the bubbletea tabs example's borders: a rounded top, and
+a bottom edge that is either `┴─┴` when inactive or `┘ └` when active. The page
+sits in a box with **no top edge**, so the active tab's blank bottom opens into
+it. That second half is the whole of the effect: a bar floating above a wall of
+text reads as chrome, and a bar whose current tab opens into the page reads as
+navigation. The ends close the run rather than each closing themselves, so the
+first tab keeps its left wall and only its corner changes.
 
 `shift+tab` goes back, wrapping at both ends. `esc` puts a caret down without
 leaving the page. This replaced a footer listing what `b`, `d`, `k`, `m` and
@@ -311,6 +323,30 @@ Inside the ring, one asymmetry that is deliberate:
 
 So `tab` from balance goes to deposit without touching the amount, and a second
 `tab` puts the caret in it. `enter` acts on the cursor, or sends the deposit.
+
+### Clicks, and what they cost
+
+Mouse mode is on, cell motion rather than all motion. Over ssh that is the
+difference between a program that responds and one that floods the connection -
+and it also means **the terminal loses its own text selection**, which is the
+trade and the reason it is deliberate rather than a default nobody thought
+about.
+
+A click becomes an intent through a `clicks` value rebuilt on every frame,
+holding where each tab and each list row actually landed. It cannot be a fixed
+map: the bar's width changes with the names in it and the list's height with how
+many rows are on the page. The pages carrying a list report their own row
+position **counted as they write it**, so a title that grows a line does not
+silently move every click target down with it.
+
+| Click | Does |
+|---|---|
+| a tab | switch to it |
+| a row in a list | move the cursor there **and** focus it - a cursor that moved without lighting up leaves it impossible to tell what the next keypress will do |
+| a key in the anonymous picker | adopt it, the same as enter |
+
+Clicks on the box border, above the list, below the last visible row, or on a
+row that is on another page select nothing, deliberately.
 
 Two details that are decisions rather than conveniences:
 
