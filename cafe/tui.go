@@ -1832,7 +1832,10 @@ func (m *model) renderHome() string {
 	// caption is centred, and the account below is the first thing that is
 	// just text.
 	b.WriteString(m.wordmark())
-	b.WriteString(lipgloss.PlaceHorizontal(bodyWidth(m.width), lipgloss.Center,
+	// A blank under the mark as well as over it: the caption belongs to the
+	// cup rather than to the page, so it sits inside the space the cup is in
+	// rather than against it.
+	b.WriteString("\n" + lipgloss.PlaceHorizontal(bodyWidth(m.width), lipgloss.Center,
 		m.st.dim.Render("A little café for every AI model, in your terminal.")) + "\n\n")
 	b.WriteString(m.renderAccount())
 	b.WriteString(m.field("balance", m.st.money.Render(FormatUSD(acct.Balance))))

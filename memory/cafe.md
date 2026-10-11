@@ -631,8 +631,10 @@ other four show their contents. A title line and its blank underneath are two
 lines of every screen spent on something the chrome is already saying.
 
 The caption under it is **centred**, and the page has a blank line above the
-mark and one below the caption. Both are decoration around a picture, and the
-picture is the thing on the page that is not text.
+mark, one below it, and one below the caption. All three are decoration around
+a picture, and the picture is the thing on the page that is not text. The
+caption sits *inside* the space the cup is in rather than against it, because
+the caption belongs to the cup and not to the page.
 
 The caption is centred rather than set in like everything else because it
 belongs to the cup rather than to the page: cup centred, caption centred, and
