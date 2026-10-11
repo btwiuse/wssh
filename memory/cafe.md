@@ -398,10 +398,10 @@ different rules, and the difference is what makes one program look like two -
 Nothing guesses. The list on a page is sized by **the page that owns it, every
 frame**, not at the window resize: the room it gets is what is left of the box
 after the title above it and the prose under it, and those change underneath
-it. A notice wraps to a second line when a key is minted, and a page with a
-fresh key on it has two more lines under the list than one without. Sized once,
-a list is right until the first time somebody does something, and then it is
-either scrolling off the bottom of the box or leaving a hole under it - both of
+it. A notice wraps to a second line, and a page with a fresh key on it has three
+more lines above the list than one without. Sized once, a list is right until the
+first time somebody does something, and then it is either scrolling off the
+bottom of the box or leaving a hole under it - both of
 which look like the frame is broken.
 
 The size is asked and checked rather than derived (`fitted`): the component
@@ -409,15 +409,29 @@ grows past the height it was given instead of cutting itself at it, and its
 arithmetic around a status bar, a blank between rows and a margin above the page
 dots is not something to reimplement here. Ask, look, correct, twice at most.
 
-**Order on a page is a policy, and the api keys page has one.** The reassurance
-underneath the list - that a key is printed once, and that losing one costs
-nothing - is dropped first on a short terminal. Everything below it in the frame
-is a notice, and on that page a notice can be the only copy of a key that will
-never be printed again. The refusal does the same a paragraph at a time: the
-first paragraph is the sentence saying what happened, the second is why ed25519
-is the shape an account takes, and the commands are never the thing that gets
-cut. `KeyCommand`'s own note says a half-printed command is the one thing it
-must never show.
+**Order on a page is a policy, and the api keys page has one.** The frame cuts a
+page from the **bottom**, so where a thing sits decides whether a short terminal
+keeps it. A freshly minted key therefore goes **above** the list, not in a
+notice under it: it is the only copy that will ever exist (the ledger kept a
+digest), and everything under the list is the first thing the trim takes. It was
+in a notice, and on a terminal of 14 rows the key was cut while the footer went
+on offering `y` over a box with nothing in it to copy.
+`TestAMintedKeyIsOnScreenAtEverySize` mints a real key at nine sizes and holds
+that.
+
+It is printed **unstyled** for the same reason in the other direction: OSC 52 is
+a request tmux and a growing list of terminals refuse, and when it is refused
+the only way out is selecting the text, which wants bare characters. Which is
+also why `View` hands the mouse back (`MouseModeNone`) for exactly as long as a
+key is on the screen: a program holding mouse reporting takes the terminal's own
+text selection with it.
+
+The reassurance under the list - that a key is shown once, and that losing one
+costs nothing - is what gets dropped first, and it is one line. The refusal does
+the same a paragraph at a time: the first paragraph is the sentence saying what
+happened, the second is why ed25519 is the shape an account takes, and the
+commands are never the thing that gets cut. `KeyCommand`'s own note says a
+half-printed command is the one thing it must never show.
 
 The footer drops bindings that will not fit rather than wrapping, because the
 frame is a fixed height and a two-line footer would push it past the terminal.
@@ -847,9 +861,9 @@ opposite backgrounds are two sessions with opposite palettes.
 prose. `cafe/help.go`.
 
 The answers are the landing page's, from its "Questions people actually ask" -
-one copy of them, kept here, because the same seven questions answered twice is
-how the two stop agreeing. **The landing page's base URL was corrected to match
-the app's at the same time** (`api.router.cafe/v1`), which is the same class of
+one copy of them, kept here, because the same questions answered twice is how the
+two stop agreeing. **The landing page's base URL was corrected to match the
+app's at the same time** (`api.router.cafe/v1`), which is the same class of
 mistake: two copies of a fact that drift.
 
 **There is no caption saying where they came from.** Every question on the
@@ -865,7 +879,7 @@ the bottom every time somebody opened a long question. So the rows are as tall
 as the longest answer, the list pages over them, and `enter` does nothing here
 rather than pretending to.
 
-Seven questions over two pages at a hundred columns is not a problem. An answer
+Six questions over two pages at a hundred columns is not a problem. An answer
 that appears somewhere else is.
 
 Two consequences of the component's rules, both of which cost an afternoon:

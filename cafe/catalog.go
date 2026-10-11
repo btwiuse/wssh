@@ -138,6 +138,12 @@ func (c *Catalogue) names() string {
 // operator whose own agreement with a provider differs sets its own catalogue,
 // and the TUI shows the rate that is actually in force rather than a number
 // from a website.
+//
+// A ladder rather than a list of everything: free at the bottom, the three
+// providers represented at every tier, and the expensive end reachable without
+// scrolling far. The cheap end matters most and is deliberately first — the
+// models people actually run all day are the ones a routing table should make
+// obvious.
 func DefaultCatalogue() *Catalogue {
 	return NewCatalogue(
 		Model{
@@ -147,46 +153,52 @@ func DefaultCatalogue() *Catalogue {
 			OutputPerMTok: 0,
 		},
 		Model{
-			ID: "gpt-4o-mini", Name: "GPT-4o mini", Provider: "openai",
-			Upstream:      "gpt-4o-mini",
-			InputPerMTok:  150_000,
-			OutputPerMTok: 600_000,
+			ID: "gpt-6-luna", Name: "GPT-6 Luna", Provider: "openai",
+			Upstream:      "gpt-6-luna",
+			InputPerMTok:  100_000,
+			OutputPerMTok: 500_000,
 		},
 		Model{
-			ID: "gpt-4.1-mini", Name: "GPT-4.1 mini", Provider: "openai",
-			Upstream:      "gpt-4.1-mini",
-			InputPerMTok:  400_000,
-			OutputPerMTok: 1_600_000,
+			ID: "claude-haiku-5-5", Name: "Claude Haiku 5.5", Provider: "anthropic",
+			Upstream:      "claude-haiku-5-5",
+			InputPerMTok:  100_000,
+			OutputPerMTok: 500_000,
 		},
 		Model{
-			ID: "gpt-4.1", Name: "GPT-4.1", Provider: "openai",
-			Upstream:      "gpt-4.1",
+			ID: "gemini-3.8-flash", Name: "Gemini 3.8 Flash", Provider: "google",
+			Upstream:      "gemini-3.8-flash",
+			InputPerMTok:  750_000,
+			OutputPerMTok: 3_750_000,
+		},
+		Model{
+			ID: "claude-sonnet-5-5", Name: "Claude Sonnet 5.5", Provider: "anthropic",
+			Upstream:      "claude-sonnet-5-5",
 			InputPerMTok:  2_000_000,
-			OutputPerMTok: 8_000_000,
-		},
-		Model{
-			ID: "claude-sonnet-4-5", Name: "Claude Sonnet 4.5", Provider: "anthropic",
-			Upstream:      "claude-sonnet-4-5",
-			InputPerMTok:  3_000_000,
-			OutputPerMTok: 15_000_000,
-		},
-		Model{
-			ID: "claude-opus-4-1", Name: "Claude Opus 4.1", Provider: "anthropic",
-			Upstream:      "claude-opus-4-1",
-			InputPerMTok:  15_000_000,
-			OutputPerMTok: 75_000_000,
-		},
-		Model{
-			ID: "gemini-2.5-flash", Name: "Gemini 2.5 Flash", Provider: "google",
-			Upstream:      "gemini-2.5-flash",
-			InputPerMTok:  300_000,
-			OutputPerMTok: 2_500_000,
-		},
-		Model{
-			ID: "gemini-2.5-pro", Name: "Gemini 2.5 Pro", Provider: "google",
-			Upstream:      "gemini-2.5-pro",
-			InputPerMTok:  1_250_000,
 			OutputPerMTok: 10_000_000,
+		},
+		Model{
+			ID: "gpt-6.1-sol", Name: "GPT-6.1 Sol", Provider: "openai",
+			Upstream:      "gpt-6.1-sol",
+			InputPerMTok:  2_000_000,
+			OutputPerMTok: 10_000_000,
+		},
+		Model{
+			ID: "claude-opus-5-5", Name: "Claude Opus 5.5", Provider: "anthropic",
+			Upstream:      "claude-opus-5-5",
+			InputPerMTok:  4_000_000,
+			OutputPerMTok: 20_000_000,
+		},
+		Model{
+			ID: "gemini-3.1-pro-preview", Name: "Gemini 3.1 Pro", Provider: "google",
+			Upstream:      "gemini-3.1-pro-preview",
+			InputPerMTok:  2_000_000,
+			OutputPerMTok: 12_000_000,
+		},
+		Model{
+			ID: "gpt-6-astra", Name: "GPT-6 Astra", Provider: "openai",
+			Upstream:      "gpt-6-astra",
+			InputPerMTok:  10_000_000,
+			OutputPerMTok: 50_000_000,
 		},
 	)
 }

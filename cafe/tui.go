@@ -586,10 +586,20 @@ func (m model) View() tea.View {
 	v := ownedView(content)
 	// Cell motion rather than all-motion: clicks and drags, not every mouse
 	// movement reported. Over ssh this is the difference between a program
-	// that responds and one that floods the connection, and it still costs
-	// the terminal its own text selection, which is why it is on rather than
-	// on by default.
-	v.MouseMode = tea.MouseModeCellMotion
+	// that responds and one that floods the connection.
+	//
+	// It also costs the terminal its own text selection, because a terminal
+	// that has given mouse reporting to a program does not select text on a
+	// drag. That is the right trade on every page except the one carrying a
+	// key that exists exactly once: there, `y` is a request the terminal may
+	// refuse - tmux refuses unless it is told otherwise - and the only thing
+	// left is selecting the key by hand. So the mouse is handed back for
+	// exactly as long as a key is on the screen, and taken back afterwards.
+	if m.fresh != "" {
+		v.MouseMode = tea.MouseModeNone
+	} else {
+		v.MouseMode = tea.MouseModeCellMotion
+	}
 	v.OnMouse = clickTo(where)
 	return v
 }
@@ -758,8 +768,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.fresh = msg.key
-		m.notice = notice{noticeGood, "new key: " + msg.key +
-			"  — this is the only time it is shown; press y to copy it, or put it somewhere safe"}
+		// No notice. The key is on the page above the list, in full, and a
+		// notice saying the same thing again is two lines spent saying it
+		// where the frame cuts first.
+		m.notice = notice{}
 		return m, refreshCmd(m.deps)
 
 	case keyRevokedMsg:
@@ -951,9 +963,10 @@ func (m model) show(view screen) model {
 // OSC 52, which is what tea.SetClipboard emits and the only mechanism a
 // terminal offers for this: there is no way for a program running over SSH to
 // reach the machine's clipboard by any other route. Not every terminal honours
-// it, and a few ask permission first, so the message says what was asked for
-// rather than claiming the clipboard now holds it - the program genuinely
-// cannot tell.
+// it - tmux does not unless it is told to - so the message says what was asked
+// for rather than claiming the clipboard now holds it. The program genuinely
+// cannot tell, and the key stays on the page either way, so a person whose
+// terminal ignored this can still select it with the mouse.
 //
 // A key that was minted earlier is not copyable, because the ledger kept a
 // digest and threw the key away. That is said plainly rather than left to look
@@ -963,13 +976,11 @@ func (m model) copyFreshKey() (tea.Model, tea.Cmd) {
 		m.notice = notice{noticeBad, noKeyToCopy}
 		return m, nil
 	}
-	m.notice = notice{noticeGood, "sent to the clipboard as OSC 52: " + m.fresh +
-		"  — if it did not paste, this terminal does not honour OSC 52"}
+	m.notice = notice{noticeGood, "asked the terminal to copy it; if it did not paste, select it above"}
 	return m, tea.SetClipboard(m.fresh)
 }
 
-const noKeyToCopy = "no key on screen to copy. One is shown once, when it is " +
-	"minted: press n on the api keys screen and press y straight away."
+const noKeyToCopy = "no new key on screen. Press n on the api keys page to mint one."
 
 func (m model) mintKey() (tea.Model, tea.Cmd) {
 	if !m.deps.Proven {
@@ -1937,31 +1948,40 @@ func (m model) focusHint() string {
 func (m model) keysPage() (head, tail string) {
 	var h, t strings.Builder
 
-	t.WriteString("  " + m.st.key.Render("n") + m.st.dim.Render(" mint a new key    ") +
+	// The key that was just minted goes ABOVE the list, not under it, and that
+	// is the whole of the reason. The frame cuts a page from the bottom, so
+	// everything under the list is the first thing to go when the terminal is
+	// short - and this is the only copy of the key that will ever exist, since
+	// the ledger kept a digest and threw the rest away. A page that answers
+	// `n` by offering `y` in the footer, over a box with no key in it, is a
+	// page that looks broken in exactly the one state where it matters most.
+	//
+	// Printed plain rather than styled, for the second reason it has to be
+	// usable by hand: OSC 52 is refused by tmux and by a growing list of
+	// terminals, and a person who selects the text with the mouse gets the
+	// characters and nothing else - no escape codes to paste, no surrounding
+	// sentence to take half of.
+	if m.fresh != "" {
+		h.WriteString("  " + m.st.title.Render("new key") + "\n")
+		h.WriteString("  " + m.fresh + "\n")
+		h.WriteString("  " + m.st.key.Render("y") + m.st.dim.Render(" copies it") + "\n\n")
+	}
+
+	t.WriteString("  " + m.st.key.Render("n") + m.st.dim.Render(" mint a key    ") +
 		m.st.key.Render("x") + m.st.dim.Render(" revoke the selected one") + "\n")
 	if len(m.account.Keys) == 0 {
-		t.WriteString("\n  " + m.st.dim.Render("nothing here yet - press n to mint one") + "\n")
-	}
-	if m.fresh != "" {
-		t.WriteString("\n  " + m.st.key.Render("y") + m.st.dim.Render(" copy the key above") + "\n")
+		t.WriteString("\n  " + m.st.dim.Render("none yet") + "\n")
 	}
 	head, tail = h.String(), t.String()
 
-	// The reassurance underneath it - that a key is printed once and that
-	// losing one costs nothing - is the first thing on this page to be left
-	// off when the terminal is short, and it is asked for rather than
-	// discovered: everything below it in the frame is a notice, and on this
-	// page a notice can be the only copy of a key that will never be printed
-	// again. A frame that cuts the reassurance to reach the key is the right
-	// trade; one that cuts the key to reach the reassurance is how somebody
-	// loses a key they had just made.
+	// One line of reassurance, and it is the first thing left off when the
+	// terminal is short. The key itself is above this and cannot be, which is
+	// what makes the order the safe way round.
 	//
-	// Asked with the prose already counted and with the list still to have a
-	// floor, because a page that fits while the list is left with nothing is
-	// a page that does not fit.
-	prose := "\n  " + m.st.dim.Render("A key is shown once, when it is minted; only its fingerprint is kept.") +
-		"\n  " + m.st.dim.Render("Losing one is not a problem: mint another.") + "\n"
-	if m.roomFor(head, tail+prose, 3) >= m.listFloor(2) {
+	// Asked with the list still to have a floor, because a page that fits
+	// while the list is left with nothing is a page that does not fit.
+	prose := "\n  " + m.st.dim.Render("A key is shown once. Lose it and mint another.") + "\n"
+	if m.roomFor(head, tail+prose, 0) >= m.listFloor(2) {
 		tail += prose
 	}
 	return head, tail

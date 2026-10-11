@@ -203,6 +203,18 @@
   .t-accent { color: var(--sky); }
   .t-warn   { color: var(--amber); }
   .t-title  { color: var(--fg); font-weight: 700; }
+  .t-tab    { color: var(--fg); }
+  .t-tabbar { color: var(--line-2); }
+
+  /* ---- the mark ---- */
+  /* One image, used three ways: beside the wordmark, in the nav, and as the
+       favicon. A logo that needs a second drawing to appear at a different
+       size is two logos that drift. */
+  .mark { display: block; }
+  .brand-lockup { display: flex; align-items: center; gap: .7rem; }
+  .brand-lockup .mark { width: 30px; height: 30px; border-radius: 7px; }
+  .brand-lockup .word { font-weight: 700; letter-spacing: -.015em; }
+  .nav .brand-lockup .mark { width: 20px; height: 20px; border-radius: 5px; }
 
   /* ---- sections ---- */
   section { padding: clamp(3rem, 7vw, 5.5rem) 0; }
@@ -333,7 +345,7 @@
 
 <header class="nav">
   <div class="wrap">
-    <a class="brand" href="/"><span class="dot"></span> RouterCafe</a>
+    <a class="brand" href="/"><span class="brand-lockup"><img class="mark" src="/logo.png" width="20" height="20" alt="" /><span class="word">RouterCafe</span></span></a>
     <nav>
       <a href="#how">How it works</a>
       <a href="#terminal">The terminal</a>
@@ -372,34 +384,46 @@
     </div>
 
     <!-- The terminal on the right is the real session UI, drawn with the
-         words it actually prints. Nothing here is fetched: the page is one
-         file so that a reader on a slow connection sees the product before
-         the network finishes arguing. -->
+         words it actually prints: the tab bar, the cup, and the four fields.
+         Nothing here is fetched, so a reader on a slow connection sees the
+         product before the network finishes arguing.
+
+         Kept short on purpose. The home page is a cup, three numbers and two
+         export lines, and the models live a tab away - drawing a price list
+         into this panel would be a screenshot of a page that does not exist. -->
     <div class="term" id="terminal">
       <div class="term-bar">
         <span class="lamp on"></span><span class="lamp"></span><span class="lamp"></span>
         <span class="title">ssh -A router.cafe</span>
       </div>
-      <div class="term-body"><span class="t-brand">RouterCafe</span><span class="t-domain">                            router.cafe</span>
+      <div class="term-body"><span class="t-brand">RouterCafe</span><span class="t-tabbar">  │ Deposit ││ API Keys ││ Models ││ FAQs │</span>
 
-<span class="t-label">account  </span><span class="t-value">7xKX…gAsU</span>
-<span class="t-label">balance  </span><span class="t-money">$12.345600</span>
-<span class="t-label">paid in  </span><span class="t-value">$12.345600</span>
-<span class="t-label">spent    </span><span class="t-value">$0.482100</span>
+<span class="t-label">                     (  )   (   )  )</span>
+<span class="t-label">                      ) (   )  (  (</span>
+<span class="t-label">                      ( )  (    ) )</span>
+<span class="t-label">                      _____________</span>
+<span class="t-label">                     &lt;_____________&gt;___</span>
+<span class="t-label">                     |             |  )</span>
+<span class="t-label">                     |             |  )</span>
+<span class="t-label">                  ___|             |__)</span>
+<span class="t-label">                 /    \___________/    \</span>
+<span class="t-label">                 \_____________________/</span>
 
-<span class="t-title">api keys</span>
+<span class="t-label">         A little café for every AI model, in your terminal.</span>
+
+<span class="t-label">account  </span><span class="t-value">7xKX4pQ9mNvR2tYbW8cZfL3hJ6sD1aG5uE0rT</span><span class="t-label">  laptop@here</span>
+<span class="t-label">balance  </span><span class="t-money">$12.3456</span>
+<span class="t-label">paid in  </span><span class="t-value">$12.3456</span>
+<span class="t-label">spent    </span><span class="t-value">$0.4821</span>
+
+<span class="t-title">API keys:</span>
   <span class="t-accent">rc_a7c4...3f9a</span><span class="t-label">   last used just now</span>
 
-<span class="t-title">use it</span>
+<span class="t-title">To use:</span>
 <span class="t-label">export </span><span class="t-value">OPENAI_BASE_URL=https://api.router.cafe/v1</span>
-<span class="t-label">export </span><span class="t-value">OPENAI_API_KEY=rc_a7c4...3f9a</span>
+<span class="t-label">export </span><span class="t-value">OPENAI_API_KEY=rc_abcd...wxyz</span>
 
-<span class="t-title">cheapest routes</span>
-  <span class="t-value">gpt-4o-mini       </span><span class="t-label">openai  </span><span class="t-label">$0.15 in  ·  $0.60 out</span>
-  <span class="t-value">gemini-2.5-flash</span> <span class="t-label">google  </span><span class="t-label">$0.30 in  ·  $2.50 out</span>
-  <span class="t-value">gpt-4.1-mini     </span><span class="t-label">openai  </span><span class="t-label">$0.40 in  ·  $1.60 out</span>
-
-<span class="t-label">b</span> balance  <span class="t-label">d</span> deposit  <span class="t-label">k</span> api key  <span class="t-label">m</span> models  <span class="t-label">?</span> help  <span class="t-label">q</span> quit</div>
+<span class="t-label">tab</span> next page  <span class="t-label">r</span> refresh  <span class="t-label">?</span> FAQs  <span class="t-label">q</span> quit</div>
     </div>
   </div>
 </section>
@@ -436,7 +460,8 @@
         <div>
           <h3>Deposit</h3>
           <p>
-            Press <code>d</code>, type an amount. The server asks your own agent,
+            The <strong>Deposit</strong> tab. Type an amount. The server
+            asks your own agent,
             reached through the <code>ssh -A</code> you forwarded, for a
             signature on a transfer. Your key never crosses the connection.
           </p>
@@ -453,9 +478,10 @@
         <div>
           <h3>Mint a key</h3>
           <p>
-            Press <code>k</code>. A <code>rc_…</code> key is shown once,
-            and only its fingerprint is kept, so the server's own ledger is not
-            a file of live credentials.
+            On the <strong>API Keys</strong> tab, press <code>n</code>. A
+            <code>rc_…</code> key is shown once, and only its fingerprint is
+            kept, so the server's own ledger is not a file of live credentials.
+            Press <code>y</code> and your terminal is asked to copy it.
           </p>
         </div>
       </div>
@@ -597,13 +623,14 @@ export OPENAI_API_KEY=rc_a7c4...3f9a</pre>
         </thead>
         <tbody>
           <tr><td class="model">routercafe/free</td><td class="muted">pooled</td><td class="num free">free</td><td class="num free">free</td></tr>
-          <tr><td class="model">gpt-4o-mini</td><td class="muted">openai</td><td class="num">$0.15</td><td class="num">$0.60</td></tr>
-          <tr><td class="model">gemini-2.5-flash</td><td class="muted">google</td><td class="num">$0.30</td><td class="num">$2.50</td></tr>
-          <tr><td class="model">gpt-4.1-mini</td><td class="muted">openai</td><td class="num">$0.40</td><td class="num">$1.60</td></tr>
-          <tr><td class="model">gpt-4.1</td><td class="muted">openai</td><td class="num">$2.00</td><td class="num">$8.00</td></tr>
-          <tr><td class="model">gemini-2.5-pro</td><td class="muted">google</td><td class="num">$1.25</td><td class="num">$10.00</td></tr>
-          <tr><td class="model">claude-sonnet-4-5</td><td class="muted">anthropic</td><td class="num">$3.00</td><td class="num">$15.00</td></tr>
-          <tr><td class="model">claude-opus-4-1</td><td class="muted">anthropic</td><td class="num">$15.00</td><td class="num">$75.00</td></tr>
+          <tr><td class="model">gpt-6-luna</td><td class="muted">openai</td><td class="num">$0.10</td><td class="num">$0.50</td></tr>
+          <tr><td class="model">claude-haiku-5-5</td><td class="muted">anthropic</td><td class="num">$0.10</td><td class="num">$0.50</td></tr>
+          <tr><td class="model">gemini-3.8-flash</td><td class="muted">google</td><td class="num">$0.75</td><td class="num">$3.75</td></tr>
+          <tr><td class="model">claude-sonnet-5-5</td><td class="muted">anthropic</td><td class="num">$2.00</td><td class="num">$10.00</td></tr>
+          <tr><td class="model">gpt-6.1-sol</td><td class="muted">openai</td><td class="num">$2.00</td><td class="num">$10.00</td></tr>
+          <tr><td class="model">claude-opus-5-5</td><td class="muted">anthropic</td><td class="num">$4.00</td><td class="num">$20.00</td></tr>
+          <tr><td class="model">gemini-3.1-pro-preview</td><td class="muted">google</td><td class="num">$2.00</td><td class="num">$12.00</td></tr>
+          <tr><td class="model">gpt-6-astra</td><td class="muted">openai</td><td class="num">$10.00</td><td class="num">$50.00</td></tr>
         </tbody>
       </table>
     </div>
@@ -663,9 +690,10 @@ export OPENAI_API_KEY=rc_a7c4...3f9a</pre>
       <details>
         <summary>What happens to my key if it leaks?</summary>
         <p>
-          Press <code>k</code> and revoke it, then mint another. The balance
-          belongs to the account rather than to the key, so revoking does not
-          touch your credit.
+          On the <strong>API Keys</strong> tab press <code>x</code> to revoke
+          it, then press <code>n</code> to mint another. The balance belongs to
+          the account rather than to the key, so revoking does not touch your
+          credit.
         </p>
       </details>
       <details>
@@ -674,14 +702,6 @@ export OPENAI_API_KEY=rc_a7c4...3f9a</pre>
           The SOL price is set by whoever runs this instance and recorded on
           every deposit, so what you were credited at is not something that can
           change afterwards. It is shown on the deposit screen before you sign.
-        </p>
-      </details>
-      <details>
-        <summary>Can I self-host it?</summary>
-        <p>
-          Yes. It is one binary and one flag:
-          <code>cafe --treasury &lt;address&gt; --upstream &lt;url&gt; --upstream-key &lt;key&gt;</code>.
-          The ledger is a JSON file; back it up or do not.
         </p>
       </details>
     </div>

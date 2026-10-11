@@ -1059,6 +1059,161 @@ func TestCopyIsOnlyOfferedWhenThereIsSomethingToCopy(t *testing.T) {
 	}
 }
 
+// A key that is on screen, at the size it is minted at.
+//
+// The bug this is about: the key used to be printed in the notice under the
+// list, and the frame cuts a page from the bottom. On a short terminal the
+// notice went, the key went with it, and the footer went on offering `y` over
+// a box with nothing in it to copy - the one state where the whole page is
+// about that key. Every size here mints a real key through the real ledger,
+// because a hand-built Key{Hint:} is how six dots on every key went unnoticed
+// for a month.
+func TestAMintedKeyIsOnScreenAtEverySize(t *testing.T) {
+	for _, sz := range [][2]int{{120, 50}, {100, 40}, {100, 30}, {100, 24}, {80, 24}, {80, 18}, {80, 14}, {80, 12}, {60, 20}} {
+		ledger := testLedger(t)
+		d := deps{
+			Address:   treasuryAddress,
+			Ledger:    ledger,
+			Treasury:  testTreasury(),
+			Catalogue: DefaultCatalogue(),
+			Proven:    true,
+			Host:      Domain,
+		}
+		m := model{deps: d, st: newStyles(true), view: screenKeys, focus: true,
+			account: ledger.Account(d.Address), width: sz[0], height: sz[1]}
+		m.syncLists()
+
+		next, cmd := m.onKey(tea.KeyPressMsg(tea.Key{Code: 'n', Text: "n"}))
+		m = next.(model)
+		next, _ = m.Update(cmd())
+		m = next.(model)
+
+		frame := m.View().Content
+		if !strings.Contains(frame, m.fresh) {
+			t.Errorf("%dx%d: the key was minted and is not on the screen:\n%s",
+				sz[0], sz[1], stripForTest(frame))
+			continue
+		}
+		// The hint beside the key, not the footer's: the footer drops what does
+		// not fit at narrow widths, and on this page the line next to the key
+		// is the one that has to be there. (That the footer never offers y
+		// without a key to offer is TestCopyIsOnlyOfferedWhenThereIsSomething-
+		// ToCopy.)
+		if !strings.Contains(stripForTest(frame), "y copies it") {
+			t.Errorf("%dx%d: the key is on screen with no way to copy it said next to it:\n%s",
+				sz[0], sz[1], stripForTest(frame))
+		}
+	}
+}
+
+// The key is above the list, not under it, and the reason is the one line of
+// this that is not obvious: the frame trims from the bottom, so anything under
+// the list is what a short terminal gives up first.
+func TestTheKeyIsAboveTheListAndNotInANotice(t *testing.T) {
+	ledger := testLedger(t)
+	d := deps{
+		Address:   treasuryAddress,
+		Ledger:    ledger,
+		Treasury:  testTreasury(),
+		Catalogue: DefaultCatalogue(),
+		Proven:    true,
+		Host:      Domain,
+	}
+	m := model{deps: d, st: newStyles(true), view: screenKeys, focus: true,
+		account: ledger.Account(d.Address), width: 100, height: 40}
+	m.syncLists()
+	next, cmd := m.onKey(tea.KeyPressMsg(tea.Key{Code: 'n', Text: "n"}))
+	m = next.(model)
+	next, _ = m.Update(cmd())
+	m = next.(model)
+
+	head, _ := m.keysPage()
+	if !strings.Contains(head, m.fresh) {
+		t.Fatalf("the key is not in the head of the page, so it is what the frame cuts:\n%s", stripForTest(head))
+	}
+	if m.notice.kind != noticeNone {
+		t.Errorf("minting also wrote a notice, %q - the same key said twice, in the place the frame cuts", m.notice.text)
+	}
+}
+
+// OSC 52 is a request the terminal may refuse, and the one thing left when it
+// does is the mouse. A program holding mouse reporting takes the terminal's own
+// text selection with it, so a page whose whole job is handing over a string
+// that cannot be printed twice has to give it back for as long as that string
+// is on the screen.
+func TestTheMouseIsHandedBackWhileAKeyIsOnScreen(t *testing.T) {
+	ledger := testLedger(t)
+	d := deps{
+		Address:   treasuryAddress,
+		Ledger:    ledger,
+		Treasury:  testTreasury(),
+		Catalogue: DefaultCatalogue(),
+		Proven:    true,
+		Host:      Domain,
+	}
+	m := model{deps: d, st: newStyles(true), view: screenKeys, focus: true,
+		account: ledger.Account(d.Address), width: 100, height: 40}
+	m.syncLists()
+	if got := m.View().MouseMode; got != tea.MouseModeCellMotion {
+		t.Fatalf("with no key on screen the mouse is %v, want cell motion so clicks work", got)
+	}
+
+	next, cmd := m.onKey(tea.KeyPressMsg(tea.Key{Code: 'n', Text: "n"}))
+	m = next.(model)
+	next, _ = m.Update(cmd())
+	m = next.(model)
+	if got := m.View().MouseMode; got != tea.MouseModeNone {
+		t.Errorf("with a key on screen the mouse is %v, want none, so the key can be selected by hand", got)
+	}
+
+	next, _ = m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	m = next.(model)
+	if got := m.View().MouseMode; got != tea.MouseModeCellMotion {
+		t.Errorf("after leaving the page the mouse is %v, want cell motion back", got)
+	}
+}
+
+// What y says. It asked; it did not succeed - a program over ssh cannot tell,
+// and tmux and a growing list of terminals ignore it - so claiming the
+// clipboard holds the key would be a claim it cannot make. And it points at
+// the key, which is on the page, rather than printing it a second time.
+func TestCopyingSaysItAskedAndPointsAtTheKey(t *testing.T) {
+	ledger := testLedger(t)
+	d := deps{
+		Address:   treasuryAddress,
+		Ledger:    ledger,
+		Treasury:  testTreasury(),
+		Catalogue: DefaultCatalogue(),
+		Proven:    true,
+		Host:      Domain,
+	}
+	m := model{deps: d, st: newStyles(true), view: screenKeys, focus: true,
+		account: ledger.Account(d.Address), width: 100, height: 40}
+	m.syncLists()
+	next, cmd := m.onKey(tea.KeyPressMsg(tea.Key{Code: 'n', Text: "n"}))
+	m = next.(model)
+	next, _ = m.Update(cmd())
+	m = next.(model)
+
+	next, cmd = m.copyFreshKey()
+	m = next.(model)
+	if cmd == nil {
+		t.Fatal("y did nothing")
+	}
+	if m.notice.kind != noticeGood {
+		t.Fatalf("copying said %+v, want a confirmation", m.notice)
+	}
+	if strings.Contains(m.notice.text, m.fresh) {
+		t.Errorf("the confirmation prints the key again: %q", m.notice.text)
+	}
+	if strings.Contains(m.notice.text, "OSC") {
+		t.Errorf("the confirmation explains the escape sequence to somebody who just wants the key: %q", m.notice.text)
+	}
+	if !strings.Contains(m.notice.text, "select") {
+		t.Errorf("the confirmation does not say what to do when the terminal ignored it: %q", m.notice.text)
+	}
+}
+
 // Tab is the navigation, and it walks a ring rather than a list of shortcuts:
 // this page's widget, then the next page. A list arrives already focused,
 // because hjkl is only ever wanted by something looking at a list. An amount
@@ -2394,13 +2549,13 @@ func TestEveryFAQCarriesItsAnswer(t *testing.T) {
 			t.Errorf("entry %d holds question %d", i, it.n)
 		}
 		if len(it.body) == 0 {
-			t.Errorf("the entry for %q carries no answer", f.q)
+			t.Errorf("the entry for %q carries no answer", f.Question)
 		}
 		if got := flowed(it.body[0]); got == "" {
-			t.Errorf("the entry for %q has an empty answer", f.q)
+			t.Errorf("the entry for %q has an empty answer", f.Question)
 		}
-		if !strings.Contains(flowed(strings.Join(it.body, " ")), flowed(firstWords(f.a, 6))) {
-			t.Errorf("the entry for %q does not carry its own answer", f.q)
+		if !strings.Contains(flowed(strings.Join(it.body, " ")), flowed(firstWords(f.Answer, 6))) {
+			t.Errorf("the entry for %q does not carry its own answer", f.Question)
 		}
 	}
 	// The first one, in full, and the answer directly under it rather than
@@ -2408,7 +2563,7 @@ func TestEveryFAQCarriesItsAnswer(t *testing.T) {
 	lines := strings.Split(stripForTest(m.show(screenFAQ).frameString()), "\n")
 	qAt, aAt := -1, -1
 	for i, line := range lines {
-		if qAt < 0 && strings.Contains(line, faqs[0].q) {
+		if qAt < 0 && strings.Contains(line, faqs[0].Question) {
 			qAt = i
 			continue
 		}
@@ -2423,7 +2578,7 @@ func TestEveryFAQCarriesItsAnswer(t *testing.T) {
 		t.Errorf("the answer is on line %d and its question on %d", aAt, qAt)
 	}
 	// And what is between the two is the answer, not the list running on.
-	if got := strings.Join(lines[qAt:aAt], " "); strings.Contains(flowed(got), flowed(faqs[1].q)) {
+	if got := strings.Join(lines[qAt:aAt], " "); strings.Contains(flowed(got), flowed(faqs[1].Question)) {
 		t.Errorf("the second question came between the first and its answer: %q", got)
 	}
 }

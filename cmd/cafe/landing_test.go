@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -183,6 +184,114 @@ func TestDefaultsAreTheOnesTheProductNeeds(t *testing.T) {
 			t.Errorf("--%s exists; this server has no configuration in which a command runs", name)
 		}
 	}
+}
+
+// The page prints the routing table, and the binary serves a different one from
+// cafe.DefaultCatalogue. Those are the same list written down twice, which is how
+// a page ends up quoting prices for models the router retired - the failure this
+// test is here to catch, and the reason it walks the catalogue rather than
+// grepping for a few names.
+//
+// Every route must be on the page with its price, in the unit the page uses.
+// A route the page omits is not an error - a page may choose to show a subset -
+// but a price on the page that no route has is a page lying about what will be
+// billed.
+func TestTheLandingPagesPricesAreTheCatalogues(t *testing.T) {
+	rec := httptest.NewRecorder()
+	testLanding().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	body := rec.Body.String()
+
+	shown := map[string]bool{}
+	for _, m := range cafe.DefaultCatalogue().Models() {
+		if !strings.Contains(body, ">"+m.ID+"<") {
+			continue
+		}
+		shown[m.ID] = true
+		for _, price := range []string{priceForPage(m.InputPerMTok), priceForPage(m.OutputPerMTok)} {
+			if !strings.Contains(body, ">"+price+"<") {
+				t.Errorf("%s is on the page but its price %q is not", m.ID, price)
+			}
+		}
+	}
+	if len(shown) == 0 {
+		t.Error("the page shows none of the routes the router actually serves")
+	}
+	t.Logf("the page quotes %d of %d routes", len(shown), len(cafe.DefaultCatalogue().Models()))
+}
+
+// A price is "free" or it is money, never $0.00 - the same rule the TUI's own
+// price column follows, so a reader moving between the page and the terminal
+// does not have to wonder whether one of them is charging for the free route.
+func priceForPage(v cafe.MicroUSD) string {
+	if v == 0 {
+		return "free"
+	}
+	return cafe.FormatUSD(v)
+}
+
+// The page tells a reader which keys to press, so a key it names must be one the
+// program binds. These are the letters the session UI has: the tab bar replaced
+// the old single-letter navigation, and a page still saying `b` and `k` is
+// describing a program that no longer exists.
+//
+// Written as the letters that must NOT appear rather than the ones that must, so
+// a retired binding is caught on the day it is retired rather than the day
+// somebody notices the page is stale.
+func TestTheLandingPageNamesNoRetiredKeys(t *testing.T) {
+	rec := httptest.NewRecorder()
+	testLanding().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	body := rec.Body.String()
+
+	for _, gone := range []string{"Press <code>d</code>", "Press <code>k</code>", "<code>b</code> balance"} {
+		if strings.Contains(body, gone) {
+			t.Errorf("the page still says %q; navigation is the tab bar now", gone)
+		}
+	}
+	// And it must still say how to get a key, which is the one key a reader
+	// genuinely needs spelled out.
+	if !strings.Contains(body, "<code>n</code>") {
+		t.Error("the page does not say that n mints a key")
+	}
+}
+
+// The FAQs are written down twice - once here for the browser, once in
+// cafe/help.go for the terminal - and the file comment there says so: "the same
+// questions answered twice is how the two stop agreeing". Nothing enforced it,
+// which is how a "Can I self-host it?" survived in one copy after being dropped
+// from the other, and how the landing page went on telling readers to press `k`
+// for months after the tab bar replaced it.
+//
+// Checked by question, in both directions: a question in the terminal the page
+// does not have, and a question on the page the terminal does not have. A shared
+// answer is not compared word for word - the page marks up its own - but a
+// question is a question.
+func TestTheLandingPageAndTheTerminalCarryTheSameQuestions(t *testing.T) {
+	rec := httptest.NewRecorder()
+	testLanding().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	body := rec.Body.String()
+
+	onPage := map[string]bool{}
+	for _, m := range regexp.MustCompile(`(?s)<summary>(.*?)</summary>`).FindAllStringSubmatch(body, -1) {
+		onPage[stripTags(m[1])] = true
+	}
+	if len(onPage) == 0 {
+		t.Fatal("the page has no questions at all; the check below would pass on anything")
+	}
+
+	for _, f := range cafe.FAQs() {
+		if !onPage[f.Question] {
+			t.Errorf("the terminal asks %q and the page does not", f.Question)
+		}
+	}
+	for q := range onPage {
+		if !cafe.HasFAQ(q) {
+			t.Errorf("the page asks %q and the terminal does not", q)
+		}
+	}
+}
+
+func stripTags(s string) string {
+	return strings.TrimSpace(regexp.MustCompile(`<[^>]+>`).ReplaceAllString(s, ""))
 }
 
 func snippet(s, needle string) string {

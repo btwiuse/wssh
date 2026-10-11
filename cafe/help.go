@@ -10,16 +10,23 @@ import (
 //
 // The only page here that is a list of questions rather than of things, and the
 // only one with anything to expand. An answer is either on the screen or it is
-// not, and a page with all seven of them at once is a page of prose with a
-// scrollbar on it - so the questions are the list, the cursor moves between them
-// the way it moves between API keys, and `enter` opens the one under it.
+// not, and a page with all of them at once is a page of prose with a scrollbar
+// on it - so the questions are the list, the cursor moves between them the way
+// it moves between API keys, and `enter` opens the one under it.
 //
 // The answers are the landing page's, from its "Questions people actually ask".
-// One copy of them, kept here: the same seven questions answered twice is how
-// the two stop agreeing.
-type faq struct{ q, a string }
+// One copy of them, kept here: the same questions answered twice is how the two
+// stop agreeing.
+// FAQ is one question and the answer under it.
+//
+// Exported because the landing page carries the same six, and the check that it
+// does cannot read an unexported type from another package.
+type FAQ struct{ Question, Answer string }
 
-var faqs = []faq{
+// faq is the internal alias every use in this file is written against.
+type faq = FAQ
+
+var faqs = []FAQ{
 	{
 		"Why not just use OpenRouter?",
 		"You may well. RouterCafe is the same shape with two differences: you pay in SOL from the " +
@@ -47,8 +54,8 @@ var faqs = []faq{
 	},
 	{
 		"What happens to my key if it leaks?",
-		"Go to the api keys, press x on it, and mint another. The balance belongs to the account " +
-			"rather than to the key, so revoking one does not touch your credit. A key is shown " +
+		"Go to the api keys, press x on it, and press n to mint another. The balance belongs to the " +
+			"account rather than to the key, so revoking one does not touch your credit. A key is shown " +
 			"once, when it is minted, and only its fingerprint is kept.",
 	},
 	{
@@ -57,11 +64,21 @@ var faqs = []faq{
 			"what you were credited at cannot change afterwards. It is shown on the deposit " +
 			"screen before you sign anything.",
 	},
-	{
-		"Can I self-host it?",
-		"Yes. It is one binary and a few flags: cafe --treasury <address> --upstream <url> " +
-			"--upstream-key <key>. The ledger is a JSON file; back it up or do not.",
-	},
+}
+
+// FAQs returns the questions, for anything outside this package that has to
+// agree with them - the landing page carries the same list, and the check that
+// it does is TestTheLandingPageAndTheTerminalCarryTheSameQuestions.
+func FAQs() []FAQ { return faqs }
+
+// HasFAQ reports whether the terminal carries a question, for the same check.
+func HasFAQ(question string) bool {
+	for _, f := range faqs {
+		if f.Question == question {
+			return true
+		}
+	}
+	return false
 }
 
 // faqItem is one question and its answer, wrapped when the list was built.
@@ -71,14 +88,14 @@ var faqs = []faq{
 // than under the question they answer, and a row that grew to hold an answer
 // pushed the rest of the page off the bottom every time one was opened. So
 // every question carries its answer, the rows are as tall as the longest one,
-// and the list pages over them. Seven questions over four pages at a hundred
+// and the list pages over them. Six questions over four pages at a hundred
 // columns is not a problem; an answer that appears somewhere else is.
 type faqItem struct {
 	n    int
 	body []string
 }
 
-func (i faqItem) FilterValue() string { return faqs[i.n].q }
+func (i faqItem) FilterValue() string { return faqs[i.n].Question }
 
 // lines is the whole block: the question with the cursor beside it, then the
 // answer under it.
@@ -87,7 +104,7 @@ func (i faqItem) FilterValue() string { return faqs[i.n].q }
 // a second one costs a row a page for nothing.
 func (i faqItem) lines(st *styles, sel, focused bool) (string, int) {
 	lead, trail, marker := rowStyles(st, sel, focused)
-	out := []string{marker + " " + lead.Render(faqs[i.n].q)}
+	out := []string{marker + " " + lead.Render(faqs[i.n].Question)}
 	for _, line := range i.body {
 		out = append(out, "  "+trail.Render(line))
 	}
@@ -99,7 +116,7 @@ func (i faqItem) lines(st *styles, sel, focused bool) (string, int) {
 func faqsList(width int, focused bool) list.Model {
 	items := make([]list.Item, 0, len(faqs))
 	for i, f := range faqs {
-		items = append(items, faqItem{n: i, body: wrapPlain(f.a, faqInner(width))})
+		items = append(items, faqItem{n: i, body: wrapPlain(f.Answer, faqInner(width))})
 	}
 	return newNavListOfHeight(items, width, focused, "question", "questions", 1, faqRowHeight(width))
 }
@@ -119,7 +136,7 @@ func faqInner(width int) int { return max(20, width-4) }
 func faqRowHeight(width int) int {
 	tallest := 1
 	for _, f := range faqs {
-		tallest = max(tallest, len(wrapPlain(f.a, faqInner(width))))
+		tallest = max(tallest, len(wrapPlain(f.Answer, faqInner(width))))
 	}
 	return tallest + 1
 }
