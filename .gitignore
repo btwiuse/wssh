@@ -31,3 +31,8 @@
 # Ledger of a local Solana validator: genesis, a rocksdb tree, and faucet
 # keypairs. Over a gigabyte, and never anything a commit should carry.
 /test-ledger/
+
+# Where a release build lands: three binaries per platform, their archives,
+# checksums, and goreleaser's own metadata. A few hundred megabytes of output
+# that is rebuilt by tagging, and never something a commit should carry.
+/dist
