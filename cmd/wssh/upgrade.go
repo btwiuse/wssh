@@ -97,6 +97,16 @@ func isWsshAsset(name string) bool {
 	return false
 }
 
+// isUnversioned reports whether a build carries no version to compare with.
+//
+// Only the two a build in this repository actually produces: the empty string
+// and the "dev" it defaults to. Anything else is taken at its word and
+// handed to the comparison, which is the point - a version this repository
+// does not know how to stamp is not a reason to refuse to upgrade.
+func isUnversioned(version string) bool {
+	return version == "" || version == "dev"
+}
+
 // canReplaceItself reports whether this executable can find its replacement.
 //
 // The name has to match what the archive holds, because the library reads the
@@ -109,16 +119,6 @@ func canReplaceItself(exe string) bool {
 }
 
 func upgrade(ctx context.Context, currentVersion string) error {
-	// Before the network, not after it. A binary that does not know its own
-	// version has nothing to compare a release against, so asking GitHub is a
-	// request whose answer cannot be used. It also turns a local build into a
-	// network failure, which reads as somebody else's problem.
-	if currentVersion == "" || currentVersion == "dev" {
-		return fmt.Errorf(
-			"this binary reports no version, so there is nothing to compare against; " +
-				"build with -X main.version=<version>, or run the published asset")
-	}
-
 	// The filter is not an optimisation. Without one, go-selfupdate matches on
 	// the platform suffix alone and takes the first asset that fits - and a
 	// release carries three binaries whose names all end in
@@ -147,7 +147,14 @@ func upgrade(ctx context.Context, currentVersion string) error {
 			releaseSlug, runtime.GOOS, runtime.GOARCH)
 	}
 
-	if latest.LessOrEqual(currentVersion) {
+	// The comparison is skipped when this binary does not know its version.
+	// "dev" is what a build without the version ldflags reports, and it is
+	// not a version: the library parses it and panics. It is also exactly
+	// what someone running upgrade on a local build is in - nothing
+	// published is behind it - so the answer is the newest release rather
+	// than a refusal. Building with the ldflags makes this say "already the
+	// latest" when it is.
+	if !isUnversioned(currentVersion) && latest.LessOrEqual(currentVersion) {
 		return fmt.Errorf("%s is already the latest release", currentVersion)
 	}
 

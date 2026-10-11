@@ -1,36 +1,30 @@
 package main
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// The GitHub call is not reachable from a test, so what is tested here is the
-// part that decides whether to make it: the guard on a binary that does not
-// know its own version.
-//
-// That guard is not decoration. This help text once said the opposite - that
-// a "dev" build would treat every release as newer - and the code refused.
-// Whichever of the two is right, the two have to be the same.
-func TestABinaryWithNoVersionIsRefusedRatherThanDowngraded(t *testing.T) {
+// A build without the version ldflags reports "dev", which is not a version.
+// The library would parse it and panic on it, so the comparison has to be
+// skipped - and skipping it means the newest release, not a refusal. Someone
+// running upgrade on a local build is asking for exactly that.
+func TestABinaryWithNoVersionTakesTheNewestRelease(t *testing.T) {
 	for _, current := range []string{"", "dev"} {
 		t.Run("version="+current, func(t *testing.T) {
-			err := upgrade(context.Background(), current)
-			if err == nil {
-				t.Fatal("a binary with no version upgraded itself")
-			}
-			if !strings.Contains(err.Error(), "no version") {
-				t.Errorf("the refusal does not say why: %v", err)
-			}
-			// It must not look like a network problem, or someone will go
-			// looking at their connection instead of at their build.
-			if strings.Contains(err.Error(), "reach") {
-				t.Errorf("the refusal blames the network: %v", err)
+			if !isUnversioned(current) {
+				t.Errorf("%q should count as carrying no version", current)
 			}
 		})
+	}
+	// And a real version is not treated as unknown, which is what lets the
+	// command say "already the latest" instead of downloading over itself.
+	for _, current := range []string{"0.0.2", "v0.0.2", "1.0.0-beta.1"} {
+		if isUnversioned(current) {
+			t.Errorf("%q is a version and must be compared, not skipped", current)
+		}
 	}
 }
 
