@@ -1855,7 +1855,11 @@ func (m *model) renderHome() string {
 
 	b.WriteString("\n  " + m.st.title.Render("To use:") + "\n")
 	b.WriteString("  " + m.st.dim.Render("export OPENAI_BASE_URL=https://"+m.endpointHost()+"/v1") + "\n")
-	b.WriteString("  " + m.st.dim.Render("export OPENAI_API_KEY=rc_live_…") + "\n")
+	// In the shape the list above shows a key in, not in the shape the key
+	// happens to have on the wire. Somebody reading this is going to look for
+	// the string they just read and the two saying different things is how a
+	// person ends up pasting the wrong one.
+	b.WriteString("  " + m.st.dim.Render("export OPENAI_API_KEY="+Key{Label: "wxyz", Prefix: "abcd"}.Hint()) + "\n")
 
 	// No price list here. It was three rows of the models page repeated on the
 	// page beside it, on a page whose job is to say what the account has and

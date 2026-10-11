@@ -1774,6 +1774,19 @@ func TestTheTwoLinesOfAKeyRowLineUp(t *testing.T) {
 	}
 }
 
+// The key in the export line is in the shape the list above shows it in. The
+// two are read together and a person pastes whichever one they believed.
+func TestTheExportedKeyLooksLikeTheListedOne(t *testing.T) {
+	m := model{st: newStyles(true), view: screenHome, width: 100, height: 30,
+		deps: deps{Address: treasuryAddress, Ledger: testLedger(t), Catalogue: DefaultCatalogue(), Proven: true}}
+	m.account = Account{Address: treasuryAddress, Keys: []Key{{Label: "wxyz", Prefix: "abcd"}}}
+	m.syncLists()
+	page := flowed(stripForTest(m.renderHome()))
+	if !strings.Contains(page, "export OPENAI_API_KEY=rc_abcd...wxyz") {
+		t.Errorf("the export line is not in the shape the list uses: %q", page)
+	}
+}
+
 // A key is abbreviated with three dots. It is not a string this program is
 // truncating, it is an abbreviation somebody is going to read character by
 // character, and the one ellipsis character the rest of the program uses is

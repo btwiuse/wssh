@@ -903,6 +903,10 @@ not a marker: whether an account can be spent from is a difference every action
 already refuses to make on its own, and the read-only banner says it when it
 is the only thing that is true.
 
+**The export line is in the same shape**: `export OPENAI_API_KEY=rc_abcd...wxyz`,
+not the key's real wire prefix. The two are read together and somebody pastes
+whichever one they believed, so they had better say the same thing.
+
 The only place the full key is ever printed is the notice on the one screen
 where it is minted.
 
