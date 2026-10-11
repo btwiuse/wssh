@@ -1,12 +1,18 @@
 package main
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/rsa"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	charmssh "charm.land/ssh"
+	"github.com/routercafe/routercafe/auth"
 	"github.com/routercafe/routercafe/cafe"
+	gossh "golang.org/x/crypto/ssh"
 )
 
 // The landing page is the product's front door and its pitch deck, and it is
@@ -195,19 +201,65 @@ func snippet(s, needle string) string {
 	return s[start:end]
 }
 
-// A visitor who reaches this host with no key is a visitor to be shown how to
-// become a user. That is the default, so it is a default worth pinning: it is
-// also the switch that admits every connection with no key, and an operator who
-// would rather hear nothing from them has to be able to say so.
-func TestAnonymousAccessIsOnUnlessAskedOtherwise(t *testing.T) {
+// Refusing "none" is the default, and it is a default worth pinning twice over.
+// It is what lets the server see a client's key at all - accepting "none" ends
+// the handshake before one is offered - and it is also the switch that turns
+// away everybody without an ed25519, so an operator who wants those connections
+// has to be able to say so.
+func TestAnonymousAccessIsOffUnlessAskedOtherwise(t *testing.T) {
 	cmd := newCafeCmd()
 	if err := cmd.Flags().Parse(nil); err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	if got := cmd.Flags().Lookup("allow-anonymous").DefValue; got != "true" {
+	if got := cmd.Flags().Lookup("allow-anonymous").DefValue; got != "false" {
 		t.Errorf("--allow-anonymous defaults to %s", got)
 	}
-	if cmd.Flags().Lookup("require-key") == nil {
-		t.Error("there is no way to turn it off")
+	if cmd.Flags().Lookup("allow-anonymous") == nil {
+		t.Error("there is no way to turn it on")
+	}
+}
+
+// Only ed25519 can authenticate, and it has to: a client offers its identities
+// in order and stops at the first one accepted, so an rsa key accepted first
+// would open the session on a key that cannot name an account.
+func TestOnlyEd25519KeysAuthenticate(t *testing.T) {
+	edPub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	edSSH, err := gossh.NewPublicKey(edPub)
+	if err != nil {
+		t.Fatalf("NewPublicKey: %v", err)
+	}
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("rsa.GenerateKey: %v", err)
+	}
+	rsaSSH, err := gossh.NewPublicKey(&rsaKey.PublicKey)
+	if err != nil {
+		t.Fatalf("NewPublicKey: %v", err)
+	}
+
+	cfg := auth.Config{Keys: []string{auth.AnyKey}}
+	cfg.KeyFilter = ed25519Only
+	opts, err := cfg.Options()
+	if err != nil {
+		t.Fatalf("Options: %v", err)
+	}
+	if len(opts) != 1 {
+		t.Fatalf("got %d options, want just the key handler", len(opts))
+	}
+	srv := &charmssh.Server{}
+	for _, o := range opts {
+		o(srv)
+	}
+	if srv.PublicKeyHandler == nil {
+		t.Fatal("no key handler installed")
+	}
+	if !srv.PublicKeyHandler(nil, edSSH) {
+		t.Error("an ed25519 key was refused")
+	}
+	if srv.PublicKeyHandler(nil, rsaSSH) {
+		t.Error("an rsa key was accepted as something that can name an account")
 	}
 }

@@ -27,9 +27,9 @@ import (
 	"charm.land/log/v2"
 	"charm.land/ssh"
 	"charm.land/wish/v2"
+	"github.com/coder/websocket"
 	"github.com/routercafe/routercafe/auth/agentkey"
 	"github.com/routercafe/routercafe/auth/siws"
-	"github.com/coder/websocket"
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -116,8 +116,9 @@ type Options struct {
 	// Which makes it a decision rather than a convenience. It is only safe
 	// where a session does not need to know who is asking. A session that
 	// bills, credits or stores per account has to establish identity some
-	// other way: cafe does it by adopting a key out of a forwarded agent and
-	// having that agent sign.
+	// other way: cafe does it either by refusing "none" so the client's own
+	// ed25519 key authenticates the connection, or, with this off and a
+	// forwarded agent, by having that agent sign.
 	AllowNoAuth bool
 
 	// Logger receives session-level detail. Defaults to the charm default
@@ -193,21 +194,20 @@ func NewServer(opts Options) (*Server, error) {
 	}
 
 	if opts.AllowNoAuth {
-		// Composed rather than assigned: the wallet path installs a config
-		// hook of its own, and overwriting it would quietly stop a wallet
-		// connection from being let through.
-		prev := sessions.ServerConfigCallback
-		sessions.ServerConfigCallback = func(ctx ssh.Context) *gossh.ServerConfig {
-			var config *gossh.ServerConfig
-			if prev != nil {
-				config = prev(ctx)
-			} else {
-				config = &gossh.ServerConfig{}
-			}
+		configure(sessions, func(_ ssh.Context, config *gossh.ServerConfig) {
 			config.NoClientAuth = true
-			return config
-		}
+		})
 	}
+
+	// Unconditionally, and separately from AllowNoAuth: a client walks its
+	// identity list and stops at the first key the server accepts, so a server
+	// that rejects keys in order to get to a later one needs room for the whole
+	// list. x/crypto's default of 6 refuses a connection whose sixth identity
+	// is the good one, which to the person on the other end is indistinguishable
+	// from a wrong password.
+	configure(sessions, func(_ ssh.Context, config *gossh.ServerConfig) {
+		config.MaxAuthTries = MaxAuthTries
+	})
 
 	if opts.Agent != nil {
 		// The agent's agentkey.Forwarding option mutates ChannelHandlers
@@ -406,17 +406,36 @@ func installWalletAuth(srv *ssh.Server, cfg *siws.SIWSAuth) {
 	// A connection that proved itself needs no further authentication. This is
 	// per connection, which is why it works at all: the flag lives on the
 	// config this hook builds, not on the server.
-	prevConfig := srv.ServerConfigCallback
-	srv.ServerConfigCallback = func(ctx ssh.Context) *gossh.ServerConfig {
-		var config *gossh.ServerConfig
-		if prevConfig != nil {
-			config = prevConfig(ctx)
-		} else {
-			config = &gossh.ServerConfig{}
-		}
+	configure(srv, func(ctx ssh.Context, config *gossh.ServerConfig) {
 		if ctx.Value(walletAddressKey) != nil {
 			config.NoClientAuth = true
 		}
+	})
+}
+
+// MaxAuthTries is how many public keys one connection may offer before it is
+// refused.
+//
+// See the configure call in NewServer for why this is not left at x/crypto's
+// default.
+const MaxAuthTries = 64
+
+// configure composes onto whatever ServerConfigCallback is already installed.
+//
+// Three things in this file want the per-connection config - AllowNoAuth, the
+// wallet sign-in hook, and the auth-try ceiling - and wish keeps exactly one
+// callback, so assigning it would silently drop the earlier ones. This is the
+// one form of doing it that does not.
+func configure(srv *ssh.Server, apply func(ssh.Context, *gossh.ServerConfig)) {
+	prev := srv.ServerConfigCallback
+	srv.ServerConfigCallback = func(ctx ssh.Context) *gossh.ServerConfig {
+		var config *gossh.ServerConfig
+		if prev != nil {
+			config = prev(ctx)
+		} else {
+			config = &gossh.ServerConfig{}
+		}
+		apply(ctx, config)
 		return config
 	}
 }

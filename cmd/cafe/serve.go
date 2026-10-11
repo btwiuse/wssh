@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"charm.land/log/v2"
+	charmssh "charm.land/ssh"
 	"charm.land/wish/v2"
 	"github.com/routercafe/routercafe"
 	"github.com/routercafe/routercafe/auth"
@@ -23,6 +24,7 @@ import (
 	"github.com/routercafe/routercafe/cafe"
 	"github.com/routercafe/routercafe/webui"
 	"github.com/spf13/cobra"
+	gossh "golang.org/x/crypto/ssh"
 )
 
 // The default prices.
@@ -37,6 +39,18 @@ import (
 // The blast radius of that is zero only because of the things this command
 // does not install. There is no shell middleware, no direct-tcpip handler and
 // no subsystem handler, so a connection that got in has nothing to run.
+// ed25519Only is the filter this server authenticates with.
+//
+// An account here is an ed25519 key, because ed25519 is what a Solana address
+// is derived from. Refusing everything else is not tidiness: a client offers
+// its identities in order and stops at the first one the server accepts, so
+// accepting an rsa key that happens to come first opens the session on a key
+// that cannot name an account, and the connection only finds that out once the
+// UI is already up.
+func ed25519Only(key charmssh.PublicKey) bool {
+	return key.Type() == gossh.KeyAlgoED25519
+}
+
 const (
 	// defaultSolPriceMicroUSD is what one SOL buys, in micro-USD. A starting
 	// point for an operator to replace, not a quote: every deposit records
@@ -110,13 +124,16 @@ type serveOptions struct {
 	// MaxReserveMicroUSD bounds what one request may hold against a balance.
 	MaxReserveMicroUSD cafe.MicroUSD
 
-	// AllowAnonymous admits a session that authenticated with nothing. On by
-	// default, because a visitor with no key is a visitor to be shown how to
-	// become a user rather than a connection to be turned away.
+	// AllowAnonymous admits a session that authenticated with nothing. Off by
+	// default, because a client sends "none" first as a probe: accepting it
+	// ends the handshake before the client offers any key, so every connection
+	// arrives empty and this server never learns which key anybody holds. Turn
+	// it on to trade that away for a visitor with no key at all.
 	AllowAnonymous bool
 
 	// RequireKey is the inverse of AllowAnonymous, kept as its own switch so
-	// neither flag has to be written twice to be turned the other way.
+	// neither flag has to be written twice to be turned the other way. It is
+	// the default now, and exists to be explicit rather than to do anything.
 	RequireKey bool
 
 	// DryRunDeposits takes deposits without moving money: the amount is
@@ -175,14 +192,13 @@ func addServeFlags(cmd *cobra.Command, opts *serveOptions) {
 	cmd.Flags().StringVar(&opts.WalletStatement, "wallet-statement", "",
 		"one line of text a wallet shows above the sign-in request")
 
-	cmd.Flags().BoolVar(&opts.AllowAnonymous, "allow-anonymous", true,
-		"let a session in that arrived with no key at all; it adopts a key out of the "+
-			"forwarded agent by having the agent sign, or is told how to get one and is "+
-			"given nothing else. Turning it off makes every session need a key")
+	cmd.Flags().BoolVar(&opts.AllowAnonymous, "allow-anonymous", false,
+		"admit a session that arrived with no key, and identify it by asking a forwarded "+
+			"agent to sign. Turning it on means the server never sees the client's keys, "+
+			"because accepting 'none' ends the handshake before any is offered")
 	cmd.Flags().BoolVar(&opts.RequireKey, "require-key", false,
-		"refuse a connection that carries no key, and say nothing beyond the refusal. "+
-			"The opposite of --allow-anonymous, for an operator who would rather "+
-			"nobody without a key hear from the server at all")
+		"refuse a connection that carries no key. This is the default and is here to be "+
+			"written out loud rather than to do anything")
 	cmd.Flags().BoolVar(&opts.ForwardAgent, "forward-agent", true,
 		"let sessions ask the connecting client to sign; this is how a deposit is signed, "+
 			"and turning it off leaves the deposit screen with nothing to ask")
@@ -254,6 +270,13 @@ func serve(opts *serveOptions) error {
 	if err != nil {
 		return err
 	}
+	// Only ed25519 can authenticate, and the filter is set before Options
+	// rather than inside a handler: a client offers its identities in order and
+	// stops at the first one accepted, so refusing the rsa key here is what
+	// lets the ed25519 behind it through. Accepting it instead would open the
+	// session on a key that cannot name an account, and the connection would
+	// not discover that until the UI told it so.
+	opts.Auth.KeyFilter = ed25519Only
 	authOpts, err := opts.Auth.Options()
 	if err != nil {
 		return err //nolint:wrapcheck

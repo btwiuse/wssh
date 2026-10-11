@@ -259,11 +259,27 @@ func SessionAccount(sess ssh.Session) (address, refusal string, proven bool) {
 // Split out so it can be exercised directly: whether a given connection names
 // an account is the question, and answering it needs a session only as a way
 // of holding three values.
+//
+// The order below is the order of how much the client proved, not of how much
+// was asked for. The username is read before the key because a connection
+// almost always carries one now - refusing "none" is what lets the server see
+// a key at all - and if the key won, `ssh <someone-else>@host` would silently
+// open the account of whoever happened to be holding the connection instead of
+// the one that was asked for. A name in the username is the client asking for
+// a view, and it gets one.
 func AccountFor(pub gossh.PublicKey, walletAddress, user string) (string, string, bool) {
 	if wallet := strings.TrimSpace(walletAddress); wallet != "" {
 		// A wallet proved itself by signing something a person read.
 		return wallet, "", true
 	}
+
+	// Chosen by the client, so it names an account to look at and nothing else.
+	if named := strings.TrimSpace(user); named != "" {
+		if err := ValidateAddress(named); err == nil {
+			return named, "", false
+		}
+	}
+
 	if pub != nil {
 		address, err := solana.AddressFor(pub)
 		if err != nil {
@@ -272,14 +288,6 @@ func AccountFor(pub gossh.PublicKey, walletAddress, user string) (string, string
 		return address, "", true
 	}
 
-	// No key. The username is the only thing left, and it is exactly what it
-	// says on it: chosen by the client. So it names an account to look at and
-	// nothing else.
-	if named := strings.TrimSpace(user); named != "" {
-		if err := ValidateAddress(named); err == nil {
-			return named, "", false
-		}
-	}
 	return "", reasonText("no key on this connection"), false
 }
 

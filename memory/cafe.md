@@ -133,66 +133,75 @@ Two different problems, and they are not the same message:
 | an RSA or ECDSA key | this key names no account, and the command that fixes it |
 | no key at all | the client is refused during authentication |
 
-The third row is what `--allow-anonymous` exists for, and it is **on by
+The third row is what `--allow-anonymous` exists for, and it is **off by
 default**. It admits the connection and then works out who it is by asking the
 forwarded agent to sign a nonce this process made up: the keys in the agent are
 listed, one is picked, and a signature that verifies is what makes it an
 account. With no agent there is nothing to prove and nowhere to keep a balance,
-so the session is shown how to get a key and given nothing else.
+so the session is shown the merged screen: that same list, plus an address field
+underneath.
 
-**The cost, stated once and plainly**: a client sends `none` first as a probe,
+**Why `none` is refused by default.** A client sends `none` first as a probe,
 so a server that accepts it ends the handshake before a public key is ever
-offered. Every connection then arrives with `PublicKey() == nil`, including the
-ones that carried a key, and **no client-side flag changes that** -
-`-i ~/.ssh/id_ed25519` and `-o PreferredAuthentications=publickey` were both
-measured and both still authenticated as "none". `-A` is what makes the
-difference *here*, because the agent is reachable after the handshake and the
-key file is not.
+offered, and every connection arrives with `PublicKey() == nil` including the
+ones carrying a key. No client-side flag changes that - `-i` and
+`-o PreferredAuthentications=publickey` were both measured and both still
+authenticated as "none". Refusing it is the only thing that makes the server see
+a key, and seeing one is the whole of how `ssh router.cafe` gets you into your
+own account with no flags at all.
 
 **The variable is whether the server accepts `none`, not `-A`, and the
 distinction is worth being exact about.** `publickey` auth sends the whole key
 blob - type, bits, comment - in `SSH_MSG_USERAUTH_REQUEST`, first as a query
 with `have_signature=false` and again in the signed offer. A server that
-*rejects* the `none` probe therefore learns every identity the client will try,
-in order, until one is accepted: every key in the agent and every
-`~/.ssh/id_*`. whoami.filippo.io is exactly that, and it needs no `-A`, because
-`-A` moves no public key anywhere. What `-A` moves is the ability to *sign*.
-Naming a key is free; proving you hold it is not, and only the second is worth
-protecting - a public key is public already, in `id_*.pub`, in GitHub, in commit
-signatures.
-
-So the table below is a property of this configuration, not a guarantee:
+*rejects* the `none` probe therefore learns the identities the client tries, in
+order, until one is accepted. What `-A` moves is the ability to *sign*, not a
+public key anywhere. Naming a key is free; proving you hold it is not, and only
+the second is worth protecting - a public key is public already, in `id_*.pub`,
+in GitHub, in commit signatures.
 
 | Server | `none` probe | Public keys the server sees |
 |---|---|---|
-| whoami.filippo.io | refused | all of them, one at a time |
-| cafe, default (`--allow-anonymous`) | accepted | none - the handshake ends at the probe |
-| cafe, `--require-key` | refused | **one**, the first offered, and it is accepted |
-| `wssh`, no auth flags | refused | all of them, each rejected (`wssh.go:401`) |
+| cafe, default | refused | the ones before the ed25519 it accepts |
+| cafe, `--allow-anonymous` | accepted | none - the handshake ends at the probe |
+| `wssh`, no auth flags | refused | all of them, each rejected |
 | `wssh --authorized-keys` | refused | up to and including the one that matches |
 
-**`--require-key` is the row to remember, and it is worse than it looks.**
-Cafe's `--authorized-key` defaults to `*`, so an accept-anything
-`PublicKeyHandler` is installed (`auth/auth.go:99-102`). Refusing `none` does not
-produce a refusal; it produces a handshake where the client offers its first key
-and the server takes it. `AccountFor` reads a key before it reads a username
-(`cafe/session.go:267`), so the session lands on **the key's account, proved**,
-and `ssh <someone-else's-address>@host` quietly shows you your own account
-instead of the one you asked about. From the outside that server collects one
-public key per connection and accepts it. It is whoami.filippo.io with a wallet
-attached.
+**The auth loop hands over one key, never a list, and that shapes the whole
+screen.** A client offers its identities in order and stops at the first one the
+server accepts, so `publickey` auth cannot enumerate. To see several ed25519
+keys a client must reject all of them, and then nothing authenticates and the
+client gives up with "Permission denied". The agent is the only thing in SSH
+that can enumerate, which is why choosing among several keys needs `-A` and
+detecting one does not. This is the whole of what whoami.filippo.io does: refuse
+`none`, reject the rsa offer, accept the ed25519.
 
-So `AllowNoAuth` is not a privacy switch that happens to also admit anonymous
-traffic. **A server that admits unauthenticated connections has no use for
-public keys** - they only identify a person to a server that is going to make
-them prove it - so "let `none` in" and "never see a key" are the same switch, and
-the read-only-by-address feature is what holds them together. Turning it off
-does not buy privacy. It spends it.
+**Only ed25519 is accepted, and refusing the rest is not tidiness.** `--authorized-key`
+defaults to `*`, so an accept-anything handler is installed; without a filter an
+rsa key that comes first opens the session on a key that cannot name an
+account, and the connection only discovers that once the UI is already up.
+`ed25519Only` (`cmd/cafe/serve.go`) is the gate, applied through
+`auth.Config.KeyFilter` before the authorized_keys list is consulted. It is why
+an agent holding `id_rsa` and `id_ed25519` gets in on the second.
 
-**The username is the account.** The key does not survive a `none` handshake,
-but the username does: it is in the request that got the connection in. So
-`ssh <address>@router.cafe` names an account, the way `user@host` names a
-repository, and gets that account's view.
+**`MaxAuthTries` is raised to 64** (`wssh.go`). Refusing keys is what lets a
+later one through, so the ceiling has to clear the client's whole identity list
+rather than the first few entries. x/crypto's default of 6 refuses a connection
+whose sixth identity is the good one, which to the person on the other end is
+indistinguishable from a wrong password.
+
+**What refusing `none` costs, stated once:** a client with no ed25519 cannot
+connect at all. It is told so by the only message that means anything -
+`Permission denied (publickey)` - and `--allow-anonymous` is the switch that
+gives those connections the merged screen instead.
+
+**The username outranks the key, because now every connection has one.** Nearly
+every session carries a key now, so if the key won `ssh <someone-else>@host`
+would open the account of whoever was holding the connection and say nothing -
+the worst possible answer, because it is a real balance belonging to somebody
+else. `AccountFor` reads the username first for that reason: a name there is the
+client asking for a view, and it gets one, unproved. A username that is not an
+account changes nothing and the key is still the account.
 
 Named is not proved. Somebody can type any address they can find, so:
 
@@ -212,20 +221,26 @@ balance.
 
 | Connection | Result |
 |---|---|
-| `ssh <address>@host` | that account, read-only |
-| `ssh -A <address>@host`, agent holds the key | the same account, fully yours |
-| `ssh -A -i key@host` with the key in the agent | adopts and signs, same account |
-| `ssh -A` with no address in the username | lists the agent's keys to pick from |
-| `ssh` with neither | an address field: paste one, read it |
+| `ssh router.cafe` | your own account, read-write, no flags |
+| `ssh <address>@host` | that account, read-only - the name wins over the key |
+| `ssh -i other_key host` | whichever key `ssh(1)` offers that the server accepts |
+| a client with no ed25519 | `Permission denied (publickey)` |
+| `--allow-anonymous`, no key | the merged screen below |
+| `--allow-anonymous` with `-A` | the agent's keys listed, pick one and it signs |
 
-**A connection that names nothing is not refused, and it is not a wall.** There
-is one screen, not two. The rows above the address field are the keys the
+**That screen exists only under `--allow-anonymous`, and that is the point of
+it.** One screen, not two. The rows above the address field are the keys the
 forwarded agent holds, and picking one signs for it; the field at the bottom
 takes an address somebody pasted, and picking that opens it read-only. With no
 agent the list is empty and the field is the whole screen, which is why the two
 paths are one screen rather than a picker and a landing page: the difference
 between them is one boolean, `Proven`, and it is set by whether something was
 signed rather than by which screen you are on.
+
+The default never reaches it, because refusing `none` means the connection
+arrives already authenticated and `newModel` routes straight to the account. The
+screen is the answer to a client that proved nothing, and the default is the
+answer to one that proved itself.
 
 ```
   Which of these is yours?
@@ -249,25 +264,23 @@ Two details that are decisions rather than conveniences:
   field is filtered to base58 on the way in rather than validated on the way
   out.
 
-`--require-key` turns anonymous access off and restores a plain refusal, for
-an operator who would rather nobody without a key hear from the server at all.
+`--require-key` turns anonymous access back off, for an operator who has turned it
+on and changed their mind.
 
 ### What is still impossible, and why
 
-`ssh -i ~/.ssh/id_ed25519 router.cafe` with no `-A` cannot *prove* the account
-for that key, and no server-side change makes it. The key file is on the client;
-the only thing the protocol carries afterwards is the session channel, and by
-then the handshake is over. `-i` reaches the server as an authentication
-*offer*, and with `none` already accepted the offer never happens - so what
-never happens is the signature, not the key. The server is blind to which keys
-the client holds only because it never gets far enough to be told.
+**A list of the keys you have.** `ssh -A router.cafe` with three ed25519 keys in
+the agent authenticates with whichever one `ssh(1)` offers first, and the session
+goes straight to that account. The merged screen lists keys only under
+`--allow-anonymous`, and it lists them by asking the agent - which is the only
+way in SSH to ask. `publickey` auth cannot enumerate: the client stops offering
+at the first key the server accepts, so to see three keys a server would have to
+refuse all three, and then nothing authenticates.
 
-That is why the address field is read-only by default: there is no account to
-view until something proves one, and the cheapest thing that proves one is an
-agent that will sign. The field exists anyway, because naming an address is not
-proof and does not have to be - it is the thing somebody with no key came for.
+So: **detecting one key needs no flags, choosing between several needs `-A`, and
+no server-side change turns the second into the first.**
 
-`wssh.Options.AllowNoAuth` is the switch underneath. It composes with the
+`wssh.Options.AllowNoAuth` is the switch underneath, and it composes with the
 wallet sign-in hook rather than replacing it, so opening the door does not
 quietly stop a browser wallet from being let through.
 

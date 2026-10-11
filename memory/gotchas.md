@@ -38,6 +38,12 @@ to look more reasonable.
 - With `--allow-anonymous`, `-i` on the client does nothing: the handshake ends
   on the `none` probe before a key is offered, so every connection is anonymous
   and identity comes from the forwarded agent signing. Measured, not assumed.
+  Without that flag the opposite holds and `-i` is the whole of it, which is
+  why the flag exists at all. See `cafe.md`.
+- A connection to RouterCafe that authenticates and then lands on an account
+  other than the one you expected is almost always an address typed in the
+  username: the name wins over the key on purpose, because the alternative
+  shows a stranger's balance. `AccountFor`, not a bug.
 - A RouterCafe session refusing `uptime` with "does not run commands" is the
   product working, not a broken server. See `cafe.md`.
 - A refusal raised as an error from the agent has nowhere to go: the agent

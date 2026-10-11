@@ -57,6 +57,14 @@ type Config struct {
 	// process's argument list, which any local user can read; PasswordFile
 	// exists precisely so that this is not necessary.
 	Passwords []string
+
+	// KeyFilter, when set, is a gate every offered public key has to pass
+	// before the authorized_keys list is consulted at all. It exists for keys
+	// the caller has no use for rather than keys it will not recognise: cafe
+	// sets it to ed25519-only, because an account there is an ed25519 key and a
+	// session authenticated by an rsa key could only ever be turned away later -
+	// after the handshake, in the UI, with the connection already established.
+	KeyFilter func(ssh.PublicKey) bool
 }
 
 // anyKey reports whether either flag asks for every key rather than a list.
@@ -97,8 +105,8 @@ func (c Config) Options() ([]ssh.Option, error) {
 	// is parsed so that "*" among a list of real keys does not read as an
 	// entry and fail.
 	if c.anyKey() {
-		opts = append(opts, wish.WithPublicKeyAuth(func(_ ssh.Context, _ ssh.PublicKey) bool {
-			return true
+		opts = append(opts, wish.WithPublicKeyAuth(func(_ ssh.Context, key ssh.PublicKey) bool {
+			return c.KeepKey(key)
 		}))
 	} else if c.hasKeys() {
 		keys, err := parseInlineKeys(c.Keys)
@@ -107,6 +115,9 @@ func (c Config) Options() ([]ssh.Option, error) {
 		}
 		files := expandKeyFiles(c.KeyFiles)
 		opts = append(opts, wish.WithPublicKeyAuth(func(_ ssh.Context, key ssh.PublicKey) bool {
+			if !c.KeepKey(key) {
+				return false
+			}
 			// Files are re-read on every attempt on purpose. Adding a key
 			// should not mean restarting the server, which is the whole reason
 			// to keep a file rather than a list baked in at startup.
@@ -148,6 +159,13 @@ func (c Config) Options() ([]ssh.Option, error) {
 
 func (c Config) hasKeys() bool {
 	return len(c.KeyFiles) > 0 || len(c.Keys) > 0
+}
+
+// KeepKey reports whether an offered key is one this configuration can do
+// anything with. A configured filter answers first and short-circuits: a key
+// the caller has no use for is not worth matching against a list.
+func (c Config) KeepKey(key ssh.PublicKey) bool {
+	return c.KeyFilter == nil || c.KeyFilter(key)
 }
 
 func (c Config) hasPasswords() bool {

@@ -358,6 +358,40 @@ func TestAccountForNaming(t *testing.T) {
 	}
 }
 
+// A username naming an account wins over the key the connection authenticated
+// with, and this is the case that only exists now that "none" is refused.
+//
+// Nearly every connection carries a key now, because refusing "none" is what
+// lets the server see one. If the key won, `ssh <someone-else>@host` would open
+// the account of whoever was holding the connection and say nothing - the worst
+// possible answer, because it is a real balance belonging to somebody else.
+func TestANamedUsernameOutranksTheKeyThatAuthenticated(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	edPub, err := gossh.NewPublicKey(pub)
+	if err != nil {
+		t.Fatalf("NewPublicKey: %v", err)
+	}
+
+	addr, refusal, proven := AccountFor(edPub, "", treasuryAddress)
+	if addr != treasuryAddress || refusal != "" {
+		t.Fatalf("gave %q / %q, want the account that was named", addr, refusal)
+	}
+	if proven {
+		t.Error("naming an account proved it; the key on the connection was never checked against it")
+	}
+
+	// A username that is not an account changes nothing: the key is still the
+	// account, still proved, because nothing was asked for.
+	addr, refusal, proven = AccountFor(edPub, "", "gear")
+	want, _ := solana.AddressFor(edPub)
+	if addr != want || refusal != "" || !proven {
+		t.Errorf("a plain username gave %q / %q proven=%v, want the key's own account", addr, refusal, proven)
+	}
+}
+
 func TestNewRefusesAnUnusableTreasury(t *testing.T) {
 	ledger, err := OpenLedger("")
 	if err != nil {
