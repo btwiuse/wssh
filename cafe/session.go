@@ -178,7 +178,8 @@ func (s *Server) newModel(sess ssh.Session) tea.Model {
 	// branch. It has proved it holds something, and telling that person to go
 	// and make a different key is the answer; anonymous access is for people
 	// who arrived with nothing, not with the wrong thing.
-	if s.opts.AllowAnonymous && sess.PublicKey() == nil && wssh.WalletAddress(sess.Context()) == "" {
+	if s.opts.AllowAnonymous && sess.PublicKey() == nil &&
+		wssh.WalletAddress(sess.Context()) == "" && !namesAnAccount(sess.User()) {
 		return anonymousModel{
 			deps: deps{
 				SockPath:  sockPath,
@@ -194,7 +195,7 @@ func (s *Server) newModel(sess ssh.Session) tea.Model {
 		}
 	}
 
-	address, refusal := SessionAccount(sess)
+	address, refusal, proven := SessionAccount(sess)
 	if refusal != "" {
 		// No account, no session. Not a degraded mode to paper over with a
 		// placeholder: an account is what a deposit credits and what a
@@ -206,6 +207,7 @@ func (s *Server) newModel(sess ssh.Session) tea.Model {
 	return model{
 		deps: deps{
 			Address:   address,
+			Proven:    proven,
 			SockPath:  sockPath,
 			Ctx:       sess.Context(),
 			Ledger:    s.opts.Ledger,
@@ -221,52 +223,64 @@ func (s *Server) newModel(sess ssh.Session) tea.Model {
 	}
 }
 
-// SessionAccount is the Solana account a session belongs to.
+// namesAnAccount reports whether a username is written as an account address,
+// which is the one thing the client chooses that can mean something here.
+func namesAnAccount(user string) bool {
+	return strings.TrimSpace(user) != "" && ValidateAddress(strings.TrimSpace(user)) == nil
+}
+
+// SessionAccount is the account a session names, and whether it proved it.
 //
-// Two ways in, and the choice between them is not a preference:
+// Three ways in, and the difference between them is the whole of what a
+// session may do:
 //
+//   - a wallet that signed in over the WebSocket. Proved.
 //   - the key that authenticated the session, read through solana.AddressFor.
 //     An ed25519 SSH key is already a Solana account, so this is a rename
-//     rather than a lookup, and it is the right answer for a session that came
-//     in through ssh -A.
-//   - the account a wallet proved over the WebSocket sign-in, for a browser
-//     that owns no SSH key. See wssh.WalletAddress.
+//     rather than a lookup. Proved, because holding the key is the proof.
+//   - the username, when it is written as a Solana address. Named, not proved:
+//     the client chose it, so it can only ever mean "show me this account".
 //
-// The SSH username is never consulted. It is chosen by the client, so every
-// account would be the same account.
+// That last one exists because admitting a connection with no key admits every
+// connection that way, and a service that turns those away is a service that
+// refuses to answer the question. Addressing an account the way git addresses a
+// repository costs nothing and gets somebody with no key to the screen they
+// wanted. It buys exactly one thing: a view.
 //
-// A key that is not ed25519 names no account, and that is said out loud rather
-// than left blank: it is the difference between "use an ed25519 key" and
-// something that looks like a bug.
-func SessionAccount(sess ssh.Session) (string, string) {
-	return AccountFor(sess.PublicKey(), wssh.WalletAddress(sess.Context()))
+// So "proved" is not decoration. Anything that changes an account - spending
+// its balance, minting a key against it - requires it, or `ssh
+// <someone-else's-address>@host` would hand that person a key to spend with.
+func SessionAccount(sess ssh.Session) (address, refusal string, proven bool) {
+	return AccountFor(sess.PublicKey(), wssh.WalletAddress(sess.Context()), sess.User())
 }
 
 // AccountFor is the naming rule on its own, without a session.
 //
-// Split out so it can be exercised directly: whether a given key names an
-// account is the question, and answering it needs a session only as a way of
-// holding two values.
-func AccountFor(pub gossh.PublicKey, walletAddress string) (string, string) {
+// Split out so it can be exercised directly: whether a given connection names
+// an account is the question, and answering it needs a session only as a way
+// of holding three values.
+func AccountFor(pub gossh.PublicKey, walletAddress, user string) (string, string, bool) {
 	if wallet := strings.TrimSpace(walletAddress); wallet != "" {
-		return wallet, ""
+		// A wallet proved itself by signing something a person read.
+		return wallet, "", true
 	}
-	if pub == nil {
-		// No key and no wallet. This cannot happen while a key handler is
-		// installed, so it is said as what it is rather than assumed to be a
-		// key that is not there.
-		//
-		// Which is also the one case that cannot reach here at all: a
-		// connection with no key is refused during authentication, because
-		// letting it past would mean accepting everyone on every key's
-		// account. See AccountFor's caller for the reasoning.
-		return "", reasonText("no key on this connection")
+	if pub != nil {
+		address, err := solana.AddressFor(pub)
+		if err != nil {
+			return "", "not an ed25519 key: " + reasonText(err.Error()), false
+		}
+		return address, "", true
 	}
-	address, err := solana.AddressFor(pub)
-	if err != nil {
-		return "", reasonText("not an ed25519 key: " + err.Error())
+
+	// No key. The username is the only thing left, and it is exactly what it
+	// says on it: chosen by the client. So it names an account to look at and
+	// nothing else.
+	if named := strings.TrimSpace(user); named != "" {
+		if err := ValidateAddress(named); err == nil {
+			return named, "", false
+		}
 	}
-	return address, ""
+	return "", reasonText("no key on this connection"), false
 }
 
 // refuseModel is what a session with no account gets: what went wrong, the

@@ -347,3 +347,56 @@ func labelForKey(k *agent.Key) string {
 	}
 	return "(no comment)"
 }
+
+// Upgrading a named account into a proved one.
+//
+// A connection that arrived with no key names an account by its username, and
+// that is enough to look at it. When it also forwarded an agent, the agent is
+// asked whether it holds the key for that address and, if it does, asked to
+// sign: the same proof, run against a name that is already known rather than
+// chosen from a list.
+func proveCmd(sockPath, address string) tea.Cmd {
+	return func() tea.Msg {
+		conn, err := dialAgent(sockPath)
+		if err != nil {
+			return provenMsg{}
+		}
+		defer conn.Close() //nolint:errcheck
+
+		_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
+		client := agent.NewClient(conn)
+		held, err := client.List()
+		if err != nil {
+			return provenMsg{}
+		}
+		for _, k := range orderableKeys(held) {
+			pub, err := parseEd25519Blob(k.Blob)
+			if err != nil {
+				continue
+			}
+			sshPub, err := gossh.NewPublicKey(pub)
+			if err != nil {
+				continue
+			}
+			candidate, err := solana.AddressFor(sshPub)
+			if err != nil || candidate != address {
+				continue
+			}
+			nonce := make([]byte, 32)
+			if _, err := rand.Read(nonce); err != nil {
+				return provenMsg{}
+			}
+			answer, err := client.Sign(sshPub, nonce)
+			if err != nil || !ed25519.Verify(pub, nonce, answer.Blob) {
+				return provenMsg{}
+			}
+			return provenMsg{proven: true}
+		}
+		return provenMsg{}
+	}
+}
+
+// provenMsg reports whether a forwarded agent turned out to hold the key for
+// the address this session named. A false one is not a failure: most agents
+// will not, and the session is still perfectly usable as a read-only view.
+type provenMsg struct{ proven bool }

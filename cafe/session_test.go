@@ -305,9 +305,12 @@ func TestAccountForNaming(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPublicKey: %v", err)
 	}
-	addr, refusal := AccountFor(edPub, "")
+	addr, refusal, proven := AccountFor(edPub, "", "")
 	if addr == "" || refusal != "" {
 		t.Fatalf("an ed25519 key gave %q / %q, want an address and no refusal", addr, refusal)
+	}
+	if !proven {
+		t.Error("a key that authenticated the session was not treated as proof")
 	}
 	if want, _ := solana.AddressFor(edPub); addr != want {
 		t.Errorf("AccountFor gave %q but solana.AddressFor gives %q", addr, want)
@@ -321,7 +324,7 @@ func TestAccountForNaming(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPublicKey rsa: %v", err)
 	}
-	addr, refusal = AccountFor(rsaPub, "")
+	addr, refusal, _ = AccountFor(rsaPub, "", "")
 	if addr != "" {
 		t.Errorf("an RSA key named the account %q", addr)
 	}
@@ -330,14 +333,28 @@ func TestAccountForNaming(t *testing.T) {
 	}
 
 	// A wallet sign-in wins, because a browser connection has no key at all.
-	addr, refusal = AccountFor(nil, treasuryAddress)
-	if addr != treasuryAddress || refusal != "" {
-		t.Errorf("a wallet connection gave %q / %q", addr, refusal)
+	addr, refusal, proven = AccountFor(nil, treasuryAddress, "")
+	if addr != treasuryAddress || refusal != "" || !proven {
+		t.Errorf("a wallet connection gave %q / %q proven=%v", addr, refusal, proven)
 	}
 
-	// And neither is nothing: an unauthenticated connection names nobody.
-	if addr, refusal = AccountFor(nil, ""); addr != "" || refusal == "" {
-		t.Errorf("an unauthenticated connection gave %q / %q, want no account and a reason", addr, refusal)
+	// A username written as an account names it, and names it without proof.
+	// That is the whole of read-only access: `ssh <address>@host` is the
+	// address, and it is exactly what the client typed.
+	addr, refusal, proven = AccountFor(nil, "", treasuryAddress)
+	if addr != treasuryAddress || refusal != "" {
+		t.Errorf("a username naming an account gave %q / %q", addr, refusal)
+	}
+	if proven {
+		t.Error("a username was treated as proof; anyone could then spend that account")
+	}
+
+	// A username that is not an account names nothing.
+	if addr, refusal, _ = AccountFor(nil, "", "gear"); addr != "" || refusal == "" {
+		t.Errorf("a plain username gave %q / %q, want no account and a reason", addr, refusal)
+	}
+	if addr, _, _ = AccountFor(nil, "", "  "); addr != "" {
+		t.Errorf("a blank username named %q", addr)
 	}
 }
 
@@ -698,4 +715,58 @@ func blobFor(t *testing.T, pub ed25519.PublicKey) []byte {
 		t.Fatalf("NewPublicKey: %v", err)
 	}
 	return sshPub.Marshal()
+}
+
+// Read-only is the whole of what a named account buys, and it has to stay
+// that way. Someone can type any address they can find, so every action that
+// changes the account has to be behind proof of holding the key.
+func TestANamedAccountCannotChangeAnything(t *testing.T) {
+	ledger := testLedger(t)
+	if err := ledger.Credit(treasuryAddress, 5*PerMicroUSD); err != nil {
+		t.Fatalf("Credit: %v", err)
+	}
+	d := deps{
+		Address:   treasuryAddress,
+		Ledger:    ledger,
+		Treasury:  testTreasury(),
+		Catalogue: DefaultCatalogue(),
+		Host:      Domain,
+	}
+	m := model{deps: d, st: newStyles(), view: screenHome, account: ledger.Account(d.Address), width: 100, height: 40}
+
+	// Minting refuses. The command it hands back carries the refusal, so what
+	// matters is what running it produces: a notice, never a key.
+	next, cmd := m.mintKey()
+	if cmd != nil {
+		t.Errorf("minting for an account nobody proved started something: %v", cmd)
+	}
+	got := next.(model)
+	if got.notice.kind != noticeBad || got.notice.text == "" {
+		t.Errorf("minting gave %+v, want a refusal with a reason", got.notice)
+	}
+	if len(ledger.Account(d.Address).Keys) != 0 {
+		t.Error("a key was minted against an account that was only named")
+	}
+
+	// A deposit refuses the same way, before anything is asked of an agent.
+	_, cmd = got.startDeposit()
+	if cmd != nil {
+		t.Errorf("a deposit for an account nobody proved started something: %v", cmd)
+	}
+	if len(ledger.Account(d.Address).Keys) != 0 {
+		t.Error("something changed an account that was only named")
+	}
+
+	// And the same model with proof does mint, which is what makes the
+	// boundary a boundary rather than a wall.
+	proved := got
+	proved.deps.Proven = true
+	_, cmd = proved.mintKey()
+	if cmd == nil {
+		t.Fatal("the account's actual owner was refused")
+	}
+	cmd() // The mint happens when the command runs, not when it is handed back.
+	if len(ledger.Account(d.Address).Keys) != 1 {
+		t.Error("the owner could not mint a key against their own account")
+	}
 }

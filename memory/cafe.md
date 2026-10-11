@@ -149,12 +149,34 @@ measured and both still authenticated as "none". `-A` is what makes the
 difference, because the agent is reachable after the handshake and the key file
 is not.
 
+**The username is the account.** The key does not survive a `none` handshake,
+but the username does: it is in the request that got the connection in. So
+`ssh <address>@router.cafe` names an account, the way `user@host` names a
+repository, and gets that account's view.
+
+Named is not proved. Somebody can type any address they can find, so:
+
+| Can look | Cannot |
+|---|---|
+| balance, deposits, spend, the price list | spend the balance |
+| | mint or revoke an API key |
+| | deposit |
+
+Anything that changes the account is behind proof. Proof is the same nonce
+signature as above, run against an address that is already known rather than
+chosen from a list, so the agent is asked whether it holds that address's key
+and then asked to sign. If it does, the session owns the account and the
+banner stops saying read-only. If it does not, nothing is said: an agent that
+does not hold the key is the ordinary case for someone reading someone else's
+balance.
+
 | Connection | Result |
 |---|---|
-| `ssh -A` with the key in the agent | adopts it, signed, and opens the account |
-| `ssh -A -i key` with the key in the agent | the same |
-| `ssh -i key` with no `-A` | the notice: `-i` alone cannot work from now on |
-| `ssh` with no key and no agent | the notice |
+| `ssh <address>@host` | that account, read-only |
+| `ssh -A <address>@host`, agent holds the key | the same account, fully yours |
+| `ssh -A -i key@host` with the key in the agent | adopts and signs, same account |
+| `ssh -A` with no address in the username | lists the agent's keys to pick from |
+| `ssh` with neither | the notice: how to get a key |
 
 `--require-key` turns it off and restores a plain refusal, for an operator who
 would rather nobody without a key hear from the server at all.

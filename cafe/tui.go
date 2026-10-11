@@ -77,10 +77,18 @@ func newStyles() styles {
 // reached for, so the whole thing is constructible in a test with four fields
 // and no server at all.
 type deps struct {
-	// Address is the account this session is. It is the key that
-	// authenticated the session, read through solana.AddressFor, so it
-	// cannot be anything the client chose.
+	// Address is the account this session is looking at.
 	Address string
+
+	// Proven is whether this session owns it, as against having merely named
+	// it. A key that authenticated the session, or a wallet that signed in,
+	// owns it; a username written as an address only names it.
+	//
+	// Everything read-only works either way. Everything that changes the
+	// account - spending its balance, minting a key against it - is refused
+	// without it, because otherwise `ssh <address>@host` hands that address's
+	// owner to whoever typed it.
+	Proven bool
 
 	// SockPath is the agent this session was given. Empty means the client
 	// did not forward one, which is a thing to say out loud rather than to
@@ -150,7 +158,15 @@ type notice struct {
 	text string
 }
 
-func (m model) Init() tea.Cmd { return nil }
+func (m model) Init() tea.Cmd {
+	// An account named by username is a view. When an agent was forwarded as
+	// well, ask it whether it holds that address's key: if it does, and it
+	// signs for it, this session owns the account and may change it.
+	if !m.deps.Proven && m.deps.SockPath != "" && m.deps.Address != "" {
+		return proveCmd(m.deps.SockPath, m.deps.Address)
+	}
+	return nil
+}
 
 func (m model) View() tea.View {
 	var v tea.View
@@ -199,6 +215,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		return m, nil
+
+	case provenMsg:
+		// Silent either way. An agent that does not hold the key is the
+		// ordinary case for somebody looking at someone else's balance, and
+		// saying so on a screen they are only reading would be noise.
+		if msg.proven {
+			m.deps.Proven = true
+		}
 		return m, nil
 
 	case refreshedMsg:
@@ -271,6 +296,10 @@ func (m model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "d":
 		m.view, m.notice = screenDeposit, notice{}
 	case "k":
+		if !m.deps.Proven {
+			m.notice = notice{noticeBad, notOwned}
+			return m, nil
+		}
 		m.view, m.notice = screenKeys, notice{}
 	case "m", "p":
 		m.view, m.notice = screenModels, notice{}
@@ -299,6 +328,9 @@ func (m model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) mintKey() (tea.Model, tea.Cmd) {
+	if !m.deps.Proven {
+		return m.refuse(notOwned)
+	}
 	d := m.deps
 	m.busy = "minting an API key"
 	m.notice = notice{}
@@ -351,6 +383,9 @@ func (m model) onDepositKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) startDeposit() (tea.Model, tea.Cmd) {
+	if !m.deps.Proven {
+		return m.refuse(notOwned)
+	}
 	lamports, err := parseSOL(m.amount)
 	if err != nil {
 		m.notice = notice{noticeBad, err.Error()}
@@ -414,6 +449,9 @@ func parseSOL(text string) (uint64, error) {
 func (m model) render() string {
 	var b strings.Builder
 	b.WriteString(m.header())
+	if !m.deps.Proven && m.deps.Address != "" {
+		b.WriteString("\n  " + m.st.warn.Render("read-only: this address was named, not proved") + "\n")
+	}
 	b.WriteString("\n\n")
 
 	switch m.view {
@@ -475,7 +513,9 @@ func (m model) renderHome() string {
 	b.WriteString(m.field("paid in", FormatUSD(acct.Deposits)))
 	b.WriteString(m.field("spent", FormatUSD(acct.Spent)))
 
-	if len(acct.Keys) == 0 {
+	if !m.deps.Proven {
+		b.WriteString("\n\n  " + m.st.dim.Render("keys are only shown to whoever holds the account's key") + "\n")
+	} else if len(acct.Keys) == 0 {
 		b.WriteString("\n\n  " + m.st.warn.Render("no API key yet") + "\n")
 		b.WriteString("  " + m.st.dim.Render("press k to mint one, then point any OpenAI client at https://"+m.endpointHost()) + "\n")
 	} else {
@@ -514,7 +554,12 @@ func (m model) renderDeposit() string {
 		FormatUSD(m.deps.Treasury.SolPriceUSD)+" of credit per SOL") + "\n\n")
 	b.WriteString("  " + m.st.label.Render("amount") + "      " + m.st.money.Render(m.amount+" SOL") + "\n\n")
 
-	if m.deps.SockPath == "" {
+	if !m.deps.Proven {
+		b.WriteString("  " + m.st.warn.Render("This address was named, not proved, so a deposit cannot be signed.") + "\n")
+		b.WriteString("  " + m.st.dim.Render("Forward an agent holding this address's key and reconnect with") + "\n")
+		b.WriteString("  " + m.st.dim.Render("the -A:") + "\n")
+		b.WriteString("  " + m.st.accent.Render("ssh-add ~/.ssh/id_ed25519 && ssh -A -i ~/.ssh/id_ed25519 "+m.endpointHost()) + "\n")
+	} else if m.deps.SockPath == "" {
 		b.WriteString("  " + m.st.errText.Render("this session has no forwarded agent, so there is nothing here that can sign.") + "\n")
 		b.WriteString("  " + m.st.dim.Render("reconnect with:  ssh -A "+Domain) + "\n")
 	} else {
@@ -579,6 +624,18 @@ func (m model) renderHelp() string {
 	b.WriteString("  " + m.st.dim.Render("you forwarded with ssh -A, and checks the transaction it gets back.") + "\n")
 	b.WriteString("  " + m.st.dim.Render("The same, more carefully, is at "+Domain+".") + "\n")
 	return b.String()
+}
+
+// notOwned is what every action that changes an account says without one.
+const notOwned = "this address was named, not proved. Forward an agent holding " +
+	"its key and reconnect with -A to change anything here."
+
+// refuse is what an action that needs proof answers with: the model carries
+// the reason straight away, rather than a command that delivers it on the next
+// tick. One keystroke should not have a delay between the key and the word no.
+func (m model) refuse(reason string) (tea.Model, tea.Cmd) {
+	m.notice = notice{noticeBad, reason}
+	return m, nil
 }
 
 func (m model) field(label, value string) string {
