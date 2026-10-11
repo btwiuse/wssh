@@ -63,17 +63,28 @@ func frame(st styles, width, height int, bar, body, footer string) string {
 		// top, and a frame open along one whole side reads as a panel still
 		// loading rather than as a window. Drawn in the box's own colour, so
 		// it is indistinguishable from the one the bar would have supplied.
-		b.WriteString(st.brand.Render("RouterCafe"))
+		// The name and the address, set in from the edges by the same two
+		// columns the bar sets them in by. On the screens with a bar they sit
+		// at the ends of that line, and a screen without one whose name is
+		// hard against column 0 looks like the same line drawn by somebody
+		// else.
+		b.WriteString(strings.Repeat(" ", barMargin) + st.brand.Render("RouterCafe"))
 		// The domain is dropped rather than wrapped when there is no room for
 		// it. A brand line that breaks in two on a narrow terminal is worse
 		// than a brand line without the address on it, and the address is in
 		// the help screen and the landing page anyway.
-		gap := width - lipgloss.Width("RouterCafe") - lipgloss.Width(Domain)
+		gap := width - barMargin*2 - lipgloss.Width("RouterCafe") - lipgloss.Width(Domain)
 		if gap >= 1 {
 			b.WriteString(strings.Repeat(" ", gap))
-			b.WriteString(st.dim.Render(Domain))
+			b.WriteString(st.dim.Render(Domain) + strings.Repeat(" ", barMargin))
 		}
-		b.WriteString("\n" + edge.Render(strings.Repeat("\u2500", width)))
+		// The edge is drawn here and not by the box, and it is drawn with the
+		// corners the box would have had: this line is the box's top edge, so
+		// it turns down into the box's own walls at both ends. A run of plain
+		// rule here is a lid that overhangs the box on each side - open
+		// underneath at the two corners, which is the shape a frame is not
+		// allowed to be.
+		b.WriteString("\n" + edge.Render(topEdge(width)))
 	}
 	// The page is wrapped to the inside of the box before it is counted.
 	// lipgloss wraps whatever is wider than that on its way into the border,
@@ -99,6 +110,21 @@ func frame(st styles, width, height int, bar, body, footer string) string {
 		b.WriteString("\n" + footer)
 	}
 	return b.String()
+}
+
+// topEdge is the line across the top of a box that has no bar over it: the
+// box's own top border, corners and all.
+//
+// It is a function of the width rather than a run of rule, because the two
+// ends are the whole of it. The box is drawn with its top unset so that a bar
+// can supply the edge instead; on the two screens with no bar the edge has to
+// come from here, and a run of rule with no corner on it at either end is a
+// frame open along its top at both corners.
+func topEdge(width int) string {
+	if width < 2 {
+		return strings.Repeat("\u2500", max(0, width))
+	}
+	return "\u250c" + strings.Repeat("\u2500", width-2) + "\u2510"
 }
 
 // edge is the box's own border colour, for the parts of its outline that are

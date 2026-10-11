@@ -320,15 +320,20 @@ its own reason: lipgloss wraps whatever is too wide on the way into the border,
 and counting the lines before it has done that is how a page of long sentences
 came out several lines taller than its window.
 
-The same care is in the screens that have no bar at all. The box has no top
-edge of its own - on the account screen the bar's bottom edge *is* it - so
-`frame` draws one in the box's own colour when there is no bar, and `chrome`
-counts that line. Leaving it out is how the frame ends up one line taller than
-the window it is filling, which is the bug `TestTheFrameIsClosedAtAnySize`
-exists for. On the bar's side, `carryBarEdge` runs the bottom edge on to the
-right-hand corner: the bar is as wide as the names in it and the box is as
-wide as the window, and without it the top of the frame simply stops a third of
-the way across the terminal.
+The same care is in the two screens that have no bar at all - the picker a
+connection that proved nothing gets, and the refusal. The box has no top edge
+of its own - on the account screen the bar's bottom edge *is* it - so `frame`
+draws one in the box's own colour when there is no bar, and `chrome` counts
+that line. Leaving the line out is how the frame ends up one line taller than
+the window it is filling; drawing it as a plain run of rule is how the frame
+ends up open at both top corners, because that line is the box's own edge and
+has to turn down into the box's walls at both ends. `topEdge` is that line,
+corners included.
+
+Those two screens also set the name and the address in from the edges by the
+same two columns the bar does. Without it the same line is drawn by two
+different rules, and the difference is what makes one program look like two -
+`TestTheScreensWithNoBarAgreeWithTheOnesThatHaveOne` is what stops that.
 
 ### What fits, and who decides
 

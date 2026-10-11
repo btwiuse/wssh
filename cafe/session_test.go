@@ -1680,6 +1680,39 @@ func TestEveryScreenFillsItsWindow(t *testing.T) {
 	}
 }
 
+// The two screens with no bar have to agree with the ones that have it about
+// where the name and the address sit, or the same line is drawn by two
+// different rules and the difference is what makes a program look like two.
+func TestTheScreensWithNoBarAgreeWithTheOnesThatHaveOne(t *testing.T) {
+	base := deps{
+		Catalogue: DefaultCatalogue(), Ledger: testLedger(t), Treasury: testTreasury(),
+	}
+	for _, w := range []int{100, 80, 60} {
+		m := model{st: newStyles(), view: screenHome, width: w, height: 30, deps: base}
+		account := strings.Split(stripForTest(m.frameString()), "\n")[barTop+1]
+
+		for name, out := range map[string]string{
+			"picker":  anonymousModel{deps: base, st: newStyles(), width: w, height: 30}.View().Content,
+			"refusal": refuseModel{reason: reasonText("no key on this connection"), width: w, height: 30}.View().Content,
+		} {
+			brand := strings.Split(stripForTest(out), "\n")[0]
+			// Both ends are set in by the same margin as the bar's line, and
+			// the name is in the same place on both. That is the whole of it:
+			// the same line, drawn by two rules, is what makes one program
+			// look like two.
+			if !strings.HasPrefix(brand, "  RouterCafe") {
+				t.Errorf("width %d: %s does not set the name in: %q", w, name, brand)
+			}
+			if !strings.HasSuffix(brand, "router.cafe  ") {
+				t.Errorf("width %d: %s does not set the address in: %q", w, name, brand)
+			}
+			if got, want := strings.Index(brand, "RouterCafe"), strings.Index(account, "RouterCafe"); got != want {
+				t.Errorf("width %d: %s puts the name at %d, the account screen at %d", w, name, got, want)
+			}
+		}
+	}
+}
+
 // The three screens have to agree on their shape, or the fix above has only
 // stopped them overflowing.
 func TestTheThreeScreensAreTheSameShape(t *testing.T) {
