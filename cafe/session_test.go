@@ -1488,7 +1488,7 @@ func TestClickingTheWordmarkGoesHome(t *testing.T) {
 	// And it is gone on a terminal with no room for it, with nothing left
 	// behind pretending otherwise.
 	small := m
-	small.width = 24
+	small.width = 20
 	_, now := small.frame()
 	if now.mark != (box{}) {
 		t.Error("a wordmark that was not drawn is still clickable")
@@ -1696,7 +1696,11 @@ func TestTheWordmarkIsDrawnExactlyAsItIsWritten(t *testing.T) {
 			// The mark is centred per line, which is what figlet's own output
 			// needs: its lines are different lengths and the space in front of
 			// the first one is part of the lettering.
-			lead := max(0, (inside-lipgloss.Width(want))/2)
+			// The mark is padded out to one width before it is centred, so
+			// that is what is centred too - a drawing whose lines are all a
+			// different length would otherwise be shifted a column per line.
+			want = want + strings.Repeat(" ", max(0, wordmarkWidth-len(want)))
+			lead := max(0, (inside-wordmarkWidth)/2)
 			if strings.TrimRight(got, " ") != strings.TrimRight(strings.Repeat(" ", lead)+want, " ") {
 				t.Errorf("width %d line %d:\n got %q\nwant %q", width, i, got, strings.Repeat(" ", lead)+want)
 			}
@@ -2188,7 +2192,7 @@ func TestTheNameIsATabAndTheAddressIsSetIn(t *testing.T) {
 	for _, page := range m.screenList() {
 		shown := m.show(page)
 		content, where := shown.frame()
-		drawn := strings.Contains(stripForTest(content), "▐█▌")
+		drawn := strings.Contains(stripForTest(content), "<_____________>___")
 		if drawn != (page == screenHome) {
 			t.Errorf("%s draws the wordmark: %v, want it on home only", pageName(page), drawn)
 		}

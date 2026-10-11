@@ -2002,10 +2002,18 @@ func (m *model) wordmark() string {
 	var b strings.Builder
 	b.WriteString("\n")
 	for i, line := range lines {
+		// Padded out to one width before it is centred. The drawing's lines
+		// are all a different length - it was made by hand where they were
+		// allowed to be - and centring each one on its own shifts it a column
+		// or two, which is the difference between a cup somebody drew and a cup
+		// a program drew.
+		if pad := wordmarkWidth - lipgloss.Width(line); pad > 0 {
+			line += strings.Repeat(" ", pad)
+		}
 		style := m.st.brand
-		if i == 0 {
+		if i < 3 {
 			// The steam is the same colour quieter than the cup, which is
-			// what makes it steam rather than a row of blocks above a cup.
+			// what makes it steam rather than three rows of punctuation.
 			style = m.st.brandDim
 		}
 		b.WriteString(lipgloss.PlaceHorizontal(inside, lipgloss.Center, style.Render(line)) + "\n")
@@ -2024,29 +2032,35 @@ func (m *model) wordmark() string {
 
 // wordmarkWidth is how wide the mark is, and how a page decides whether there
 // is room for it.
-const wordmarkWidth = 21
+const wordmarkWidth = 25
 
-// wordmark is the cup from `cmd/cafe/static/favicon-256.png`, drawn in blocks.
+// wordmark is the cup from `cmd/cafe/static/favicon-256.png`.
 //
-// It is the favicon rather than the name because the name is already on the
-// bar at the top of every screen, twenty-two columns above this, and a wordmark
-// under it is the same eight letters again. The cup is the thing the page is
-// about - money, and what it is spent on - and it is a picture, so it reads as
-// fast as a picture does.
+// It is the favicon rather than the name because the name is on the bar at the
+// top of every screen, twenty-two columns above this, and a wordmark under it
+// is the same eight letters again. The cup is the thing the page is about -
+// money, and what it is spent on - and it is a picture, so it reads as fast as
+// a picture does.
 //
-// Fitted by hand rather than sampled out of the PNG. Sampling is the obvious
-// way and it produces something appalling: the grid has to be half as fine as
-// the terminal's cells are tall, and at twenty-one columns what comes out is a
+// Drawn rather than sampled out of the PNG, because sampling is what a person
+// reaches for and it comes out appalling: the grid has to be half as fine as
+// the terminal's cells are tall, and at fifteen columns what comes out is a
 // smear rather than a cup.
 //
-// Blocks for the reason the three figlet versions were not: `|`, `_` and `/`
-// only look like strokes when the terminal's font joins them.
+// Ordinary characters, for the opposite reason to the versions before them:
+// `_`, `|`, `/` and `\` join up into a rim and a handle in any monospace
+// font, which is the whole of what a cup drawn this way has going for it.
 var wordmark = strings.Join([]string{
-	" ▄▄▄   ▄▄▃   ▄▄▃",
-	"█▀▀▀▀▀▀▀▀▀▀▀▀▀▄▄▄▄▄",
-	"█               ▐█▌",
-	"█               ▐█▌",
-	"█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄██",
+	"    (  )   (   )  )",
+	"     ) (   )  (  (",
+	"     ( )  (    ) )",
+	"     _____________",
+	"    <_____________>___",
+	"    |             |  )",
+	"    |             |  )",
+	" ___|             |__)",
+	"/    \\___________/    \\",
+	"\\_____________________/",
 }, "\n")
 
 func (m model) field(label, value string) string {
