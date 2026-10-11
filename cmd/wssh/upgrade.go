@@ -1,0 +1,82 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"runtime"
+
+	"github.com/creativeprojects/go-selfupdate"
+	"github.com/spf13/cobra"
+)
+
+// releaseSlug is where the binaries are published. go-selfupdate reads the
+// release assets from here, so the name has to be the repository the releases
+// are cut from and nothing else.
+const releaseSlug = "btwiuse/wssh"
+
+func newUpgradeCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "upgrade",
+		Short: "Replace this binary with the latest release",
+		Long: `Replace this binary with the latest release.
+
+Asks GitHub for the newest published release, compares it with the version
+this binary was built at, and downloads the asset for this platform over the
+running executable if there is anything newer.
+
+The version compared against comes from the build. A binary built with plain
+` + "`go build`" + ` reports "dev", and this refuses rather than guessing: "dev"
+is older than every release and older than none, and downloading something
+over a binary someone built on purpose is not what they asked for. Build with
+the version ldflags - see the Makefile - and this compares properly.
+
+Nothing is replaced until the download has finished and the new binary is in
+place, so a failed upgrade leaves the old one running.`,
+		Args: cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return upgrade(context.Background(), version)
+		},
+	}
+}
+
+func upgrade(ctx context.Context, currentVersion string) error {
+	// Before the network, not after it. A binary that does not know its own
+	// version has nothing to compare a release against, so asking GitHub is a
+	// request whose answer cannot be used. It also turns a local build into a
+	// network failure, which reads as somebody else's problem.
+	if currentVersion == "" || currentVersion == "dev" {
+		return fmt.Errorf(
+			"this binary reports no version, so there is nothing to compare against; " +
+				"build with -X main.version=<version>, or run the published asset")
+	}
+
+	latest, found, err := selfupdate.DetectLatest(ctx, selfupdate.ParseSlug(releaseSlug))
+	if err != nil {
+		return fmt.Errorf("could not reach %s to find the latest release: %w", releaseSlug, err)
+	}
+	if !found {
+		// Said with the platform in it, because the usual reason is that the
+		// release was cut without an asset for this one, and "not found"
+		// on its own sends people looking at the wrong end of it.
+		return fmt.Errorf(
+			"no release of %s has an asset for %s/%s; "+
+				"a release has to publish one for the upgrade to find it",
+			releaseSlug, runtime.GOOS, runtime.GOARCH)
+	}
+
+	if latest.LessOrEqual(currentVersion) {
+		return fmt.Errorf("%s is already the latest release", currentVersion)
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		return errors.New("could not find the running executable, so there is nothing to replace")
+	}
+	if err := selfupdate.UpdateTo(ctx, latest.AssetURL, latest.AssetName, exe); err != nil {
+		return fmt.Errorf("could not replace the binary at %s: %w", exe, err)
+	}
+	fmt.Fprintf(os.Stderr, "upgraded %s to %s\n", currentVersion, latest.Version())
+	return nil
+}
