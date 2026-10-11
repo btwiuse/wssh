@@ -1,10 +1,10 @@
 # Release configuration.
 #
-# Three binaries per platform, named `{binary}_{version}_{os}_{arch}`, because
+# Four binaries per platform, named `{binary}_{version}_{os}_{arch}`, because
 # that is what `wssh upgrade` looks for. It reads the release assets through
 # go-selfupdate, which matches on the platform suffix and takes the first asset
 # that fits - so the name has to carry the version, the platform and which of
-# the three binaries it is, and the upgrade command checks the last part itself
+# the four binaries it is, and the upgrade command checks the last part itself
 # rather than trusting the order GitHub happens to return them in.
 #
 # The version and commit are stamped in. Without them a released binary reports
@@ -30,10 +30,10 @@ before:
     # with the code. This has to come before the build below, and before
     # anything else, for the same reason.
     - go mod download all
-    # The browser client is a build artefact of the wssh binary, not a
-    # separate download: it is compiled into it and served from it. A release
-    # without it would ship a server whose front end dies on a 404, so it is
-    # built here rather than left to whoever cuts the release. It also has to
+    # The browser client is a build artefact of the wssh and cafe binaries, not
+    # a separate download: package webui compiles it in and serves it from
+    # memory. A release without it would ship a server whose front end dies on
+    # a 404, so it is built here rather than left to whoever cuts the release. It also has to
     # be the same Go release as the toolchain compiling it: ssh.wasm and
     # wasm_exec.js come as a pair and disagree about the runtime ABI
     # otherwise, which fails as a confusing web error rather than a build one.
@@ -43,6 +43,16 @@ builds:
   - id: wssh
     main: ./cmd/wssh
     binary: wssh
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.version={{ .Version }} -X main.commit={{ .FullCommit }}
+
+  - id: cafe
+    main: ./cmd/cafe
+    binary: cafe
     env:
       - CGO_ENABLED=0
     goos: [darwin, linux]
@@ -89,6 +99,14 @@ archives:
     # which include every README*, and the README in this repository is a
     # note to self rather than documentation - it has no business in a
     # published archive.
+    files:
+      - src: license*
+      - src: LICENSE*
+
+  - id: cafe
+    ids: [cafe]
+    formats: [tar.gz]
+    name_template: "{{ .Binary }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - src: license*
       - src: LICENSE*

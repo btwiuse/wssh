@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>RouterCafe: an OpenRouter you reach with ssh</title>
+<meta name="description" content="One API key, every model, one balance. Pay in SOL from the terminal. Your private key never leaves your machine." />
+<meta property="og:title" content="RouterCafe" />
+<meta property="og:description" content="An OpenRouter you reach with ssh. Deposit SOL, get an API key, point any OpenAI client at it." />
+<meta property="og:type" content="website" />
+<meta name="twitter:card" content="summary_large_image" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0f0e'/%3E%3Cpath d='M8 12l5 4-5 4' stroke='%2334d399' stroke-width='2.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M16 20h8' stroke='%2334d399' stroke-width='2.6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E" />
+
+<style>
+  /* ---------------------------------------------------------------------
+     RouterCafe's page.
+
+     One stylesheet, no build step, no framework, no font to download: the
+     page has to render on a cold cache over a websocket that is already
+     carrying a terminal, and every byte here is a byte the terminal does
+     not get. The type is the system stack and the mono is whatever the
+     reader already has for their shell, which is fitting for a product
+     that lives in one.
+     --------------------------------------------------------------------- */
+
+  :root {
+    --ink:      #070a0a;
+    --ink-2:    #0b1110;
+    --panel:    #0f1614;
+    --line:     #1c2724;
+    --line-2:   #27332f;
+    --fg:       #e6efeb;
+    --fg-dim:   #93a5a0;
+    --fg-faint: #5f7069;
+    --green:    #34d399;
+    --green-dk: #0d3a2c;
+    --amber:    #fbbf24;
+    --red:      #f87171;
+    --sky:      #38bdf8;
+
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+            "Liberation Mono", monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto,
+            "Helvetica Neue", Arial, sans-serif;
+
+    --measure: 1180px;
+    --pad: clamp(1.25rem, 5vw, 4rem);
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+  body {
+    margin: 0;
+    background:
+      radial-gradient(1100px 620px at 78% -12%, #0e2a21 0%, transparent 62%),
+      radial-gradient(760px 480px at 4% 6%, #0b1c22 0%, transparent 58%),
+      var(--ink);
+    color: var(--fg);
+    font-family: var(--sans);
+    font-size: 17px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection { background: rgba(52, 211, 153, .28); color: #fff; }
+
+  a { color: var(--green); text-decoration: none; }
+  a:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+  code, kbd, pre { font-family: var(--mono); }
+
+  .wrap { width: 100%; max-width: var(--measure); margin-inline: auto; padding-inline: var(--pad); }
+
+  /* ---- type ---- */
+  h1, h2, h3 { margin: 0; line-height: 1.12; letter-spacing: -0.022em; font-weight: 640; text-wrap: balance; }
+  h1 { font-size: clamp(2.5rem, 6.2vw, 4.35rem); }
+  h2 { font-size: clamp(1.7rem, 3.5vw, 2.5rem); }
+  h3 { font-size: 1.06rem; letter-spacing: -0.01em; }
+  p  { margin: 0; color: var(--fg-dim); }
+
+  .lede { font-size: clamp(1.05rem, 1.9vw, 1.24rem); color: var(--fg-dim); max-width: 40ch; }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: .74rem;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--green);
+    margin: 0 0 1.1rem;
+  }
+  .muted { color: var(--fg-faint); }
+  .small { font-size: .88rem; }
+
+  /* ---- nav ---- */
+  header.nav {
+    position: sticky; top: 0; z-index: 50;
+    backdrop-filter: blur(14px);
+    background: color-mix(in srgb, var(--ink) 82%, transparent);
+    border-bottom: 1px solid var(--line);
+  }
+  .nav .wrap {
+    display: flex; align-items: center; gap: 1.5rem;
+    height: 62px;
+  }
+  .brand {
+    display: inline-flex; align-items: center; gap: .55rem;
+    font-family: var(--mono); font-weight: 700; letter-spacing: -.01em;
+    color: var(--fg); font-size: 1rem;
+  }
+  .brand:hover { text-decoration: none; }
+  .brand .dot {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 0 4px rgba(52, 211, 153, .14);
+  }
+  .nav nav { display: flex; gap: 1.4rem; margin-left: auto; }
+  .nav nav a { color: var(--fg-dim); font-size: .9rem; }
+  .nav nav a:hover { color: var(--fg); text-decoration: none; }
+  @media (max-width: 780px) { .nav nav { display: none; } }
+
+  /* ---- buttons ---- */
+  .btn {
+    display: inline-flex; align-items: center; gap: .5rem;
+    padding: .62rem 1.05rem;
+    border: 1px solid var(--line-2);
+    border-radius: 9px;
+    background: var(--panel);
+    color: var(--fg);
+    font-family: var(--mono); font-size: .88rem;
+    white-space: nowrap;
+    transition: border-color .15s, background .15s, transform .15s;
+  }
+  .btn:hover { border-color: var(--green); text-decoration: none; transform: translateY(-1px); }
+  .btn.primary {
+    background: var(--green); border-color: var(--green); color: #04120d; font-weight: 700;
+  }
+  .btn.primary:hover { background: #4ee3a8; }
+  .btn.big { padding: .82rem 1.25rem; font-size: .95rem; }
+
+  /* ---- hero ---- */
+  .hero { padding: clamp(3.5rem, 9vw, 7rem) 0 clamp(3rem, 7vw, 5.5rem); }
+  .hero-grid {
+    display: grid; grid-template-columns: minmax(0, 1.02fr) minmax(0, 1fr);
+    gap: clamp(2rem, 5vw, 4rem); align-items: center;
+  }
+  @media (max-width: 960px) { .hero-grid { grid-template-columns: 1fr; } }
+
+  .hero h1 em { font-style: normal; color: var(--green); }
+  .hero .lede { margin-top: 1.35rem; }
+  .cta-row { display: flex; flex-wrap: wrap; gap: .7rem; margin-top: 2rem; }
+
+  .sshline {
+    margin-top: 1.7rem;
+    display: inline-flex; align-items: center; gap: .7rem;
+    padding: .55rem .85rem;
+    border: 1px solid var(--line); border-radius: 10px;
+    background: var(--ink-2);
+    font-family: var(--mono); font-size: .98rem;
+  }
+  .sshline .prompt { color: var(--green); }
+  .caret {
+    display: inline-block; width: .55em; height: 1.05em;
+    background: var(--green); vertical-align: -.18em;
+    animation: blink 1.15s steps(1) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .caret { animation: none; } }
+
+  /* ---- terminal window ---- */
+  .term {
+    border: 1px solid var(--line-2);
+    border-radius: 13px;
+    background: linear-gradient(180deg, #0d1412, #0a100f);
+    box-shadow: 0 32px 90px -40px rgba(0,0,0,.9), 0 0 0 1px rgba(52,211,153,.05);
+    overflow: hidden;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.66;
+  }
+  .term-body { tab-size: 2; }
+  .term-bar {
+    display: flex; align-items: center; gap: .5rem;
+    padding: .55rem .8rem;
+    border-bottom: 1px solid var(--line);
+    background: #0a100f;
+    color: var(--fg-faint);
+    font-size: .76rem;
+  }
+  .term-bar .lamp { width: 10px; height: 10px; border-radius: 50%; background: #24312d; }
+  .term-bar .lamp.on { background: var(--green); }
+  .term-bar .title { margin-left: .4rem; }
+  .term-body { padding: 1.05rem 1.15rem 1.2rem; white-space: pre; overflow-x: auto; }
+  .t-brand  { color: var(--green); font-weight: 700; }
+  .t-domain { color: var(--fg-faint); }
+  .t-label  { color: var(--fg-faint); }
+  .t-value  { color: var(--fg); }
+  .t-money  { color: #fff; font-weight: 700; }
+  .t-accent { color: var(--sky); }
+  .t-warn   { color: var(--amber); }
+  .t-title  { color: var(--fg); font-weight: 700; }
+
+  /* ---- sections ---- */
+  section { padding: clamp(3rem, 7vw, 5.5rem) 0; }
+  .sec-head { max-width: 60ch; margin-bottom: 2.6rem; }
+  .sec-head p { margin-top: .9rem; }
+
+  .rule { height: 1px; background: var(--line); border: 0; margin: 0; }
+
+  /* ---- cards ---- */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1.1rem; }
+  .card {
+    padding: 1.4rem;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: linear-gradient(180deg, var(--panel), var(--ink-2));
+  }
+  .card h3 { margin-bottom: .5rem; }
+  .card p { font-size: .93rem; }
+  .card .n {
+    font-family: var(--mono); font-size: .78rem; color: var(--green);
+    display: block; margin-bottom: .7rem; letter-spacing: .1em;
+  }
+
+  /* ---- steps ---- */
+  .steps { display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .step { display: grid; grid-template-columns: 4.5rem 1fr; gap: 1rem; padding: 1.5rem 1.6rem; background: var(--ink-2); }
+  @media (max-width: 620px) { .step { grid-template-columns: 1fr; gap: .5rem; } }
+  .step .k { font-family: var(--mono); color: var(--green); font-size: .95rem; }
+  .step h3 { margin-bottom: .35rem; }
+  .step p { font-size: .93rem; }
+  .step pre {
+    margin: .8rem 0 0; padding: .6rem .75rem;
+    background: #060a09; border: 1px solid var(--line);
+    border-radius: 8px; font-size: .82rem; color: var(--fg);
+    overflow-x: auto;
+  }
+
+  /* ---- table ---- */
+  .tablewrap { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+  th, td { text-align: left; padding: .78rem 1rem; border-bottom: 1px solid var(--line); }
+  th { font-family: var(--mono); font-size: .74rem; letter-spacing: .1em; text-transform: uppercase; color: var(--fg-faint); font-weight: 500; }
+  tbody tr:last-child td { border-bottom: 0; }
+  tbody tr:hover { background: rgba(255,255,255,.017); }
+  td.model { font-family: var(--mono); color: var(--fg); }
+  td.num { font-family: var(--mono); color: var(--fg-dim); text-align: right; white-space: nowrap; }
+  td.free { color: var(--green); }
+
+  /* ---- security ---- */
+  .split { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1.05fr); gap: clamp(2rem,5vw,4rem); align-items: start; }
+  @media (max-width: 900px) { .split { grid-template-columns: 1fr; } }
+  .refusals { display: grid; gap: .7rem; }
+  .refusal {
+    display: grid; grid-template-columns: 1fr auto; gap: 1rem; align-items: baseline;
+    padding: .8rem 1rem; border: 1px solid var(--line); border-radius: 10px;
+    background: var(--ink-2); font-size: .9rem;
+  }
+  .refusal code { color: var(--fg); font-size: .86rem; }
+  .refusal .res { color: var(--red); font-family: var(--mono); font-size: .78rem; white-space: nowrap; }
+  .refusal .res.ok { color: var(--green); }
+
+  .checks { display: grid; gap: 1rem; }
+  .check { display: grid; grid-template-columns: 1.5rem 1fr; gap: .8rem; }
+  .check .tick { color: var(--green); font-family: var(--mono); }
+  .check h3 { margin-bottom: .25rem; }
+  .check p { font-size: .91rem; }
+
+  /* ---- faq ---- */
+  details { border-bottom: 1px solid var(--line); padding: 1.15rem 0; }
+  summary {
+    cursor: pointer; list-style: none; display: flex; gap: .8rem;
+    font-weight: 600; font-size: 1rem; color: var(--fg);
+  }
+  summary::-webkit-details-marker { display: none; }
+  summary::before { content: "+"; color: var(--green); font-family: var(--mono); }
+  details[open] summary::before { content: "−"; }
+  details p { margin-top: .7rem; padding-left: 1.6rem; font-size: .93rem; max-width: 68ch; }
+
+  /* ---- cta ---- */
+  .cta {
+    margin: clamp(3rem,7vw,5rem) 0;
+    padding: clamp(2rem,5vw,3.4rem);
+    border: 1px solid var(--line-2); border-radius: 16px;
+    background:
+      radial-gradient(600px 300px at 20% 0%, rgba(52,211,153,.10), transparent 70%),
+      var(--panel);
+    text-align: center;
+  }
+  .cta h2 { margin-bottom: .8rem; }
+  .cta p { max-width: 46ch; margin-inline: auto; }
+  .cta .cta-row { justify-content: center; margin-top: 1.8rem; }
+
+  .facts {
+    display: flex; flex-wrap: wrap; justify-content: center; gap: .5rem 2.2rem;
+    margin: 1.8rem 0 0; padding: 1rem 0 0; border-top: 1px solid var(--line);
+  }
+  .facts div { display: flex; align-items: baseline; gap: .55rem; }
+  .facts dt {
+    font-family: var(--mono); font-size: .72rem; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--fg-faint);
+  }
+  .facts dd { margin: 0; font-size: .84rem; color: var(--fg-dim); }
+  .facts code { font-size: .84rem; word-break: break-all; }
+
+  /* ---- footer ---- */
+  footer {
+    border-top: 1px solid var(--line);
+    padding: 2.6rem 0 3rem;
+    font-size: .87rem; color: var(--fg-faint);
+  }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: 1rem 2rem; align-items: center; }
+  footer a { color: var(--fg-dim); }
+  footer .sp { margin-left: auto; font-family: var(--mono); }
+
+  /* ---- reveal ----
+     Gated on a class the script adds to <html>. Without it the content is
+     simply there, which is the only safe default for a page whose whole job
+     is to be read: an animation that can leave a section invisible is worse
+     than no animation. The script also reveals everything after a moment,
+     so a reader whose browser never fires the observer still gets the page. */
+  .js .r { opacity: 0; transform: translateY(14px); transition: opacity .55s ease, transform .55s ease; }
+  .js .r.in { opacity: 1; transform: none; }
+  @media (prefers-reduced-motion: reduce) { .js .r { opacity: 1; transform: none; } }
+</style>
+</head>
+
+<body>
+
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href="/"><span class="dot"></span> RouterCafe</a>
+    <nav>
+      <a href="#how">How it works</a>
+      <a href="#terminal">The terminal</a>
+      <a href="#routes">Routes</a>
+      <a href="#security">Security</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <a class="btn primary" href="#start">ssh -A router.cafe</a>
+  </div>
+</header>
+
+<main>
+
+<!-- ================================================================ -->
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <p class="eyebrow">OpenRouter, from your terminal</p>
+      <h1>One key. Every model.<br />Reached with <em>ssh</em>.</h1>
+      <p class="lede">
+        RouterCafe is a model router with an OpenAI-compatible API, one balance
+        across every provider, and a front end that is a terminal you already
+        know how to open. Pay in SOL. Your private key never leaves your machine.
+      </p>
+
+      <div class="sshline">
+        <span class="prompt">$</span>
+        <span>ssh -A router.cafe</span>
+        <span class="caret" aria-hidden="true"></span>
+      </div>
+
+      <div class="cta-row">
+        <a class="btn primary big" href="#start">Get an API key</a>
+        <a class="btn big" href="/app/">Open it in a browser</a>
+      </div>
+    </div>
+
+    <!-- The terminal on the right is the real session UI, drawn with the
+         words it actually prints. Nothing here is fetched: the page is one
+         file so that a reader on a slow connection sees the product before
+         the network finishes arguing. -->
+    <div class="term" id="terminal">
+      <div class="term-bar">
+        <span class="lamp on"></span><span class="lamp"></span><span class="lamp"></span>
+        <span class="title">ssh -A router.cafe</span>
+      </div>
+      <div class="term-body"><span class="t-brand">RouterCafe</span><span class="t-domain">                            router.cafe</span>
+
+<span class="t-label">account  </span><span class="t-value">7xKX…gAsU</span>
+<span class="t-label">balance  </span><span class="t-money">$12.345600</span>
+<span class="t-label">paid in  </span><span class="t-value">$12.345600</span>
+<span class="t-label">spent    </span><span class="t-value">$0.482100</span>
+
+<span class="t-title">api keys</span>
+  <span class="t-accent">rc_live_...3f9a</span><span class="t-label">   last used just now</span>
+
+<span class="t-title">use it</span>
+<span class="t-label">export </span><span class="t-value">OPENAI_BASE_URL=https://router.cafe/v1</span>
+<span class="t-label">export </span><span class="t-value">OPENAI_API_KEY=rc_live_…</span>
+
+<span class="t-title">cheapest routes</span>
+  <span class="t-value">gpt-4o-mini       </span><span class="t-label">openai  </span><span class="t-label">$0.15 in  ·  $0.60 out</span>
+  <span class="t-value">gemini-2.5-flash</span> <span class="t-label">google  </span><span class="t-label">$0.30 in  ·  $2.50 out</span>
+  <span class="t-value">gpt-4.1-mini     </span><span class="t-label">openai  </span><span class="t-label">$0.40 in  ·  $1.60 out</span>
+
+<span class="t-label">b</span> balance  <span class="t-label">d</span> deposit  <span class="t-label">k</span> api key  <span class="t-label">m</span> models  <span class="t-label">?</span> help  <span class="t-label">q</span> quit</div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================ -->
+<section id="how">
+  <div class="wrap">
+    <div class="sec-head r">
+      <p class="eyebrow">The shape of it</p>
+      <h2>Four steps, and the fourth is optional</h2>
+      <p>
+        There is no sign-up, because there is nothing to sign up for: the key
+        you connect with is already a Solana account, and that account is the
+        balance.
+      </p>
+    </div>
+
+    <div class="steps r">
+      <div class="step">
+        <div class="k">01</div>
+        <div>
+          <h3>Connect</h3>
+          <p>
+            An ed25519 key is a Solana account, so the key that authenticates
+            your SSH session names the account the money belongs to. No email,
+            no password, no onboarding.
+          </p>
+<pre>ssh -A router.cafe</pre>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="k">02</div>
+        <div>
+          <h3>Deposit</h3>
+          <p>
+            Press <code>d</code>, type an amount. The server asks your own agent,
+            reached through the <code>ssh -A</code> you forwarded, for a
+            signature on a transfer. Your key never crosses the connection.
+          </p>
+          <p class="small muted" style="margin-top:.5rem">
+            The transaction that comes back is checked against what was asked
+            for before it is broadcast: one System transfer, two accounts, the
+            amount you typed.
+          </p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="k">03</div>
+        <div>
+          <h3>Mint a key</h3>
+          <p>
+            Press <code>k</code>. A <code>rc_live_…</code> key is shown once,
+            and only its fingerprint is kept, so the server's own ledger is not
+            a file of live credentials.
+          </p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="k">04</div>
+        <div>
+          <h3>Point a client at it</h3>
+          <p>
+            Anything that speaks the OpenAI API works. Swap the base URL and the
+            key, and the model names are RouterCafe's, so they do not change
+            when a provider does.
+          </p>
+<pre>export OPENAI_BASE_URL=https://router.cafe/v1
+export OPENAI_API_KEY=rc_live_...</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================ -->
+<section id="security">
+  <div class="wrap">
+    <div class="sec-head r">
+      <p class="eyebrow">The part that is different</p>
+      <h2>There is no shell. Not hidden, not disabled, not behind a flag.</h2>
+      <p>
+        Every public SSH service eventually grows a command that runs something.
+        This one never does, and the reason is structural rather than a promise:
+        the session <em>is</em> a program, so there is no path from a connection
+        to a process.
+      </p>
+    </div>
+
+    <div class="split r">
+      <div>
+        <div class="refusals">
+          <div class="refusal">
+            <code>ssh router.cafe uptime</code>
+            <span class="res">refused, exit 1</span>
+          </div>
+          <div class="refusal">
+            <code>ssh -s router.cafe sftp</code>
+            <span class="res">subsystem refused</span>
+          </div>
+          <div class="refusal">
+            <code>ssh -L 8080:127.0.0.1:8080 router.cafe</code>
+            <span class="res">no channel</span>
+          </div>
+          <div class="refusal">
+            <code>ssh -D 1080 router.cafe</code>
+            <span class="res">no channel</span>
+          </div>
+          <div class="refusal">
+            <code>ssh -A router.cafe</code>
+            <span class="res ok">the session UI</span>
+          </div>
+        </div>
+        <p class="small muted" style="margin-top:1rem">
+          The only four things a connection can reach: the UI, the ledger, the
+          API, and a signature request to the agent you forwarded.
+        </p>
+      </div>
+
+      <div class="checks">
+        <div class="check">
+          <span class="tick">✓</span>
+          <div>
+            <h3>Your key stays yours</h3>
+            <p>
+              A deposit is an ordinary signature request to the ssh-agent your
+              client forwarded. The private key is never sent, and the server
+              never holds one.
+            </p>
+          </div>
+        </div>
+        <div class="check">
+          <span class="tick">✓</span>
+          <div>
+            <h3>The transaction is read back before it is sent</h3>
+            <p>
+              The signed bytes are decoded and checked: one System Program
+              transfer, the fee payer is the account paying, no writable account
+              other than the source and the treasury, and the amount is the
+              amount you typed. Anything else is refused and nothing is
+              broadcast.
+            </p>
+          </div>
+        </div>
+        <div class="check">
+          <span class="tick">✓</span>
+          <div>
+            <h3>Balances are integers</h3>
+            <p>
+              Credit is counted in millionths of a dollar in an int64, and a
+              request reserves the most it could cost before it starts and is
+              refunded the difference afterwards. A balance cannot go negative
+              and there is no rounding rule anywhere near the decision.
+            </p>
+          </div>
+        </div>
+        <div class="check">
+          <span class="tick">✓</span>
+          <div>
+            <h3>The ledger is not a credential file</h3>
+            <p>
+              API keys are stored as SHA-256 digests. A copy of the ledger gives
+              an attacker balances and fingerprints, not keys.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================ -->
+<section id="routes">
+  <div class="wrap">
+    <div class="sec-head r">
+      <p class="eyebrow">What it routes to</p>
+      <h2>The name you send is the model you get</h2>
+      <p>
+        A request naming a model this router does not have is refused by name.
+        Guessing at the nearest one is how a request meant for one model quietly
+        gets billed as another.
+      </p>
+    </div>
+
+    <div class="tablewrap r">
+      <table>
+        <thead>
+          <tr>
+            <th>model</th><th>provider</th>
+            <th style="text-align:right">input / 1M</th>
+            <th style="text-align:right">output / 1M</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td class="model">routercafe/free</td><td class="muted">pooled</td><td class="num free">free</td><td class="num free">free</td></tr>
+          <tr><td class="model">gpt-4o-mini</td><td class="muted">openai</td><td class="num">$0.15</td><td class="num">$0.60</td></tr>
+          <tr><td class="model">gemini-2.5-flash</td><td class="muted">google</td><td class="num">$0.30</td><td class="num">$2.50</td></tr>
+          <tr><td class="model">gpt-4.1-mini</td><td class="muted">openai</td><td class="num">$0.40</td><td class="num">$1.60</td></tr>
+          <tr><td class="model">gpt-4.1</td><td class="muted">openai</td><td class="num">$2.00</td><td class="num">$8.00</td></tr>
+          <tr><td class="model">gemini-2.5-pro</td><td class="muted">google</td><td class="num">$1.25</td><td class="num">$10.00</td></tr>
+          <tr><td class="model">claude-sonnet-4-5</td><td class="muted">anthropic</td><td class="num">$3.00</td><td class="num">$15.00</td></tr>
+          <tr><td class="model">claude-opus-4-1</td><td class="muted">anthropic</td><td class="num">$15.00</td><td class="num">$75.00</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="small muted r" style="margin-top:1rem">
+      List prices, in the units OpenRouter publishes, so the two can be compared
+      by eye. Every deposit records the rate it was credited at, so changing the
+      rate never rewrites somebody's history.
+    </p>
+  </div>
+</section>
+
+<!-- ================================================================ -->
+<section id="faq">
+  <div class="wrap" style="max-width:880px">
+    <div class="sec-head r">
+      <p class="eyebrow">Questions people actually ask</p>
+      <h2>Before you connect</h2>
+    </div>
+
+    <div class="r">
+      <details>
+        <summary>Why not just use OpenRouter?</summary>
+        <p>
+          You may well. RouterCafe is the same shape with two differences: you
+          pay in SOL from the terminal, and the front end is a terminal session
+          rather than a dashboard. If you want a web console and a card, they are
+          the better product.
+        </p>
+      </details>
+      <details>
+        <summary>What does a deposit cost?</summary>
+        <p>
+          The Solana network fee, which is a few thousand lamports, taken out of
+          the amount you send. Deposits below roughly 0.00001 SOL are refused
+          rather than spent entirely on the fee, and the TUI says so before you
+          sign anything.
+        </p>
+      </details>
+      <details>
+        <summary>Why does it need <code>ssh -A</code>?</summary>
+        <p>
+          Because that is how it asks your key to sign. Without agent
+          forwarding there is no way for the server to reach a key that is on
+          your machine, and it would have to ask you to hand it over, which is
+          exactly the thing it should not do. The deposit screen tells you this
+          rather than failing silently.
+        </p>
+      </details>
+      <details>
+        <summary>Can I use a wallet instead of an SSH key?</summary>
+        <p>
+          Yes. The browser terminal at <a href="/app/">/app</a> signs in with a
+          Solana wallet and shows the transaction for you to approve before it is
+          sent, which is the same flow through a different key holder.
+        </p>
+      </details>
+      <details>
+        <summary>What happens to my key if it leaks?</summary>
+        <p>
+          Press <code>k</code> and revoke it, then mint another. The balance
+          belongs to the account rather than to the key, so revoking does not
+          touch your credit.
+        </p>
+      </details>
+      <details>
+        <summary>Is the rate fixed?</summary>
+        <p>
+          The SOL price is set by whoever runs this instance and recorded on
+          every deposit, so what you were credited at is not something that can
+          change afterwards. It is shown on the deposit screen before you sign.
+        </p>
+      </details>
+      <details>
+        <summary>Can I self-host it?</summary>
+        <p>
+          Yes. It is one binary and one flag:
+          <code>cafe --treasury &lt;address&gt; --upstream &lt;url&gt; --upstream-key &lt;key&gt;</code>.
+          The ledger is a JSON file; back it up or do not.
+        </p>
+      </details>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================ -->
+<section id="start">
+  <div class="wrap">
+    <div class="cta r">
+      <h2>The terminal is the whole product</h2>
+      <p>
+        Connect, deposit, and take a key. Everything after that is your usual
+        OpenAI client with two environment variables changed.
+      </p>
+      <div class="cta-row">
+        <a class="btn primary big" href="/app/">Open the terminal</a>
+        <a class="btn big" href="#faq">Read the FAQ</a>
+      </div>
+      <dl class="facts">
+        <div><dt>deposits to</dt><dd><code id="treasury">__ROUTERCAFE_TREASURY__</code></dd></div>
+        <div><dt>sol price</dt><dd><code>$__ROUTERCAFE_SOL_PRICE__ per SOL</code></dd></div>
+        <div><dt>provider</dt><dd><code id="provider">__ROUTERCAFE_UPSTREAM__</code></dd></div>
+      </dl>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>RouterCafe</span>
+    <a href="/app/">terminal</a>
+    <a href="#security">security</a>
+    <a href="#routes">routes</a>
+    <span class="sp">router.cafe</span>
+  </div>
+</footer>
+
+<script>
+  // Reveal on scroll, in a way that cannot hide the page.
+  //
+  // The class is added first and only by this script, so the hidden state
+  // exists if and only if something is here to undo it. The fallback timer is
+  // the other half: an IntersectionObserver that never fires (a background
+  // tab, an embedded reader, a browser that does not run callbacks for a
+  // hidden document) would otherwise leave whole sections permanently blank,
+  // and a pitch deck with blank sections is a pitch deck with nothing to say.
+  (function () {
+    var targets = Array.prototype.slice.call(document.querySelectorAll('.r'));
+    if (!targets.length) return;
+
+    var show = function (el) { el.classList.add('in'); };
+
+    if (!('IntersectionObserver' in window) ||
+        matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      targets.forEach(show);
+      return;
+    }
+
+    document.documentElement.classList.add('js');
+
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (!e.isIntersecting) return;
+        show(e.target);
+        io.unobserve(e.target);
+      });
+    }, { rootMargin: '0px 0px -4% 0px', threshold: 0 });
+
+    targets.forEach(function (t) { io.observe(t); });
+    setTimeout(function () {
+      targets.forEach(function (t) { show(t); io.unobserve(t); });
+    }, 2500);
+  })();
+
+  // The values on this instance are rendered server side, and each is left
+  // saying so when it is not configured rather than being quietly blank: a
+  // page that shows an empty deposit address is worse than one that admits
+  // there is not one.
+  (function () {
+    var fill = function (id, fallback) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      if (!el.textContent.trim()) el.textContent = fallback;
+    };
+    fill('treasury', 'not configured on this instance');
+    fill('provider', 'not configured on this instance');
+  })();
+</script>
+
+</body>
+</html>
