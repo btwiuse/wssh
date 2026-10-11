@@ -178,8 +178,37 @@ balance.
 | `ssh -A` with no address in the username | lists the agent's keys to pick from |
 | `ssh` with neither | the notice: how to get a key |
 
-`--require-key` turns it off and restores a plain refusal, for an operator who
-would rather nobody without a key hear from the server at all.
+**A connection that names nothing is not refused, and it is not a wall.** With
+no agent and no address in the username there is nothing to show, so it gets a
+landing screen: what this is, and the two ways in. Two, not one, because the
+other one works without a key at all:
+
+```
+An OpenRouter you reach with ssh.
+
+to open your own account:
+ssh-add ~/.ssh/id_ed25519
+ssh -A -i ~/.ssh/id_ed25519 router.cafe
+
+to look at any account, no key needed:
+ssh <address>@router.cafe
+```
+
+`--require-key` turns anonymous access off and restores a plain refusal, for
+an operator who would rather nobody without a key hear from the server at all.
+
+### What is still impossible, and why
+
+`ssh -i ~/.ssh/id_ed25519 router.cafe` with no `-A` cannot reach the account
+for that key, and no server-side change makes it. The key file is on the
+client; the only thing the protocol carries afterwards is the session channel,
+and by then the handshake is over. `-i` reaches the server as an
+authentication *offer*, and the offer never happens because the client's `none`
+probe was already accepted.
+
+That is why the landing screen exists rather than an account view: there is no
+account to view until something proves one, and the cheapest thing that proves
+one is an agent that will sign.
 
 `wssh.Options.AllowNoAuth` is the switch underneath. It composes with the
 wallet sign-in hook rather than replacing it, so opening the door does not
