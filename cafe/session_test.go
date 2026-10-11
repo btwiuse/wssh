@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"charm.land/wish/v2"
@@ -1159,5 +1160,134 @@ func TestTheAmountFieldLooksDifferentWhenFocused(t *testing.T) {
 	m.focus = false
 	if !strings.Contains(m.amountField(), "1.5") {
 		t.Errorf("unfocusing the field hid what was typed: %q", m.amountField())
+	}
+}
+
+// hjkl has to move the cursor, or the list is decoration. Update hands back a
+// new list rather than moving this one, so a caller who drops it has a cursor
+// that looks like it works and does nothing.
+func TestTheListCursorMoves(t *testing.T) {
+	m := model{
+		st: newStyles(), view: screenModels, focus: true,
+		deps: deps{Catalogue: DefaultCatalogue(), Proven: true}, width: 100, height: 40,
+	}
+	m.syncLists()
+	if n := len(m.routes.Items()); n < 3 {
+		t.Fatalf("the catalogue has %d routes, too few to move a cursor in", n)
+	}
+
+	for _, k := range []string{"j", "j", "k"} {
+		next, _ := m.onKey(tea.KeyPressMsg(tea.Key{Code: rune(k[0]), Text: k}))
+		m = next.(model)
+	}
+	if got := m.routes.Index(); got != 1 {
+		t.Errorf("j j k left the cursor on row %d, want 1", got)
+	}
+
+	// g and G are the ends, which is what makes a long list navigable without
+	// holding down a key.
+	next, _ := m.onKey(tea.KeyPressMsg(tea.Key{Code: 'G', Text: "G"}))
+	m = next.(model)
+	if got, last := m.routes.Index(), len(m.routes.Items())-1; got != last {
+		t.Errorf("G left the cursor on row %d of %d, want the last", got, last+1)
+	}
+	next, _ = m.onKey(tea.KeyPressMsg(tea.Key{Code: 'g', Text: "g"}))
+	if got := next.(model).routes.Index(); got != 0 {
+		t.Errorf("g left the cursor on row %d, want the first", got)
+	}
+}
+
+// The whole reason for a hand-written keymap. A list that answered to b, d or
+// u for paging would take three of the page shortcuts, and the footer at the
+// bottom of every screen would be lying on the two screens where it matters
+// most.
+func TestAListCannotTakeAPageShortcut(t *testing.T) {
+	keys := []string{"b", "d", "u", "f"}
+	km := listKeyMap()
+	bindings := []string{}
+	for _, b := range []key.Binding{km.PrevPage, km.NextPage} {
+		bindings = append(bindings, b.Keys()...)
+	}
+	for _, k := range keys {
+		for _, bound := range bindings {
+			if bound == k {
+				t.Errorf("paging is bound to %q, which is a page shortcut here", k)
+			}
+		}
+	}
+	if got := km.Quit.Keys(); len(got) != 0 {
+		t.Errorf("the list still answers to %v; q is this program's disconnect", got)
+	}
+	if got := km.Filter.Keys(); len(got) != 0 {
+		t.Errorf("the list still answers to %v; a filter would want esc", got)
+	}
+}
+
+// An unfocused list is a page. That is what keeps the footer true, and it is
+// what stops a list from swallowing a letter on its way to another screen.
+func TestAnUnfocusedListStillLetsThePageShortcutsThrough(t *testing.T) {
+	for _, tc := range []struct {
+		key  string
+		want screen
+	}{
+		{"b", screenHome},
+		{"m", screenModels},
+		{"k", screenKeys},
+		{"d", screenDeposit},
+	} {
+		m := model{
+			st: newStyles(), view: screenModels,
+			deps: deps{Catalogue: DefaultCatalogue(), Proven: true}, width: 100, height: 40,
+		}
+		m.syncLists()
+		next, _ := m.onKey(tea.KeyPressMsg(tea.Key{Code: rune(tc.key[0]), Text: tc.key}))
+		if got := next.(model).view; got != tc.want {
+			t.Errorf("%q on an unfocused routes list went to %v, want %v", tc.key, got, tc.want)
+		}
+	}
+}
+
+// Enter means different things on the two lists, and the one where it means
+// nothing has to say so rather than sitting there looking like a dead key.
+func TestEnterMeansSomethingDifferentOnEachList(t *testing.T) {
+	ledger := testLedger(t)
+	d := deps{
+		Address: treasuryAddress, Ledger: ledger, Treasury: testTreasury(),
+		Catalogue: DefaultCatalogue(), Proven: true, Host: Domain,
+	}
+	m := model{st: newStyles(), view: screenModels, focus: true, deps: d, width: 100, height: 40}
+	m.syncLists()
+
+	next, _ := m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	got := next.(model)
+	if got.notice.kind != noticeBad {
+		t.Errorf("enter on the routes list gave %+v, want it to say a route is not chosen here", got.notice)
+	}
+}
+
+// The cursor has to survive a refresh, or a background balance re-read moves
+// the target out from under the enter that was about to follow it.
+func TestRefreshingKeepsTheCursorOnTheSameKey(t *testing.T) {
+	ledger := testLedger(t)
+	for range 4 {
+		if _, err := ledger.MintKey(treasuryAddress, ""); err != nil {
+			t.Fatalf("MintKey: %v", err)
+		}
+	}
+	d := deps{
+		Address: treasuryAddress, Ledger: ledger, Treasury: testTreasury(),
+		Catalogue: DefaultCatalogue(), Proven: true, Host: Domain,
+	}
+	m := model{st: newStyles(), view: screenKeys, deps: d, account: ledger.Account(treasuryAddress), width: 100, height: 40}
+	m.syncLists()
+
+	next, _ := m.onKey(tea.KeyPressMsg(tea.Key{Code: 'j', Text: "j"}))
+	m = next.(model)
+	m.apiKeys.Select(2)
+	before := m.apiKeys.Index()
+
+	next, _ = m.Update(refreshedMsg{account: ledger.Account(treasuryAddress)})
+	if got := next.(model).apiKeys.Index(); got != before {
+		t.Errorf("a refresh moved the cursor from %d to %d", before, got)
 	}
 }

@@ -3,11 +3,16 @@ module github.com/routercafe/routercafe
 go 1.27.0
 
 require (
+	charm.land/bubbles/v2 v2.2.1
+	charm.land/bubbletea/v2 v2.0.10
 	charm.land/fang/v2 v2.0.1
+	charm.land/lipgloss/v2 v2.0.6
 	charm.land/log/v2 v2.0.1
 	charm.land/ssh v0.4.3
 	charm.land/wish/v2 v2.0.5
+	github.com/charmbracelet/keygen v0.5.4
 	github.com/coder/websocket v1.8.15
+	github.com/creativeprojects/go-selfupdate v1.6.0
 	github.com/spf13/cobra v1.9.1
 	github.com/webteleport/wtf v0.1.33
 	golang.org/x/crypto v0.57.0
@@ -15,17 +20,15 @@ require (
 )
 
 require (
-	charm.land/bubbletea/v2 v2.0.10 // indirect
-	charm.land/lipgloss/v2 v2.0.6 // indirect
 	code.gitea.io/sdk/gitea v0.23.2 // indirect
 	github.com/42wim/httpsig v1.2.4 // indirect
 	github.com/Masterminds/semver/v3 v3.5.0 // indirect
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be // indirect
+	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/btwiuse/rng v0.0.1 // indirect
 	github.com/btwiuse/version v0.0.2 // indirect
 	github.com/btwiuse/wsconn v0.0.6 // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
-	github.com/charmbracelet/keygen v0.5.4 // indirect
 	github.com/charmbracelet/ultraviolet v0.0.0-20260906173415-0277a179edd9 // indirect
 	github.com/charmbracelet/x/ansi v0.11.8 // indirect
 	github.com/charmbracelet/x/conpty v0.2.0 // indirect
@@ -37,7 +40,6 @@ require (
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/creack/pty v1.1.24 // indirect
-	github.com/creativeprojects/go-selfupdate v1.6.0 // indirect
 	github.com/davidmz/go-pageant v1.0.2 // indirect
 	github.com/docker/docker v27.3.1+incompatible // indirect
 	github.com/dunglas/httpsfv v1.1.0 // indirect
@@ -70,6 +72,7 @@ require (
 	github.com/quic-go/webtransport-go v0.10.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/rs/cors v1.11.1 // indirect
+	github.com/sahilm/fuzzy v0.1.3 // indirect
 	github.com/spf13/pflag v1.0.6 // indirect
 	github.com/ulikunitz/xz v0.5.15 // indirect
 	github.com/webteleport/auth v0.0.9 // indirect

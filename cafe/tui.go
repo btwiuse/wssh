@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
@@ -153,6 +154,13 @@ type model struct {
 	// the job needs.
 	amount string
 
+	// routes and apiKeys are the two screens that are a list rather than a
+	// page. Held here rather than built per render because the cursor, the
+	// page and the scroll offset all live in them and rebuilding on every
+	// frame would reset all three.
+	routes  list.Model
+	apiKeys list.Model
+
 	// focus is whether a text field is taking keystrokes. Off by default,
 	// and that is the whole point: a field that swallows every key while it
 	// is on screen takes the page shortcuts with it, so b, k and m stop
@@ -257,6 +265,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		m.routes.SetWidth(m.listWidth())
+		m.routes.SetHeight(m.listHeight(1))
+		m.apiKeys.SetWidth(m.listWidth())
+		m.apiKeys.SetHeight(m.listHeight(2))
 		return m, nil
 
 	case provenMsg:
@@ -270,6 +282,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case refreshedMsg:
 		m.account = msg.account
+		m.syncLists()
 		return m, nil
 
 	case depositFinishedMsg:
@@ -303,6 +316,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case keyRevokedMsg:
 		m.busy = ""
+		defer m.syncLists()
 		switch {
 		case msg.err != nil:
 			m.notice = notice{noticeBad, msg.err.Error()}
@@ -330,12 +344,29 @@ func (m model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// The deposit amount only takes keys while it is focused. Unfocused, this
 	// screen is an ordinary page and b, k, m and d all work, which is what
 	// makes esc a convenience here rather than the only exit it used to be.
-	if m.view == screenDeposit && m.focus {
-		return m.onDepositKey(msg)
+	// The three screens with something to type into or move through take the
+	// keyboard only once they have been focused. Unfocused, each of them is
+	// an ordinary page and the footer at the bottom keeps telling the truth,
+	// which is the whole reason a list here does not answer to k, d or b at
+	// any focus level.
+	if m.focus {
+		switch m.view {
+		case screenDeposit:
+			return m.onDepositKey(msg)
+		case screenKeys, screenModels:
+			return m.onListKey(msg)
+		}
 	}
-	if msg.String() == "tab" && m.view == screenDeposit {
-		m.focus = true
-		return m, nil
+
+	// Tab focuses. There is nothing to focus on any other screen, so it does
+	// nothing rather than being claimed.
+	if msg.String() == "tab" {
+		switch m.view {
+		case screenDeposit, screenKeys, screenModels:
+			m.focus = true
+			m.paintFocus()
+			return m, nil
+		}
 	}
 
 	switch msg.String() {
@@ -365,16 +396,12 @@ func (m model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.to(screenHome)
 	}
 
-	// Keys are numbered so that revoking one is a keystroke and not a
-	// sub-menu: the screen shows which number is which, and there is no
-	// second place for the mapping to live.
-	if m.view == screenKeys {
-		if msg.String() == "n" {
-			return m.mintKey()
-		}
-		if i, err := strconv.Atoi(msg.String()); err == nil {
-			return m.revokeKey(i)
-		}
+	// Minting is a keystroke rather than a sub-menu. Revoking is not, and
+	// used to be a number typed beside the key: there is a cursor now, and a
+	// number next to a thing that moves is a number that means one thing on
+	// screen and another after a keypress. Enter acts on where the cursor is.
+	if m.view == screenKeys && msg.String() == "n" {
+		return m.mintKey()
 	}
 	return m, nil
 }
@@ -433,6 +460,44 @@ func (m model) revokeKey(oneBased int) (tea.Model, tea.Cmd) {
 		ok, err := d.Ledger.RevokeKey(d.Address, key.Digest)
 		return keyRevokedMsg{label: key.Label, ok: ok, err: err}
 	}
+}
+
+// onListKey is a focused list. Esc and tab both put the cursor down without
+// changing anything, and everything else is the component's business.
+func (m model) onListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "tab":
+		m.focus = false
+		m.paintFocus()
+		return m, nil
+	case "enter":
+		return m.onListEnter()
+	}
+	if l := m.nav(); l != nil {
+		// Update returns the moved list rather than mutating in place, and a
+		// discarded copy is a cursor that never goes anywhere.
+		var cmd tea.Cmd
+		*l, cmd = l.Update(msg)
+		return m, cmd
+	}
+	return m, nil
+}
+
+// onListEnter is what enter means on each list.
+//
+// Only the keys list has anything to enter: a route is chosen by naming it in
+// the request rather than by standing on it here, and pretending otherwise
+// would be a button that does nothing.
+func (m model) onListEnter() (tea.Model, tea.Cmd) {
+	if m.view != screenKeys {
+		m.notice = notice{noticeBad, "a route is chosen by naming it in the request, not from here"}
+		return m, nil
+	}
+	i := m.apiKeys.Index()
+	if i < 0 || i >= len(m.account.Keys) {
+		return m, nil
+	}
+	return m.revokeKey(i + 1)
 }
 
 func (m model) onDepositKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -697,16 +762,10 @@ func (m model) focusHint() string {
 func (m model) renderKeys() string {
 	var b strings.Builder
 	b.WriteString("  " + m.st.title.Render("api keys") + "\n\n")
-	if len(m.account.Keys) == 0 {
-		b.WriteString("  " + m.st.dim.Render("none yet.") + "\n")
-	}
-	for i, k := range m.account.Keys {
-		b.WriteString("  " + m.st.key.Render(strconv.Itoa(i+1)) + "  " +
-			m.st.value.Render("rc_live_"+k.Label) + "\n")
-		b.WriteString("     " + m.st.dim.Render("made "+ago(k.Created)+", last used "+ago(k.Touched)) + "\n")
-	}
-	b.WriteString("\n  " + m.st.key.Render("n") + m.st.dim.Render(" mint a new key    ") +
-		m.st.key.Render("1") + m.st.dim.Render("…") + m.st.key.Render("9") + m.st.dim.Render(" revoke one") + "\n")
+	b.WriteString(m.apiKeys.View() + "\n")
+	b.WriteString("  " + m.st.key.Render("n") + m.st.dim.Render(" mint a new key    ") +
+		m.st.key.Render("enter") + m.st.dim.Render(" revoke the selected one    ") +
+		m.st.key.Render("tab") + m.st.dim.Render(" browse") + "\n")
 	b.WriteString("\n  " + m.st.dim.Render("A key is shown once, when it is minted; only its fingerprint is kept.") + "\n")
 	b.WriteString("  " + m.st.dim.Render("Losing one is not a problem: mint another.") + "\n")
 	if m.fresh != "" {
@@ -718,16 +777,44 @@ func (m model) renderKeys() string {
 func (m model) renderModels() string {
 	var b strings.Builder
 	b.WriteString("  " + m.st.title.Render("routes") + "\n\n")
-	models := m.deps.Catalogue.Models()
-	for _, route := range models {
-		b.WriteString("  " + pad(m.st.value.Render(route.ID), 22) +
-			pad(m.st.dim.Render(route.Provider), 11) +
-			pad(m.st.dim.Render(perMTok(route.InputPerMTok)), 20) +
-			m.st.dim.Render(perMTok(route.OutputPerMTok)+" out") + "\n")
-	}
-	b.WriteString("\n  " + m.st.dim.Render("ask for one by putting its name in \"model\". Prices are per million tokens,") + "\n")
+	b.WriteString(m.routes.View() + "\n")
+	b.WriteString("  " + m.st.dim.Render("ask for one by putting its name in \"model\". Prices are per million tokens,") + "\n")
 	b.WriteString("  " + m.st.dim.Render("and what they are is the rate your balance is actually billed at.") + "\n")
+	b.WriteString("\n  " + m.listHint("") + "\n")
 	return b.String()
+}
+
+// listHint says what the list above it will answer to, and it depends on
+// whether the list has the focus. Unfocused a list takes no keys at all, and
+// saying so is the whole of why pressing b from the routes screen still opens
+// the balance screen.
+func (m model) listHint(extra string) string {
+	if m.focus {
+		return m.st.key.Render("hjkl") + m.st.dim.Render(" to move a page, ") +
+			m.st.key.Render("tab") + m.st.dim.Render(" to stop"+extra)
+	}
+	return m.st.key.Render("tab") + m.st.dim.Render(" to browse"+extra)
+}
+
+// listWidth is what a list gets inside the pane: the content width less the
+// two-space indent and a column of slack.
+func (m model) listWidth() int {
+	w := m.contentWidth() - 4
+	if w < 20 {
+		w = 20
+	}
+	return w
+}
+
+// listHeight is how many terminal lines a list may use once the title, the
+// lines of prose around it and the hint underneath have taken their share.
+// perRow is how many lines one of this list's rows occupies.
+func (m model) listHeight(perRow int) int {
+	h := m.height - 10
+	if h < perRow*3 {
+		h = perRow * 3
+	}
+	return h
 }
 
 func (m model) renderHelp() string {
@@ -740,7 +827,8 @@ func (m model) renderHelp() string {
 	b.WriteString("  " + m.st.label.Render("m") + m.st.dim.Render("  every route and what it costs") + "\n")
 	b.WriteString("  " + m.st.label.Render("r") + m.st.dim.Render("  re-read the balance") + "\n")
 	b.WriteString("  " + m.st.label.Render("y") + m.st.dim.Render("  copy a key just minted, using OSC 52") + "\n")
-	b.WriteString("  " + m.st.label.Render("tab") + m.st.dim.Render("  put the caret in the amount field on the deposit screen") + "\n")
+	b.WriteString("  " + m.st.label.Render("tab") + m.st.dim.Render("  put the caret in a field or a list, so it takes the keys") + "\n")
+	b.WriteString("  " + m.st.label.Render("hjkl") + m.st.dim.Render("  move through a list, and page it with h and l") + "\n")
 	b.WriteString("  " + m.st.label.Render("q") + m.st.dim.Render("  disconnect") + "\n\n")
 
 	b.WriteString("  " + m.st.title.Render("what this is not") + "\n\n")

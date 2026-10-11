@@ -210,7 +210,7 @@ func (s *Server) newModel(sess ssh.Session) tea.Model {
 		return refuseModel{reason: refusal, width: 80}
 	}
 
-	return model{
+	m := model{
 		deps: deps{
 			Address:   address,
 			Proven:    proven,
@@ -228,6 +228,10 @@ func (s *Server) newModel(sess ssh.Session) tea.Model {
 		width:   80,
 		height:  24,
 	}
+	// The two lists are built here rather than lazily on first visit, so that
+	// arriving at one is not the thing that discovers there is no catalogue.
+	m.syncLists()
+	return m
 }
 
 // namesAnAccount reports whether a username is written as an account address,
