@@ -1345,7 +1345,7 @@ func (m *model) frame() (string, clicks) {
 	// the same way the name on the bar is. It is read after the page is drawn
 	// because where it landed is a fact about what was drawn.
 	where.mark = m.mark
-	return frame(m.st, m.width, m.height, bar, page, m.hint(), m.footer()), where
+	return frame(m.st, m.width, m.height, bar, page, m.footer()), where
 }
 
 // clicks is what the last frame put on screen and where, so that a mouse
@@ -1660,13 +1660,6 @@ func (m model) footer() string {
 	if len(m.candidates) > 1 {
 		pairs = append(pairs, [2]string{"< >", "switch account"})
 	}
-	// The help screen scrolls when it has more on it than fits, and only then:
-	// a hint that claims a page scrolls on a terminal where it does not is
-	// worse than no hint, because the person presses j and then wonders why
-	// nothing happened.
-	if m.view == screenHelp && m.helpOverflows() {
-		pairs = append(pairs, [2]string{"hjkl", "scroll"})
-	}
 	pairs = append(pairs, [2]string{"?", "help"}, [2]string{"q", "quit"})
 
 	// Built by dropping what does not fit rather than by wrapping, because the
@@ -1938,24 +1931,6 @@ func (m model) modelsPage() (head, tail string) {
 	t.WriteString("  " + m.st.dim.Render("ask for one by putting its name in \"model\". Prices are per million tokens,") + "\n")
 	t.WriteString("  " + m.st.dim.Render("and what they are is the rate your balance is actually billed at.") + "\n")
 	return h.String(), t.String()
-}
-
-// hint is the line at the foot of every page, saying what hjkl does here.
-//
-// One place rather than one per list, at the bottom rather than under the
-// thing it is about. It used to be under each list, which meant the two pages
-// that have a list said it in two different words and the three that do not
-// said nothing at all - and a binding that is only described on some pages is
-// a binding half the program does not admit to.
-func (m model) hint() string {
-	what := " to move through a list"
-	switch m.view {
-	case screenKeys, screenModels:
-		what = " to move through this list, h and l to page it"
-	case screenHelp:
-		what = " to scroll this page"
-	}
-	return "  " + m.st.key.Render("hjkl") + m.st.dim.Render(what)
 }
 
 // listWidth is what a list gets inside the pane, which is the inside of the

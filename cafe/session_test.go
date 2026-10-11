@@ -1703,20 +1703,24 @@ func TestTheWordmarkIsDrawnExactlyAsItIsWritten(t *testing.T) {
 	}
 }
 
-// hjkl is described once, at the foot of every page. It used to be described
-// under each list, in two different words, and not at all on the three pages
-// that have no list - and a binding that is only on some pages is a binding
-// half the program will not admit to.
-func TestEveryPageSaysWhatHjklDoesThere(t *testing.T) {
+// hjkl is not explained anywhere. Arrows and hjkl in a list, arrows and hjkl
+// to scroll a page, are what every scrollable thing in a terminal has always
+// done, and a program that says so is telling a person something they arrived
+// knowing - in the space that was better given to something else.
+func TestNoPageExplainsHjkl(t *testing.T) {
 	m := model{st: newStyles(true), width: 100, height: 30,
 		deps: deps{Address: treasuryAddress, Ledger: testLedger(t), Catalogue: DefaultCatalogue(), Proven: true}}
 	m.syncLists()
+	// Every page but one. The help screen's table is a reference for the keys
+	// this program binds, and hjkl is one of them; that is a list of what the
+	// program answers to, which is a different thing from explaining a
+	// convention on every screen.
 	for _, page := range m.screenList() {
-		shown := m.show(page)
-		lines := strings.Split(stripForTest(shown.frameString()), "\n")
-		last := strings.TrimSpace(lines[len(lines)-3])
-		if !strings.Contains(last, "hjkl") {
-			t.Errorf("%s: the line above the footer is %q, want it to say what hjkl does", pageName(page), last)
+		if page == screenHelp {
+			continue
+		}
+		if got := stripForTest(m.show(page).frameString()); strings.Contains(got, "hjkl") {
+			t.Errorf("%s explains hjkl: it should not", pageName(page))
 		}
 	}
 }

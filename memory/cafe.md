@@ -452,8 +452,6 @@ bar of all five and highlights the one you are on, and `tab` walks it:
 │                                                                                                  │
 │  export OPENAI_BASE_URL=https://api.router.cafe/v1                                               │
 │  export OPENAI_API_KEY=rc_live_…                                                                 │
-│                                                                                                  │
-│  hjkl to move through a list                                                                     │
 ```
 
 **RouterCafe is the first tab, and the only one drawn without a border.** It
@@ -514,15 +512,18 @@ One more rename, one more binding, one more line. The ring reads `RouterCafe |
 deposit | api keys | models | help` — **models, not routes**: what is listed
 there is a model you can send to, and "routes" reads as the request path.
 
-**`hjkl` is described once, at the foot of every page**, in whatever words fit
-what is on it — through a list, through this list, down the help page. It was
-under each list instead, which meant the two pages that have a list said it in
-two different words and the three that do not said nothing at all. A binding
-that is only described on some pages is a binding half the program will not
-admit to. The frame gives it its line: it reserves the room, so a page with
-more on it than fits loses prose rather than losing the one line that is the
-same everywhere, and pushes it to the last line of the box rather than
-letting it float half way down a short page.
+**`hjkl` is described nowhere.** It was under each list, then it was one line
+at the foot of every page, and both are gone: arrows and hjkl in a list, arrows
+and hjkl to scroll a page, is what every scrollable thing in a terminal has
+always done, and a program that says so is telling somebody something they
+arrived knowing - in the space that was better given to something else. The
+footer is for keys that are *not* conventions, which is why `< > switch
+account` is in it and hjkl is not.
+
+The one place hjkl still appears is the help screen's key table, which is a
+reference for the keys this program binds rather than an explanation of one,
+and hjkl is one of them. `TestNoPageExplainsHjkl` says so, and skips that
+page.
 
 **Revoking a key is `x`, not `enter`.** Enter means "act on what is under the
 cursor", and standing on a key does not make standing near it the same as

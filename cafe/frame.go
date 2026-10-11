@@ -28,15 +28,14 @@ const (
 	topEdgeLines = 1
 )
 
-// frame draws one screen: brand line, optional bar, page in a box, the line at
-// the foot of the page, and the footer.
+// frame draws one screen: brand line, optional bar, page in a box, footer.
 //
 // The bar is empty for the screens that have no pages to move between. That
 // makes those three lines shorter than the account screen's, which is the one
 // place the frames are not identical - and it is deliberate, because a bar of
 // five pages on a screen where four of them would refuse you is a lie about
 // where you can go.
-func frame(st styles, width, height int, bar, body, hint, footer string) string {
+func frame(st styles, width, height int, bar, body, footer string) string {
 	if width < 20 {
 		width = 20
 	}
@@ -92,34 +91,25 @@ func frame(st styles, width, height int, bar, body, hint, footer string) string 
 	// and counting the lines before it has done that is how a page of long
 	// sentences comes out several lines taller than the window it is supposed
 	// to be filling - the cut then happens in the wrong place entirely.
-	// The page keeps room for the line at its foot, so that a page with more on
-	// it than fits loses prose rather than losing the one line that is the same
-	// on every page. The frame cuts from the bottom, and the hint is the bottom.
-	room := box - 1 - countLines(hint)
-	// Wrapped first, then counted, then cut - in that order, because lipgloss
-	// wraps whatever is too wide on the way into the border. Counting before it
-	// has done that is how a page of long rows comes out three lines taller
-	// than the window it is supposed to be filling.
-	page := trimLines(lipgloss.NewStyle().Width(bodyWidth(width)).Render(body), room)
-	if hint == "" {
-		b.WriteString("\n" + st.window.
-			Width(width).MaxWidth(width).
-			Height(box).Render(page))
-		if footer != "" {
-			b.WriteString("\n" + footer)
-		}
-		return b.String()
-	}
-	// And then pushed to the foot of the box. A page is short more often than
-	// it is long, and a hint that floats half way down one reads as part of the
-	// prose above it rather than as the line every page ends on.
-	for gap := room - countLines(page); gap > 0; gap-- {
-		page += "\n"
-	}
-	wrapped := page + "\n" + hint
+	// The page is wrapped to the inside of the box before it is counted, and
+	// cut after. In that order: lipgloss wraps whatever is wider than that on
+	// the way into the border, and counting the lines before it has done that
+	// is how a page of long rows comes out three lines taller than the window
+	// it is supposed to be filling.
+	//
+	// Cut here rather than by MaxHeight, because MaxHeight cuts from the bottom
+	// of the rendered box and the last thing it takes is the bottom edge: a
+	// page with more on it than the window can show would leave the frame open
+	// along one whole side. Cutting the page first means the frame is closed
+	// whatever the page has on it, and what is lost is prose.
+	//
+	// Width and Height are the total including the border, which is what makes
+	// the box reach the edges of the terminal rather than stopping two columns
+	// short of them. Height alone because the page has already been cut to fit.
+	page := trimLines(lipgloss.NewStyle().Width(bodyWidth(width)).Render(body), box-1)
 	b.WriteString("\n" + st.window.
 		Width(width).MaxWidth(width).
-		Height(box).Render(wrapped))
+		Height(box).Render(page))
 	if footer != "" {
 		b.WriteString("\n" + footer)
 	}
