@@ -22,7 +22,7 @@ import (
 	"os"
 
 	"charm.land/fang/v2"
-	"github.com/btwiuse/wssh/solana"
+	"github.com/routercafe/routercafe/solana"
 	"github.com/spf13/cobra"
 )
 

@@ -12,9 +12,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/btwiuse/wssh/auth/agentkey"
-	"github.com/btwiuse/wssh/auth/siws"
-	"github.com/btwiuse/wssh/solana"
+	"github.com/routercafe/routercafe/auth/agentkey"
+	"github.com/routercafe/routercafe/auth/siws"
+	"github.com/routercafe/routercafe/solana"
 	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 )

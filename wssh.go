@@ -27,8 +27,8 @@ import (
 	"charm.land/log/v2"
 	"charm.land/ssh"
 	"charm.land/wish/v2"
-	"github.com/btwiuse/wssh/auth/agentkey"
-	"github.com/btwiuse/wssh/auth/siws"
+	"github.com/routercafe/routercafe/auth/agentkey"
+	"github.com/routercafe/routercafe/auth/siws"
 	"github.com/coder/websocket"
 	gossh "golang.org/x/crypto/ssh"
 )

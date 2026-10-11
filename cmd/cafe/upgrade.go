@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 
-	"github.com/btwiuse/wssh/selfupdate"
+	"github.com/routercafe/routercafe/selfupdate"
 	"github.com/spf13/cobra"
 )
 
@@ -11,7 +11,7 @@ import (
 // repository. See the wssh counterpart: the rules are shared, and only these
 // two names are this binary's to say.
 const (
-	releaseSlug = "btwiuse/wssh"
+	releaseSlug = "routercafe/routercafe"
 	binaryName  = "cafe"
 )
 

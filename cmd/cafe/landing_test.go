@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/btwiuse/wssh/cafe"
+	"github.com/routercafe/routercafe/cafe"
 )
 
 // The landing page is the product's front door and its pitch deck, and it is

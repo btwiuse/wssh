@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/btwiuse/wssh/webui"
+	"github.com/routercafe/routercafe/webui"
 )
 
 // Two binaries serve these files: wssh at its root, RouterCafe under /app.

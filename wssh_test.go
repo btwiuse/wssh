@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"charm.land/wish/v2"
-	"github.com/btwiuse/wssh/shell"
+	"github.com/routercafe/routercafe/shell"
 )
 
 // newTestServer builds a server with a throwaway host key.

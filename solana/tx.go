@@ -19,8 +19,8 @@ import (
 
 	"golang.org/x/crypto/ssh/agent"
 
-	"github.com/btwiuse/wssh/auth/agentkey"
-	"github.com/btwiuse/wssh/auth/siws"
+	"github.com/routercafe/routercafe/auth/agentkey"
+	"github.com/routercafe/routercafe/auth/siws"
 )
 
 // Asking an agent to sign a Solana transaction, from this end.

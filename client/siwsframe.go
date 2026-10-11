@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/btwiuse/wssh/auth/siws"
+	"github.com/routercafe/routercafe/auth/siws"
 	"github.com/coder/websocket"
 )
 

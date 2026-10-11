@@ -4,6 +4,30 @@ Read this when something behaves in a way the code does not obviously explain.
 Everything here is a consequence that is deliberate; the file reads like a list
 of bugs because the reasoning does not sit next to the line it applies to.
 
+## The module path, and what it does not rename
+
+The module is `github.com/routercafe/routercafe`, and the repository is
+`routercafe/routercafe`. It was `github.com/btwiuse/wssh` until the project
+moved to the org, and GitHub redirects the old clone URL but **not** `go get` -
+anything that pinned the old path has to change.
+
+Three things deliberately did **not** move with it, and each is a rename that
+looks like an oversight:
+
+- **`btwiuse/rng`, `btwiuse/version`, `btwiuse/wsconn`** in `go.mod` are third
+  party and stay where they are. The old path was an owner, not a repo name, so
+  a search-and-replace across `btwiuse/` breaks the build.
+- **`cmd/wssh/` and the `wssh` binary name are unchanged.** In Go a directory
+  under `cmd/` does not have to match the module, so
+  `go install github.com/routercafe/routercafe/cmd/wssh@latest` is correct as it
+  stands. Renaming it would move every install path, the goreleaser `builds`
+  ids, the release asset names and the whole documented CLI surface
+  (`wssh server`, `wssh client`, `wssh upgrade`) for no build benefit.
+- **`releaseSlug = "routercafe/routercafe"`** in `cmd/wssh/upgrade.go` and
+  `cmd/cafe/upgrade.go` is a bare owner/repo string, not a URL, so it does not
+  match the import prefix and has to be changed by hand. Get it wrong and
+  `upgrade` reads releases from a repository that no longer exists.
+
 ## The pieces
 
 Three, and they share almost nothing:

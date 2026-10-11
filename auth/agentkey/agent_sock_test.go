@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"charm.land/wish/v2"
-	"github.com/btwiuse/wssh"
-	"github.com/btwiuse/wssh/auth/agentkey"
-	"github.com/btwiuse/wssh/shell"
+	"github.com/routercafe/routercafe"
+	"github.com/routercafe/routercafe/auth/agentkey"
+	"github.com/routercafe/routercafe/shell"
 	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 )

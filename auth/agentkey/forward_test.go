@@ -17,10 +17,10 @@ import (
 
 	charmlog "charm.land/log/v2"
 	"charm.land/wish/v2"
-	"github.com/btwiuse/wssh"
-	"github.com/btwiuse/wssh/auth/agentkey"
-	"github.com/btwiuse/wssh/client"
-	"github.com/btwiuse/wssh/shell"
+	"github.com/routercafe/routercafe"
+	"github.com/routercafe/routercafe/auth/agentkey"
+	"github.com/routercafe/routercafe/client"
+	"github.com/routercafe/routercafe/shell"
 	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 )

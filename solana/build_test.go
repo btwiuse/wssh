@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/btwiuse/wssh/auth/agentkey"
-	"github.com/btwiuse/wssh/auth/siws"
+	"github.com/routercafe/routercafe/auth/agentkey"
+	"github.com/routercafe/routercafe/auth/siws"
 )
 
 // The one memo request that produced the bytes in golden_test.go, rebuilt

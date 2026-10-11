@@ -17,9 +17,9 @@ import (
 
 	charmlog "charm.land/log/v2"
 	"charm.land/wish/v2"
-	"github.com/btwiuse/wssh"
-	"github.com/btwiuse/wssh/client"
-	"github.com/btwiuse/wssh/shell"
+	"github.com/routercafe/routercafe"
+	"github.com/routercafe/routercafe/client"
+	"github.com/routercafe/routercafe/shell"
 )
 
 // These tests drive a real wsshd over a real WebSocket on loopback. Keeping

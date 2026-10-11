@@ -8,7 +8,7 @@ import (
 
 	gossh "golang.org/x/crypto/ssh"
 
-	"github.com/btwiuse/wssh/solana"
+	"github.com/routercafe/routercafe/solana"
 )
 
 // AskWallet is consulted for every signature a wallet-backed signer is asked

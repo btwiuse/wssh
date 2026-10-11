@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"charm.land/log/v2"
-	"github.com/btwiuse/wssh/cafe"
+	"github.com/routercafe/routercafe/cafe"
 )
 
 // The landing page.

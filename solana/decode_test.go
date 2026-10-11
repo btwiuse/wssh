@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/btwiuse/wssh/auth/agentkey"
-	"github.com/btwiuse/wssh/auth/siws"
+	"github.com/routercafe/routercafe/auth/agentkey"
+	"github.com/routercafe/routercafe/auth/siws"
 )
 
 // messageOf is the part a signature covers.

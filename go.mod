@@ -1,4 +1,4 @@
-module github.com/btwiuse/wssh
+module github.com/routercafe/routercafe
 
 go 1.27.0
 

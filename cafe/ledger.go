@@ -15,8 +15,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/btwiuse/wssh/auth/siws"
-	"github.com/btwiuse/wssh/solana"
+	"github.com/routercafe/routercafe/auth/siws"
+	"github.com/routercafe/routercafe/solana"
 	"golang.org/x/crypto/ssh"
 )
 

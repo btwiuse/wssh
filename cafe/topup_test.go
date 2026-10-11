@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/btwiuse/wssh/auth/agentkey"
-	"github.com/btwiuse/wssh/auth/siws"
-	"github.com/btwiuse/wssh/solana"
+	"github.com/routercafe/routercafe/auth/agentkey"
+	"github.com/routercafe/routercafe/auth/siws"
+	"github.com/routercafe/routercafe/solana"
 )
 
 // The deposit is the only place this server spends somebody's money on their

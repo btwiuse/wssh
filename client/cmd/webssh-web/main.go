@@ -8,7 +8,7 @@
 // the wssh client subcommand.
 package main
 
-import "github.com/btwiuse/wssh/client"
+import "github.com/routercafe/routercafe/client"
 
 func main() {
 	client.Start()

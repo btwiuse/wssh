@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/btwiuse/wssh/client"
+	"github.com/routercafe/routercafe/client"
 	gossh "golang.org/x/crypto/ssh"
 )
 

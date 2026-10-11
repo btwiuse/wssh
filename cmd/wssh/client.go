@@ -13,7 +13,7 @@ import (
 	"syscall"
 
 	"charm.land/log/v2"
-	"github.com/btwiuse/wssh/client"
+	"github.com/routercafe/routercafe/client"
 	"github.com/spf13/cobra"
 	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"

@@ -11,7 +11,7 @@ import (
 	"github.com/charmbracelet/keygen"
 	gossh "golang.org/x/crypto/ssh"
 
-	"github.com/btwiuse/wssh/auth/agentkey"
+	"github.com/routercafe/routercafe/auth/agentkey"
 )
 
 // errNoPassword is returned when the page declines to supply a password. It

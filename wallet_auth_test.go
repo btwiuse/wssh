@@ -14,11 +14,11 @@ import (
 	"time"
 
 	"charm.land/wish/v2"
-	"github.com/btwiuse/wssh"
-	"github.com/btwiuse/wssh/auth"
-	"github.com/btwiuse/wssh/auth/siws"
-	"github.com/btwiuse/wssh/client"
-	"github.com/btwiuse/wssh/shell"
+	"github.com/routercafe/routercafe"
+	"github.com/routercafe/routercafe/auth"
+	"github.com/routercafe/routercafe/auth/siws"
+	"github.com/routercafe/routercafe/client"
+	"github.com/routercafe/routercafe/shell"
 	gossh "golang.org/x/crypto/ssh"
 )
 

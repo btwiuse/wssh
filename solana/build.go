@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/btwiuse/wssh/auth/agentkey"
-	"github.com/btwiuse/wssh/auth/siws"
+	"github.com/routercafe/routercafe/auth/agentkey"
+	"github.com/routercafe/routercafe/auth/siws"
 )
 
 // BuildTransaction assembles an unsigned versioned transaction from a

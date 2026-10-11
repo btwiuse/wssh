@@ -12,7 +12,7 @@ import (
 	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 
-	"github.com/btwiuse/wssh/auth/siws"
+	"github.com/routercafe/routercafe/auth/siws"
 )
 
 // SolanaTxExtension is the agent extension a session uses to ask the wallet to

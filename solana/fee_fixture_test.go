@@ -4,7 +4,7 @@ import (
 	"crypto/ed25519"
 	"testing"
 
-	"github.com/btwiuse/wssh/auth/siws"
+	"github.com/routercafe/routercafe/auth/siws"
 )
 
 // compact encodes n as Solana's compact-u16. Only 0..127 is produced here,

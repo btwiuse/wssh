@@ -16,12 +16,12 @@ import (
 
 	"charm.land/log/v2"
 	"charm.land/wish/v2"
-	"github.com/btwiuse/wssh"
-	"github.com/btwiuse/wssh/auth"
-	"github.com/btwiuse/wssh/auth/agentkey"
-	"github.com/btwiuse/wssh/auth/siws"
-	"github.com/btwiuse/wssh/cafe"
-	"github.com/btwiuse/wssh/webui"
+	"github.com/routercafe/routercafe"
+	"github.com/routercafe/routercafe/auth"
+	"github.com/routercafe/routercafe/auth/agentkey"
+	"github.com/routercafe/routercafe/auth/siws"
+	"github.com/routercafe/routercafe/cafe"
+	"github.com/routercafe/routercafe/webui"
 	"github.com/spf13/cobra"
 )
 

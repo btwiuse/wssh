@@ -11,7 +11,7 @@ import (
 	"syscall/js"
 	"time"
 
-	"github.com/btwiuse/wssh/auth/agentkey"
+	"github.com/routercafe/routercafe/auth/agentkey"
 )
 
 // The Solana half of the agent, on the browser side.

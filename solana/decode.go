@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/btwiuse/wssh/auth/siws"
+	"github.com/routercafe/routercafe/auth/siws"
 )
 
 // Two more program ids, named so an approval dialog reads as a decision

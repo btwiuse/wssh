@@ -42,9 +42,9 @@ import (
 	"charm.land/ssh"
 	"charm.land/wish/v2"
 	wishtea "charm.land/wish/v2/bubbletea"
-	"github.com/btwiuse/wssh"
-	"github.com/btwiuse/wssh/auth/agentkey"
-	"github.com/btwiuse/wssh/solana"
+	"github.com/routercafe/routercafe"
+	"github.com/routercafe/routercafe/auth/agentkey"
+	"github.com/routercafe/routercafe/solana"
 	gossh "golang.org/x/crypto/ssh"
 )
 

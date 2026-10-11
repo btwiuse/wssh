@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/btwiuse/wssh/solana"
+	"github.com/routercafe/routercafe/solana"
 )
 
 // The explorer link is only correct if the cluster matches the endpoint, so

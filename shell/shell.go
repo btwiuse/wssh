@@ -19,7 +19,7 @@ import (
 	"charm.land/log/v2"
 	"charm.land/ssh"
 	"charm.land/wish/v2"
-	"github.com/btwiuse/wssh/auth/agentkey"
+	"github.com/routercafe/routercafe/auth/agentkey"
 )
 
 // defaultTerm is used when the client did not ask for a PTY, so programs that

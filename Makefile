@@ -30,7 +30,7 @@ WASMJS := $(STATIC)/wasm_exec.js
 # The listing runs for the target, not the host: client/cmd/webssh-web is
 # behind a js && wasm build tag, so a host-platform go list reports no files
 # at all and the dependency quietly becomes empty.
-WASM_GO := $(shell GOOS=js GOARCH=wasm CGO_ENABLED=0 go list -f '{{if .Module}}{{if eq .Module.Path "github.com/btwiuse/wssh"}}{{range .GoFiles}}{{$$.Dir}}/{{.}} {{end}}{{end}}{{end}}' -deps ./client/cmd/webssh-web 2>/dev/null)
+WASM_GO := $(shell GOOS=js GOARCH=wasm CGO_ENABLED=0 go list -f '{{if .Module}}{{if eq .Module.Path "github.com/routercafe/routercafe"}}{{range .GoFiles}}{{$$.Dir}}/{{.}} {{end}}{{end}}{{end}}' -deps ./client/cmd/webssh-web 2>/dev/null)
 WASM_SRC := client/build.sh $(WASM_GO) go.mod
 
 .PHONY: wssh cafe sol-tx sol-keys bin

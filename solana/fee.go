@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/btwiuse/wssh/auth/siws"
+	"github.com/routercafe/routercafe/auth/siws"
 )
 
 // FeePayer is the account a signed transaction was actually paid by, read

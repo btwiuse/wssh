@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/btwiuse/wssh/webui"
+	"github.com/routercafe/routercafe/webui"
 )
 
 // The browser terminal, mounted under /app.

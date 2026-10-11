@@ -11,7 +11,7 @@ import (
 	"syscall/js"
 	"time"
 
-	"github.com/btwiuse/wssh/auth/siws"
+	"github.com/routercafe/routercafe/auth/siws"
 )
 
 // walletSignInHook is the global worker.js installs for asking the page's
