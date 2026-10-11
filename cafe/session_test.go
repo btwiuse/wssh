@@ -15,6 +15,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -1736,6 +1737,84 @@ func TestAnEmptyListDoesNotSayItIsEmptyTwice(t *testing.T) {
 	got := stripForTest(m.frameString())
 	if n := strings.Count(got, "No keys"); n != 1 {
 		t.Errorf("an empty key list says \"No keys\" %d times, want once", n)
+	}
+}
+
+// Every line of the frame is drawn in one colour, and that is checked on the
+// bytes that actually leave rather than on the styles that were meant to
+// produce them - because a style is an intention and a frame is a thing on a
+// screen, and the two came apart twice here. Once because a lipgloss border
+// takes its colour from the label's foreground unless told otherwise, and once
+// because a corner written as a bare character comes out in whatever colour
+// happened to be current, which on a dark terminal is a corner drawn in the
+// background colour: a corner nobody can see is the same as no corner.
+//
+// So this walks the drawn frame and asks every border glyph what colour it
+// arrived in.
+func TestEveryLineOfTheFrameIsDrawnInOneColour(t *testing.T) {
+	m := model{st: newStyles(true), view: screenKeys, width: 100, height: 24,
+		deps: deps{Address: treasuryAddress, Ledger: testLedger(t), Catalogue: DefaultCatalogue(), Proven: true, Version: "0.1.6"}}
+	m.syncLists()
+	want := sgrOf(lipgloss.NewStyle().Foreground(m.st.window.GetBorderTopForeground()).Render("\u2588"))
+
+	const rule = "─│┌┐└┘├┤┬┴┼"
+	for _, line := range strings.Split(m.frameString(), "\n") {
+		for _, colour := range sgrBefore(line, rule) {
+			if colour == "" {
+				t.Fatalf("a border glyph was drawn in no colour at all: %q", stripForTest(line))
+			}
+			if colour != want {
+				t.Errorf("a border glyph is %s where the frame is %s: %q", colour, want, stripForTest(line))
+			}
+		}
+	}
+}
+
+// sgrPattern is any SGR escape: a colour, a reset, a bold.
+var sgrPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+// sgr is the colour part of one escape, without the wrapper, so that two of
+// them can be compared as values rather than as strings with resets in them.
+func sgr(seq string) string {
+	return strings.Trim(seq, "\x1b[m")
+}
+
+// sgrOf is the escape in force for text a style rendered, which is the one
+// before the first visible character.
+func sgrOf(rendered string) string {
+	if m := sgrPattern.FindString(rendered); m != "" {
+		return sgr(m)
+	}
+	return ""
+}
+
+// sgrBefore is, for each border glyph in a line, the colour that was in force
+// when it was drawn. An empty string is the bug this is here to catch: a glyph
+// written as a bare character takes whatever colour happens to be current,
+// which on a dark terminal is the background colour - a corner nobody can see
+// is the same as no corner.
+func sgrBefore(line, rule string) []string {
+	var out []string
+	current, rest := "", line
+	for {
+		if loc := sgrPattern.FindStringIndex(rest); loc != nil && loc[0] == 0 {
+			current = sgr(rest[loc[0]:loc[1]])
+			rest = rest[loc[1]:]
+			continue
+		}
+		end := len(rest)
+		if loc := sgrPattern.FindStringIndex(rest); loc != nil {
+			end = loc[0]
+		}
+		for _, r := range rest[:end] {
+			if strings.ContainsRune(rule, r) {
+				out = append(out, current)
+			}
+		}
+		if end == len(rest) {
+			return out
+		}
+		rest = rest[end:]
 	}
 }
 

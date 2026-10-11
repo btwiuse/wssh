@@ -1540,8 +1540,13 @@ func (m model) tabBar() (string, []span) {
 		// edge through the middle, and the corner at the right. Not a rule laid
 		// over a box - it is the box's edge, and a gap in it is a hole with
 		// the page showing through.
-		"\u250c" + strings.Repeat("\u2500", left-1) + rows[barLines-1] +
-			strings.Repeat("\u2500", tail) + "\u2510",
+		//
+		// Styled in the frame's own colour, like the rest of it. Written as
+		// bare characters it came out in whatever colour happened to be current
+		// - which on a dark terminal is a corner drawn in the background
+		// colour, and a corner nobody can see is the same as no corner.
+		edge(m.st).Render("\u250c"+strings.Repeat("\u2500", left-1)) + rows[barLines-1] +
+			edge(m.st).Render(strings.Repeat("\u2500", tail)+"\u2510"),
 	}
 	// Cut to the window on the way out. Six tabs are wider than a narrow
 	// terminal, and a bar that runs past the right edge drags the frame out
