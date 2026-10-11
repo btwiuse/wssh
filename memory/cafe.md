@@ -300,9 +300,7 @@ been swapped rather than the same program having changed page.
 Two consequences that are easy to get wrong again:
 
 - **`Height`/`Width` in lipgloss v2 are the total including the border**, so
-  `Width(m.width)` really does reach the edge. `MaxWidth`/`MaxHeight` go with
-  them: a page with more content than fits must be cut rather than be allowed
-  to push the frame off the bottom.
+  `Width(m.width)` really does reach the edge.
 - **`bodyWidth` is `width - 2`, not `width - 4`.** `wrapText` indents every
   line by two of its own and subtracts two again, so passing `width - 4` counts
   the indent twice and quietly cuts a token that used to fit - which is how an
@@ -312,12 +310,65 @@ Two consequences that are easy to get wrong again:
 narrow terminal the indent is the first thing that should go, because it is the
 thing a path cannot spare.
 
-The lists are sized **from the frame constants** rather than from a constant of
-their own, so changing the chrome cannot silently leave a list scrolling off
-the bottom while its page still fits. The footer drops bindings that will not
-fit rather than wrapping, because the frame is a fixed height and a two-line
-footer would push it past the terminal. Both are discoverable losses: the help
-screen lists everything.
+**`MaxHeight` is gone from the frame, and that was the point.** `MaxHeight`
+cuts from the bottom of the *rendered box*, and the last thing it takes is the
+bottom edge: a page with more on it than the window can show left the frame
+open along one whole side, which reads as the terminal having scrolled rather
+than as a page being long. The page is now wrapped to the inside of the box and
+cut to `box-1` lines **before** the border goes on. Wrapping first matters for
+its own reason: lipgloss wraps whatever is too wide on the way into the border,
+and counting the lines before it has done that is how a page of long sentences
+came out several lines taller than its window.
+
+The same care is in the screens that have no bar at all. The box has no top
+edge of its own - on the account screen the bar's bottom edge *is* it - so
+`frame` draws one in the box's own colour when there is no bar, and `chrome`
+counts that line. Leaving it out is how the frame ends up one line taller than
+the window it is filling, which is the bug `TestTheFrameIsClosedAtAnySize`
+exists for. On the bar's side, `carryBarEdge` runs the bottom edge on to the
+right-hand corner: the bar is as wide as the names in it and the box is as
+wide as the window, and without it the top of the frame simply stops a third of
+the way across the terminal.
+
+### What fits, and who decides
+
+Nothing guesses. The list on a page is sized by **the page that owns it, every
+frame**, not at the window resize: the room it gets is what is left of the box
+after the title above it and the prose under it, and those change underneath
+it. A notice wraps to a second line when a key is minted, and a page with a
+fresh key on it has two more lines under the list than one without. Sized once,
+a list is right until the first time somebody does something, and then it is
+either scrolling off the bottom of the box or leaving a hole under it - both of
+which look like the frame is broken.
+
+The size is asked and checked rather than derived (`fitted`): the component
+grows past the height it was given instead of cutting itself at it, and its
+arithmetic around a status bar, a blank between rows and a margin above the page
+dots is not something to reimplement here. Ask, look, correct, twice at most.
+
+**Order on a page is a policy, and the api keys page has one.** The reassurance
+underneath the list - that a key is printed once, and that losing one costs
+nothing - is dropped first on a short terminal. Everything below it in the frame
+is a notice, and on that page a notice can be the only copy of a key that will
+never be printed again. The refusal does the same a paragraph at a time: the
+first paragraph is the sentence saying what happened, the second is why ed25519
+is the shape an account takes, and the commands are never the thing that gets
+cut. `KeyCommand`'s own note says a half-printed command is the one thing it
+must never show.
+
+The footer drops bindings that will not fit rather than wrapping, because the
+frame is a fixed height and a two-line footer would push it past the terminal.
+Both are discoverable losses: the help screen lists everything.
+
+### countLines and the trailing newline
+
+Every chunk of a page here ends with a newline, because they are concatenated.
+So `countLines` - which is what every layout decision in the TUI is measured in -
+counts a trailing newline as closing a line rather than starting one, and
+returns zero for the empty string. Getting this wrong puts every measurement of
+a page one line out, which is a list drawn a line lower than the frame thinks
+it is and a click one row out. `trimLines` in `frame.go` does the same thing on
+the way out.
 
 ## Navigation: a bar, not a list of letters
 
@@ -359,6 +410,27 @@ Inside the ring, one asymmetry that is deliberate:
 So `tab` from balance goes to deposit without touching the amount, and a second
 `tab` puts the caret in it. `enter` acts on the cursor, or sends the deposit.
 
+### Who gets the keyboard, and why n did nothing
+
+The rule is **a text field gets all of it, a list gets only what it claims.**
+Both halves are load-bearing and they are the reason `n` on the api keys screen
+did nothing at all.
+
+`list.Model.Update` swallows every key it has no binding for. The keys page
+arrives **focused** - that is what makes `hjkl` work without a keystroke - so
+`n`, `q`, `r`, `?` and `y` were all being handed to a list that discarded them.
+`n` was the one somebody noticed, because it is the key that page exists to
+offer. `listClaims` asks the keymap whether a key is the list's at all, and only
+hands it over when it is; everything else falls through to `onProgramKey`. Write
+the claim list out beside the keymap instead and it drifts the first time
+upstream adds a binding.
+
+The other half is the reason the same rule does not apply to the amount field:
+a field that disconnects the session because somebody typed `q` into an amount
+is exactly the trap the focus was added to remove. `tab` never reaches either
+widget - `onKey` handles it before dispatch - which is why `tab` from a focused
+deposit leaves the page rather than being swallowed.
+
 ### Clicks, and what they cost
 
 Mouse mode is on, cell motion rather than all motion. Over ssh that is the
@@ -370,9 +442,22 @@ about.
 A click becomes an intent through a `clicks` value rebuilt on every frame,
 holding where each tab and each list row actually landed. It cannot be a fixed
 map: the bar's width changes with the names in it and the list's height with how
-many rows are on the page. The pages carrying a list report their own row
-position **counted as they write it**, so a title that grows a line does not
-silently move every click target down with it.
+many rows are on the page.
+
+**The rows are recorded by the delegate as they are drawn**, not counted
+afterwards. `rowDelegate` is a pointer - the only delegate here that is - and
+keeps the line each row starts on, counting from the top of the list's own view
+plus the two lines the component puts above the first row. It also records the
+**item index** rather than the row number, because a list pages: the third row
+on the second page is not the third item, and a click that selected the third
+item would revoke a key on a different page from the one under the cursor.
+
+The arithmetic this replaced (`off / linesPerRow`) was a guess about a component
+that puts a status bar above its rows and a blank between them, and it was wrong
+by a line and a half - which on this screen is a revoke of somebody else's key.
+`TestAClickLandsOnTheRowThatWasDrawn` finds each key's line in the drawn frame
+and clicks it, so the arithmetic is checked against the screen rather than
+against itself.
 
 | Click | Does |
 |---|---|
@@ -417,6 +502,32 @@ quietly stop a browser wallet from being let through.
 The refusal screen wraps to the terminal it was given, command included: a
 half-printed command is the one thing it must never show, since that is the
 line somebody is about to copy.
+
+## The help screen scrolls
+
+It is the one page with more on it than a terminal shows, and it used to be
+drawn in full and cut by the frame - which meant the bottom of every page,
+including the version line, was invisible on exactly the terminals that had
+least room, and missing text read as a broken screen rather than as more of it.
+
+It is a `bubbles` viewport now (`cafe/help.go`), sized to the box, with a
+keymap narrowed to the keys a pager's default would collide with: the default
+claims `space`, `b`, `d`, `f` and `u`, and this program means something else by
+two of those letters. `j`/`k`, the arrows, pgup/pgdown, and `g`/`G` - the last
+two handled here, because a viewport has no binding for them.
+
+**The pager is sized in `sizeHelp`, from the window size, and not by
+`renderHelp`.** This program's `View` is a value receiver: anything a render
+touches is thrown away when the frame is printed. A pager sized and filled
+during the draw is a pager of height zero with no content in it by the time the
+next keystroke arrives, and a pager that believes it has no room does not
+scroll. Same trap the two lists were nearly caught by, which is why the lists
+are sized by the page that draws them.
+
+The footer says `hjkl scroll` only when there is actually something below the
+fold. A hint that claims a page scrolls on a terminal where it does not is worse
+than no hint, because the person presses `j` and then wonders why nothing
+happened.
 
 ## What is not built
 

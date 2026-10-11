@@ -59,6 +59,33 @@ func listKeyMap() list.KeyMap {
 	}
 }
 
+// listClaims reports whether a list in this program is bound to a key at all.
+//
+// The point of the question: the component is handed every keystroke and
+// silently discards the ones it has no binding for. A key it does not claim
+// therefore has to be offered to the program instead, or it is a key nobody
+// ever presses - which is how the api keys screen, a page that arrives
+// focused, ended up unable to mint a key with the one letter that mints one.
+//
+// Enumerated from the keymap rather than written out next to it, so a binding
+// added upstream is claimed the day it arrives - and
+// TestAListCannotTakeTheProgramsKeys is what holds the other end of it.
+func listClaims(km list.KeyMap, k string) bool {
+	for _, b := range []key.Binding{
+		km.CursorUp, km.CursorDown, km.PrevPage, km.NextPage,
+		km.GoToStart, km.GoToEnd, km.Filter, km.ClearFilter,
+		km.CancelWhileFiltering, km.AcceptWhileFiltering,
+		km.ShowFullHelp, km.CloseFullHelp, km.Quit, km.ForceQuit,
+	} {
+		for _, bound := range b.Keys() {
+			if bound == k {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // rowItem is anything a list here can show. It is one of the two concrete
 // kinds below and nothing else.
 //
@@ -115,26 +142,56 @@ func (i keyItem) lines(st *styles, sel, focused bool) (string, int) {
 
 // rowDelegate draws the rows and knows nothing about what they mean, so both
 // lists share it and neither knows the shape of the other.
+//
+// A pointer, and it is the only delegate in this program that is one, because
+// it is the only one that has to remember something: it is handed a row by the
+// component just before that row is written, and nowhere else is told. A copy
+// would be thrown away between rows and the note would come back empty.
 type rowDelegate struct {
 	// focused is copied in when the delegate is set rather than read from the
 	// model: the list calls Render from inside its own View and has no way to
 	// be told what the rest of the program is doing.
 	focused bool
+
+	// drawn is the run of rows as they went out, and written is how many lines
+	// have gone out so far. Reset every frame, because a row's place on the
+	// screen is a fact about this frame and about the page it is on.
+	drawn   []drawnRow
+	written int
 }
 
-func (d rowDelegate) Height() int { return maxRowHeight }
+// drawnRow is one row as the component put it down: which item it is, the
+// line it starts on counted from the top of the list's own view, and how many
+// lines it takes.
+//
+// The item index matters on its own: a list pages, so the third row on the
+// second page is not the third item, and a click that selected the third item
+// would select a key on a different page from the one under the cursor.
+type drawnRow struct {
+	item  int
+	start int
+	lines int
+}
 
-func (d rowDelegate) Spacing() int { return 0 }
+func (d *rowDelegate) Height() int { return maxRowHeight }
 
-func (d rowDelegate) Update(tea.Msg, *list.Model) tea.Cmd { return nil }
+func (d *rowDelegate) Spacing() int { return 0 }
 
-func (d rowDelegate) Render(w io.Writer, m list.Model, index int, it list.Item) {
+func (d *rowDelegate) Update(tea.Msg, *list.Model) tea.Cmd { return nil }
+
+func (d *rowDelegate) Render(w io.Writer, m list.Model, index int, it list.Item) {
 	row, ok := it.(rowItem)
 	if !ok {
 		return
 	}
-	text, _ := row.lines(&navStyles, index == m.Index(), d.focused)
+	text, lines := row.lines(&navStyles, index == m.Index(), d.focused)
+	d.drawn = append(d.drawn, drawnRow{item: index, start: d.written, lines: lines})
 	fmt.Fprint(w, text+"\n")
+	// What the component does between rows, done here as well: it prints this
+	// row's text with its trailing newline and then one more for the gap, so
+	// counting the gap here is counting the component's own rule rather than
+	// guessing at it.
+	d.written += lines + 1 + d.Spacing()
 }
 
 // maxRowHeight is the tallest row the delegate will be asked to draw. The
@@ -168,8 +225,10 @@ func rowStyles(st *styles, sel, focused bool) (lead, trail lipgloss.Style, marke
 	}
 }
 
-// routesList builds the list of routes, sized to the space it was given.
-func routesList(catalogue *Catalogue, width, height int, focused bool) list.Model {
+// routesList builds the list of routes. Its height is set on every frame by
+// the page that owns it, which is the only thing that knows how much room is
+// left between the title above and the prose under.
+func routesList(catalogue *Catalogue, width int, focused bool) list.Model {
 	models := catalogue.Models()
 	items := make([]list.Item, 0, len(models))
 	for _, route := range models {
@@ -180,11 +239,11 @@ func routesList(catalogue *Catalogue, width, height int, focused bool) list.Mode
 			out:      perMTok(route.OutputPerMTok),
 		})
 	}
-	return newNavList(items, width, height, focused, "route", "routes", 1)
+	return newNavList(items, width, focused, "route", "routes", 1)
 }
 
 // keysList builds the list of API keys on file.
-func keysList(acct Account, width, height int, focused bool) list.Model {
+func keysList(acct Account, width int, focused bool) list.Model {
 	items := make([]list.Item, 0, len(acct.Keys))
 	for _, k := range acct.Keys {
 		items = append(items, keyItem{
@@ -193,14 +252,16 @@ func keysList(acct Account, width, height int, focused bool) list.Model {
 			touched: ago(k.Touched),
 		})
 	}
-	return newNavList(items, width, height, focused, "key", "keys", 2)
+	return newNavList(items, width, focused, "key", "keys", 2)
 }
 
 // newNavList is the one place a list is configured, so both of them get the
 // same keymap, the same chrome and the same focus treatment without either
 // screen having to know the other exists.
-func newNavList(items []list.Item, width, height int, focused bool, one, many string, perRow int) list.Model {
-	l := list.New(items, rowDelegate{focused: focused}, width, height)
+func newNavList(items []list.Item, width int, focused bool, one, many string, perRow int) list.Model {
+	// A placeholder height: the page sets the real one on every frame, and
+	// three rows is the floor everywhere else in this program.
+	l := list.New(items, &rowDelegate{focused: focused}, width, perRow*3)
 	l.KeyMap = listKeyMap()
 	l.SetShowTitle(false)
 	l.SetShowHelp(false)
@@ -208,22 +269,13 @@ func newNavList(items []list.Item, width, height int, focused bool, one, many st
 	l.SetShowFilter(false)
 	l.SetStatusBarItemName(one, many)
 
-	// The component counts its height in rows and this program counts in
-	// terminal lines, so a two-line row halves how many fit. Three is the
-	// floor: below that there is no room to move the cursor and say so.
-	rows := height / perRow
-	if rows < 3 {
-		rows = 3
-	}
-	l.SetHeight(rows)
-
 	dim := navStyles.dim
 	l.Styles.StatusBar = l.Styles.StatusBar.PaddingLeft(2).Foreground(dim.GetForeground())
 	l.Styles.StatusEmpty = l.Styles.StatusEmpty.PaddingLeft(2).Foreground(dim.GetForeground())
 	l.Styles.NoItems = l.Styles.NoItems.PaddingLeft(2).Foreground(dim.GetForeground())
 	l.Styles.PaginationStyle = l.Styles.PaginationStyle.PaddingLeft(2).Foreground(dim.GetForeground())
 
-	l.SetDelegate(rowDelegate{focused: focused})
+	l.SetDelegate(&rowDelegate{focused: focused})
 	return l
 }
 
@@ -246,7 +298,7 @@ func (m *model) nav() *list.Model {
 // something else and finding out.
 func (m *model) paintFocus() {
 	if l := m.nav(); l != nil {
-		l.SetDelegate(rowDelegate{focused: m.focus})
+		l.SetDelegate(&rowDelegate{focused: m.focus})
 	}
 }
 
@@ -261,8 +313,8 @@ func (m *model) paintFocus() {
 // the top would move the target out from under a following enter.
 func (m *model) syncLists() {
 	idx := m.apiKeys.Index()
-	m.routes = routesList(m.deps.catalogue(), m.listWidth(), m.listHeight(1), m.focus)
-	m.apiKeys = keysList(m.account, m.listWidth(), m.listHeight(2), m.focus)
+	m.routes = routesList(m.deps.catalogue(), m.listWidth(), m.focus)
+	m.apiKeys = keysList(m.account, m.listWidth(), m.focus)
 	if n := len(m.account.Keys); n > 0 {
 		if idx >= n {
 			idx = n - 1

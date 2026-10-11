@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
@@ -237,6 +238,18 @@ type model struct {
 	routes  list.Model
 	apiKeys list.Model
 
+	// rows is where the current page's list put its rows on screen, as the
+	// delegate drew them. Set by every frame, because a row's place on the
+	// screen is a fact about this frame: the same row sits somewhere else
+	// once a notice wraps, and a click read against the wrong frame revokes
+	// the wrong key.
+	rows []drawnRow
+
+	// help is the pager on the one page with more on it than a window shows.
+	// Held for the same reason as the lists: where in the help somebody is
+	// reading is theirs, not something to be reset every frame.
+	help viewport.Model
+
 	// focus is whether a text field is taking keystrokes. Off by default,
 	// and that is the whole point: a field that swallows every key while it
 	// is on screen takes the page shortcuts with it, so b, k and m stop
@@ -295,7 +308,11 @@ func (m model) Init() tea.Cmd {
 }
 
 func (m model) View() tea.View {
-	content, where := m.frame()
+	// A pointer, because drawing is what sizes the list on the page and what
+	// records where its rows landed, and both have to survive to reach the
+	// click handling below.
+	p := &m
+	content, where := p.frame()
 	v := ownedView(content)
 	// Cell motion rather than all-motion: clicks and drags, not every mouse
 	// movement reported. Over ssh this is the difference between a program
@@ -368,10 +385,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		m.routes.SetWidth(m.listWidth())
-		m.routes.SetHeight(m.listHeight(1))
-		m.apiKeys.SetWidth(m.listWidth())
-		m.apiKeys.SetHeight(m.listHeight(2))
+		// The lists are not resized here. They are sized by the page that
+		// draws them, every frame, because what they are sized to is the room
+		// between a title and the prose under it rather than the window; and
+		// because a list that has not been built yet is a zero value, which
+		// the component panics on.
+		m.sizeHelp()
 		return m, nil
 
 	case provenMsg:
@@ -491,19 +510,49 @@ func (m model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.retreat(), nil
 	}
 
-	if m.focus {
-		switch m.view {
-		case screenDeposit:
-			return m.onDepositKey(msg)
-		case screenKeys, screenModels:
+	// The widget on screen gets the keyboard first - and a text field gets all
+	// of it, because a field that lets a letter through to the program is a
+	// field that disconnects the session because somebody typed q into an
+	// amount. A list gets only what it claims; see listClaims for what that
+	// is and why.
+	if m.focus && m.view == screenDeposit {
+		return m.onDepositKey(msg)
+	}
+	if l := m.nav(); m.focus && l != nil {
+		// Esc and enter are not the list's to answer for: esc puts the
+		// cursor down without leaving the page, and enter acts on where the
+		// cursor is, which is this program's idea of what a selection is for.
+		switch msg.String() {
+		case "esc":
+			m.focus = false
+			m.paintFocus()
+			return m, nil
+		case "enter":
+			return m.onListEnter()
+		}
+		if listClaims(l.KeyMap, msg.String()) {
 			return m.onListKey(msg)
 		}
 	}
+	if m.view == screenHelp && helpKeys[msg.String()] {
+		return m.scrollHelp(msg), nil
+	}
+	return m.onProgramKey(msg)
+}
 
-	// What is left is a handful of things that are not navigation: leaving,
-	// copying a key that is on screen, reading the help, re-reading a balance.
-	// Nothing here is a page, which is what keeps the letters free for a list
-	// to use.
+// onProgramKey is leaving, copying a key that is on screen, minting another,
+// reading the help, and re-reading a balance.
+//
+// It comes after the widget on screen rather than before it, and that ordering
+// is the whole of the focus rule. A text field is holding the keyboard, so it
+// keeps these: a field that quits the session because somebody typed a letter
+// into an amount is the trap the focus exists to avoid. A list is different -
+// it answers only to hjkl and the paging keys and swallows everything else -
+// and a list arrives focused, because that is what makes hjkl work without a
+// keystroke. So the keys that were left to a list were keys nobody pressed:
+// on the api keys screen, which is the page whose whole job is minting a key,
+// `n` went into the list and did nothing.
+func (m model) onProgramKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q":
 		return m, tea.Quit
@@ -515,14 +564,15 @@ func (m model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// A reload is a key because the balance is somebody's money and they
 		// should be able to make it re-read without reconnecting.
 		return m, refreshCmd(m.deps)
-	}
-
-	// Minting is a keystroke rather than a sub-menu. Revoking is not, and
-	// used to be a number typed beside the key: there is a cursor now, and a
-	// number next to a thing that moves is a number that means one thing on
-	// screen and another after a keypress. Enter acts on where the cursor is.
-	if m.view == screenKeys && msg.String() == "n" {
-		return m.mintKey()
+	case "n":
+		// Minting is a keystroke rather than a sub-menu. Revoking is not, and
+		// used to be a number typed beside the key: there is a cursor now, and
+		// a number next to a thing that moves is a number that means one
+		// thing on screen and another after a keypress. Enter acts on where
+		// the cursor is.
+		if m.view == screenKeys {
+			return m.mintKey()
+		}
 	}
 	return m, nil
 }
@@ -616,17 +666,13 @@ func (m model) revokeKey(oneBased int) (tea.Model, tea.Cmd) {
 	}
 }
 
-// onListKey is a focused list. Esc and tab both put the cursor down without
-// changing anything, and everything else is the component's business.
+// onListKey is a focused list and a key it has a binding for, so the whole of
+// what happens next is the component's business.
+//
+// It is handed the key rather than asked about it, which is why the caller
+// checks listClaims first: a component that is given a key it has no binding
+// for swallows it, and a swallowed key is a key nobody presses.
 func (m model) onListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc":
-		m.focus = false
-		m.paintFocus()
-		return m, nil
-	case "enter":
-		return m.onListEnter()
-	}
 	if l := m.nav(); l != nil {
 		// Update returns the moved list rather than mutating in place, and a
 		// discarded copy is a cursor that never goes anywhere.
@@ -755,55 +801,174 @@ func parseSOL(text string) (uint64, error) {
 // renderPage is the page content and everything that hangs off it, with no
 // frame around it: the box is applied by render so that its width and the
 // bar's width are decided in the same place.
-func (m model) renderPage() (string, int) {
+//
+// The two lists are sized here rather than when the window changed, because
+// the room a list gets is what is left of the box after the lines the page
+// prints around it - and those change under it. A notice wraps to a second
+// line when a key is minted, and a page with a fresh key on it has two more
+// lines under the list than one without. Sized once, at the window resize, a
+// list is right until the first time somebody does something, and then it is
+// either scrolling off the bottom of the box or leaving a hole under it - and
+// both of those look like the frame is broken rather than like a list is the
+// wrong size.
+func (m *model) renderPage() (string, int) {
 	var b strings.Builder
-	if !m.deps.Proven && m.deps.Address != "" {
-		b.WriteString("  " + m.st.warn.Render("read-only: this address was named, not proved") + "\n\n")
-	}
+	b.WriteString(m.banner())
 
-	// listAt is the line the page's first list row lands on, relative to the
-	// top of the page, or -1 for a page with no list.
-	listAt := -1
+	// listTop is the line the page's list starts on, relative to the top of
+	// the page, and -1 for a page with no list. Absolute lines are worked out
+	// by frame, which is what knows where the page itself starts.
+	listTop := -1
 	switch m.view {
 	case screenDeposit:
 		b.WriteString(m.renderDeposit())
 	case screenKeys:
-		var at int
-		b.WriteString(m.addRow(&at, m.renderKeys))
-		listAt = at
+		head, tail := m.keysPage()
+		l, view, rows := m.fitted(m.apiKeys, 2, head, tail)
+		m.apiKeys, m.rows = l, rows
+		listTop = countLines(b.String() + head)
+		b.WriteString(head + view + "\n" + tail)
 	case screenModels:
-		var at int
-		b.WriteString(m.addRow(&at, m.renderModels))
-		listAt = at
+		head, tail := m.routesPage()
+		l, view, rows := m.fitted(m.routes, 1, head, tail)
+		m.routes, m.rows = l, rows
+		listTop = countLines(b.String() + head)
+		b.WriteString(head + view + "\n" + tail)
 	case screenHelp:
 		b.WriteString(m.renderHelp())
 	default:
 		b.WriteString(m.renderHome())
 	}
-
 	if m.busy != "" {
 		b.WriteString("\n\n  " + m.st.warn.Render(m.busy) + "\n")
 	}
-	if m.notice.kind != noticeNone {
-		b.WriteString("\n")
-		switch m.notice.kind {
-		case noticeGood:
-			b.WriteString(m.wrap(m.st.okText.Render(m.notice.text), m.st.okText))
-		default:
-			b.WriteString(m.wrap(m.st.errText.Render(m.notice.text), m.st.errText))
-		}
-		b.WriteString("\n")
-	}
-	return b.String(), listAt
+	b.WriteString(m.note())
+	return b.String(), listTop
 }
 
-// addRow adapts a page that reports where its list starts so the switch above
-// reads as one case per page rather than a case and a dance for the two that
-// carry a list.
-func (m model) addRow(at *int, page func() (string, int)) string {
-	text, first := page()
-	*at = first
-	return text
+// banner is the line a page carries above it when the session is only looking
+// at somebody else's account.
+func (m model) banner() string {
+	if m.deps.Proven || m.deps.Address == "" {
+		return ""
+	}
+	return "  " + m.st.warn.Render("read-only: this address was named, not proved") + "\n\n"
+}
+
+// note is what the page has to say about the last thing that happened to it.
+//
+// Counted by the list sizing as well as drawn by the page, for the reason
+// above: a notice that wraps to two lines is two lines out of the room the
+// list had.
+func (m model) note() string {
+	var b strings.Builder
+	if m.busy != "" {
+		b.WriteString("\n\n  " + m.st.warn.Render(m.busy) + "\n")
+	}
+	if m.notice.kind == noticeNone {
+		return b.String()
+	}
+	b.WriteString("\n")
+	switch m.notice.kind {
+	case noticeGood:
+		b.WriteString(m.wrap(m.st.okText.Render(m.notice.text), m.st.okText))
+	default:
+		b.WriteString(m.wrap(m.st.errText.Render(m.notice.text), m.st.errText))
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
+// pageRoom is how many terminal lines the page inside the box has to fill:
+// the window, less the brand line, the bar, the footer, and the box's own
+// bottom edge. One fewer than the box because the box's height counts its
+// border, and the page does not have one along the bottom of its own.
+//
+// Floored, because a model built by hand in a test has no window and a
+// negative height is a component that draws nothing rather than a small one
+// that draws something.
+func (m model) pageRoom() int {
+	return max(1, m.height-brandLines-footerLines-barLines-1)
+}
+
+// fitted gives a list the room left on the page and returns it with what it
+// made, and where each row landed.
+//
+// Asked and checked rather than worked out, because the component's own
+// arithmetic is not something to reproduce here: it lays its rows out around
+// a status bar, a blank line under it, a blank between rows and a margin
+// above the page dots, and it grows past the height it was given rather than
+// cutting itself at it. A height derived from an assumed formula is a list
+// that is one row out, and the check below is two lines long and cannot be.
+//
+// The rows come back from the delegate, which is the only thing in the program
+// that sees each row as it is drawn. Asking the component where it put them
+// afterwards is not an option and counting the blanks between them is the
+// guess this function exists to avoid.
+func (m *model) fitted(l list.Model, perRow int, head, tail string) (list.Model, string, []drawnRow) {
+	room := m.roomFor(head, tail, countLines(m.note()))
+	// The delegate starts as if it had already written the lines the
+	// component puts above the first row, so what it records is a line on the
+	// screen rather than a line inside the component.
+	d := &rowDelegate{focused: m.focus, written: listLead}
+	l.SetDelegate(d)
+	l.SetWidth(m.listWidth())
+	floor := m.listFloor(perRow)
+	l.SetHeight(max(floor, room))
+	for range 4 {
+		// Both cleared each time round: the delegate records every row the
+		// list draws and how many lines it has written, and four passes at
+		// the same list would otherwise answer with four copies of every row
+		// at four different heights.
+		d.drawn, d.written = nil, listLead
+		view := l.View()
+		if countLines(view) <= room || l.Height() <= floor {
+			return l, view, d.drawn
+		}
+		l.SetHeight(max(floor, l.Height()+room-countLines(view)))
+	}
+	d.drawn, d.written = nil, listLead
+	return l, l.View(), d.drawn
+}
+
+// listFloor is the smallest a list on this page is allowed to be: three rows,
+// because below that there is no room to move the cursor and say so.
+//
+// A terminal too short for it still gets it - the list is the page, and a
+// list sized to nothing is not a tight list, it is a broken one. What a page
+// does about being too short is drop the prose under the list, which is what
+// keysPage asks about this before it keeps it.
+func (m model) listFloor(perRow int) int { return perRow * 3 }
+
+// roomFor is how many lines are left on the page for a list once the two
+// halves of the page around it and the notice under it are counted.
+//
+// Pages ask this before deciding what to leave off, so a page can drop the
+// line that matters least rather than having the frame cut off the line that
+// matters most - see keysPage.
+func (m model) roomFor(head, tail string, noticeLines int) int {
+	return m.pageRoom() - countLines(m.banner()) - countLines(head) - countLines(tail) - noticeLines
+}
+
+// countLines is how many lines a string adds to what is already written, which
+// is what every layout decision in this file is made in and what lipgloss
+// measures things in too.
+//
+// The trailing newline is the whole of the subtlety. Every chunk of a page in
+// this program ends with one, because they are concatenated, and a string
+// that ends with a newline has closed its last line rather than started
+// another: counting it as one more line puts every measurement of a page one
+// line out, which is a list drawn a line lower than the frame thinks it is
+// and a click one row out.
+func countLines(s string) int {
+	if s == "" {
+		return 0
+	}
+	n := strings.Count(s, "\n")
+	if !strings.HasSuffix(s, "\n") {
+		n++
+	}
+	return n
 }
 
 // frame is the brand line, the bar, and the page in the box underneath them.
@@ -812,24 +977,30 @@ func (m model) addRow(at *int, page func() (string, int)) string {
 // whole of what makes the two look joined rather than stacked: a bar floating
 // above a wall of text reads as chrome, and a bar whose current tab opens into
 // the page reads as navigation.
-func (m model) frame() (string, clicks) {
+//
+// A pointer receiver, unlike everything else that draws, because drawing the
+// page is what sizes the list on it and what records where its rows landed.
+// Both are per-frame facts that the click handling has to agree with, and a
+// copy of the model would have thrown them away.
+func (m *model) frame() (string, clicks) {
+	m.rows = nil
 	bar, spans := m.tabBar()
 	page, listAt := m.renderPage()
 
-	perRow := m.listLinesPerRow()
 	where := clicks{
 		tabs:    spans,
 		tabLine: barTop,
-		rows:    m.visibleRows(perRow),
-		perRow:  perRow,
-		inside:  span{x0: 1, x1: m.contentWidth() - 1},
+		inside:  span{x0: 1, x1: m.width - 1},
 	}
 	// The page starts on the line after the bar's underline, and the box has no
-	// top edge, so the page's own line count is the terminal's line count from
-	// there on. A list's rows therefore sit at a known absolute line without
-	// anybody having to remember what the page printed above them.
+	// top edge of its own, so a line on the page is a line on the terminal from
+	// there on. The rows come back from the delegate that drew them, offset by
+	// the lines the component puts above them, so a click lands on the row
+	// under it rather than on a row counted by a formula that a later release
+	// of the component would move.
 	if listAt >= 0 {
 		where.listTop = brandLines + barLines + listAt
+		where.rows = m.rows
 	}
 	return frame(m.st, m.width, m.height, bar, page, m.footer()), where
 }
@@ -844,13 +1015,12 @@ type clicks struct {
 	tabs    []span
 	tabLine int
 
-	// listTop is the line the current page's first list row is on, perRow is
-	// how many terminal lines a row occupies, and rows is how many are actually
-	// on screen rather than how many exist: clicking a row that is on another
-	// page is a click on nothing.
+	// listTop is the line the current page's first list row is on and rows are
+	// where the rest of them fell, as the delegate drew them. Only the rows on
+	// this page are in it: clicking a row that is on another page of the list
+	// is a click on nothing.
 	listTop int
-	rows    int
-	perRow  int
+	rows    []drawnRow
 
 	// inside is the horizontal extent of the box, so a click on its border is
 	// not a click on the row behind the border.
@@ -860,6 +1030,13 @@ type clicks struct {
 // barTop is where the bar starts counting from: the brand line is line 0 and
 // the bar is drawn on the two after it.
 const barTop = 1
+
+// listLead is how many lines the list component puts above its first row: the
+// status bar that says how many keys there are, and the blank line under it.
+//
+// Measured, not assumed: a frame whose rows are one line out is a frame whose
+// clicks revoke the wrong key.
+const listLead = 2
 
 // tabAt returns the page a click on line y column x landed on.
 func (c clicks) tabAt(x, y int) (screen, bool) {
@@ -876,66 +1053,21 @@ func (c clicks) tabAt(x, y int) (screen, bool) {
 	return 0, false
 }
 
-// rowAt returns the row index a click landed on within the list, if any.
+// rowAt returns the item a click landed on within the list, if any.
 func (c clicks) rowAt(x, y int) (int, bool) {
-	if c.perRow == 0 || c.rows == 0 || !c.inside.contains(x) {
+	if len(c.rows) == 0 || !c.inside.contains(x) {
 		return 0, false
 	}
-	// The list sits inside the box, so its first row is two lines down from the
-	// top of the box: the border, then the blank line the page starts with.
 	off := y - c.listTop
 	if off < 0 {
 		return 0, false
 	}
-	row := off / c.perRow
-	if row >= c.rows {
-		return 0, false
+	for _, r := range c.rows {
+		if off >= r.start && off < r.start+r.lines {
+			return r.item, true
+		}
 	}
-	return row, true
-}
-
-// rowHeights is how many rows the list on screen has, and listLinesPerRow how
-// many terminal lines each occupies. Both zero on a page with no list, which
-// is how rowAt says no without needing to know which pages have one.
-func (m model) rowHeights() int {
-	switch m.view {
-	case screenKeys:
-		return len(m.account.Keys)
-	case screenModels:
-		return len(m.routes.Items())
-	}
-	return 0
-}
-
-// visibleRows is how many rows of the list are on screen, which is the list's
-// own height rather than the number of items: forty routes on a short terminal
-// show a handful of them and the rest are a page away.
-func (m model) visibleRows(perRow int) int {
-	if perRow == 0 {
-		return 0
-	}
-	total := m.rowHeights()
-	shown := m.routes.Height()
-	if m.view == screenKeys {
-		shown = m.apiKeys.Height()
-	}
-	if shown <= 0 {
-		return 0
-	}
-	if total > shown {
-		total = shown
-	}
-	return total
-}
-
-func (m model) listLinesPerRow() int {
-	switch m.view {
-	case screenKeys:
-		return 2
-	case screenModels:
-		return 1
-	}
-	return 0
+	return 0, false
 }
 
 func (m model) header() string {
@@ -965,21 +1097,24 @@ func (m model) tabBar() (string, []span) {
 		if s.view == m.view {
 			style = m.st.tabActive
 		}
-		// The ends have to close the run rather than each close themselves, or
-		// the first tab grows a corner in the middle of the bar. This is the
-		// tabs example's treatment: the leftmost keeps its left wall, the
-		// rightmost keeps its right one, and only the outer corners change.
+		// Only the first tab is corrected, to keep its own wall: the leftmost
+		// tab's left edge is also the box's left edge, so its bottom-left
+		// corner has to be one that a vertical line can leave downwards -
+		// a plain bar beside the page has a box to run into and a corner that
+		// turns into one does too.
+		//
+		// The last tab keeps the corner its style gives it, which the tabs
+		// example overrides because there the page is exactly as wide as the
+		// bar. Here it is not: the bar stops wherever the names stop and the
+		// box's top edge carries on to the right of it, so the corner that
+		// suits it is the one that runs along with that edge.
 		border, _, _, _, _ := style.GetBorder()
-		first, last, active := i == 0, i == len(screens)-1, s.view == m.view
+		first, active := i == 0, s.view == m.view
 		switch {
 		case first && active:
 			border.BottomLeft = "\u2502"
 		case first && !active:
 			border.BottomLeft = "\u251c"
-		case last && active:
-			border.BottomRight = "\u2502"
-		case last && !active:
-			border.BottomRight = "\u2524"
 		}
 		cell := style.Border(border).Render(s.name)
 		rendered = append(rendered, cell)
@@ -988,7 +1123,31 @@ func (m model) tabBar() (string, []span) {
 		spans = append(spans, span{x0: x, x1: x + w})
 		x += w
 	}
-	return lipgloss.JoinHorizontal(lipgloss.Top, rendered...), spans
+	bar := lipgloss.JoinHorizontal(lipgloss.Top, rendered...)
+	return m.carryBarEdge(bar, x), spans
+}
+
+// carryBarEdge runs the bar's bottom edge on to the right-hand corner of the
+// box.
+//
+// The bar is as wide as the names in it and the box is as wide as the window,
+// so without this the top of the frame simply stops a third of the way across
+// the terminal: a box with a lid on the left two thirds of it and open sky
+// over the rest, which reads as the bar being drawn over something rather
+// than as a page with a bar on it. The run is the box's own border colour, so
+// it is the edge continuing rather than more bar.
+func (m model) carryBarEdge(bar string, barWidth int) string {
+	lines := strings.Split(bar, "\n")
+	if len(lines) < barLines || m.width <= barWidth {
+		return bar
+	}
+	// One column short of the window: the last is the box's corner.
+	run := m.width - barWidth - 1
+	if run < 1 {
+		return bar
+	}
+	lines[barLines-1] += edge.Render(strings.Repeat("\u2500", run)) + edge.Render("\u2510")
+	return strings.Join(lines, "\n")
 }
 
 // span is a run of terminal columns something clickable occupies.
@@ -1019,6 +1178,13 @@ func (m model) footer() string {
 	// usually refused is a keystroke people learn to ignore.
 	if m.fresh != "" {
 		pairs = append(pairs, [2]string{"y", "copy key"})
+	}
+	// The help screen scrolls when it has more on it than fits, and only then:
+	// a hint that claims a page scrolls on a terminal where it does not is
+	// worse than no hint, because the person presses j and then wonders why
+	// nothing happened.
+	if m.view == screenHelp && m.helpOverflows() {
+		pairs = append(pairs, [2]string{"hjkl", "scroll"})
 	}
 	pairs = append(pairs, [2]string{"?", "help"}, [2]string{"q", "quit"})
 
@@ -1151,34 +1317,51 @@ func (m model) focusHint() string {
 	return m.st.key.Render("tab") + m.st.dim.Render(" to type an amount")
 }
 
-func (m model) renderKeys() (string, int) {
-	var b strings.Builder
-	b.WriteString("  " + m.st.title.Render("api keys") + "\n\n")
-	first := strings.Count(b.String(), "\n") + 1
-	b.WriteString(m.apiKeys.View() + "\n")
-	b.WriteString("  " + m.st.key.Render("n") + m.st.dim.Render(" mint a new key    ") +
+// keysPage is the api keys screen without the list in it: the title above and
+// everything under. Returned as two halves so the list can be sized to what
+// is left between them, which is the only way to be sure the hint underneath
+// is still on the screen afterwards.
+func (m model) keysPage() (head, tail string) {
+	var h, t strings.Builder
+	h.WriteString("  " + m.st.title.Render("api keys") + "\n\n")
+
+	t.WriteString("  " + m.st.key.Render("n") + m.st.dim.Render(" mint a new key    ") +
 		m.st.key.Render("enter") + m.st.dim.Render(" revoke the selected one") + "\n")
-	b.WriteString("\n  " + m.listHint("to revoke it") + "\n")
-	b.WriteString("\n  " + m.st.dim.Render("A key is shown once, when it is minted; only its fingerprint is kept.") + "\n")
-	b.WriteString("  " + m.st.dim.Render("Losing one is not a problem: mint another.") + "\n")
+	t.WriteString("\n  " + m.listHint("to revoke it") + "\n")
 	if m.fresh != "" {
-		b.WriteString("\n  " + m.st.key.Render("y") + m.st.dim.Render(" copy the key above") + "\n")
+		t.WriteString("\n  " + m.st.key.Render("y") + m.st.dim.Render(" copy the key above") + "\n")
 	}
-	return b.String(), first
+	head, tail = h.String(), t.String()
+
+	// The reassurance underneath it - that a key is printed once and that
+	// losing one costs nothing - is the first thing on this page to be left
+	// off when the terminal is short, and it is asked for rather than
+	// discovered: everything below it in the frame is a notice, and on this
+	// page a notice can be the only copy of a key that will never be printed
+	// again. A frame that cuts the reassurance to reach the key is the right
+	// trade; one that cuts the key to reach the reassurance is how somebody
+	// loses a key they had just made.
+	//
+	// Asked with the prose already counted and with the list still to have a
+	// floor, because a page that fits while the list is left with nothing is
+	// a page that does not fit.
+	prose := "\n  " + m.st.dim.Render("A key is shown once, when it is minted; only its fingerprint is kept.") +
+		"\n  " + m.st.dim.Render("Losing one is not a problem: mint another.") + "\n"
+	if m.roomFor(head, tail+prose, 3) >= m.listFloor(2) {
+		tail += prose
+	}
+	return head, tail
 }
 
-func (m model) renderModels() (string, int) {
-	var b strings.Builder
-	b.WriteString("  " + m.st.title.Render("routes") + "\n\n")
-	// Counted, not assumed: a click has to keep landing on the right row when
-	// the title above it grows a line. The component prints its own status bar
-	// before the rows, so the first row is one past what has been written.
-	first := strings.Count(b.String(), "\n") + 1
-	b.WriteString(m.routes.View() + "\n")
-	b.WriteString("  " + m.st.dim.Render("ask for one by putting its name in \"model\". Prices are per million tokens,") + "\n")
-	b.WriteString("  " + m.st.dim.Render("and what they are is the rate your balance is actually billed at.") + "\n")
-	b.WriteString("\n  " + m.listHint("") + "\n")
-	return b.String(), first
+// routesPage is the routes screen without the list in it, for the same reason.
+func (m model) routesPage() (head, tail string) {
+	var h, t strings.Builder
+	h.WriteString("  " + m.st.title.Render("routes") + "\n\n")
+
+	t.WriteString("  " + m.st.dim.Render("ask for one by putting its name in \"model\". Prices are per million tokens,") + "\n")
+	t.WriteString("  " + m.st.dim.Render("and what they are is the rate your balance is actually billed at.") + "\n")
+	t.WriteString("\n  " + m.listHint("") + "\n")
+	return h.String(), t.String()
 }
 
 // listHint says what the list above it will answer to, and it depends on
@@ -1203,61 +1386,6 @@ func (m model) listHint(enterMeans string) string {
 // whole inner width rather than that minus two.
 func (m model) listWidth() int {
 	return bodyWidth(m.width)
-}
-
-// listHeight is how many terminal lines a list may use once the title, the
-// lines of prose around it and the hint underneath have taken their share.
-// perRow is how many lines one of this list's rows occupies.
-func (m model) listHeight(perRow int) int {
-	// Derived from the frame rather than a number of its own: the chrome around
-	// a list, plus the box's two horizontal borders, plus the four lines a page
-	// spends on its own title, the blank under it, its blank before the hint and
-	// the hint. Changing the frame and leaving this at a constant is how a list
-	// ends up either scrolling off the bottom or leaving a hole under it.
-	// Box, less its two horizontal borders, less the four lines a page spends
-	// on its title and the lines around its hint, less the component's own
-	// status bar. Derived from the frame rather than being a constant, because
-	// a constant here is how a list ends up scrolling off the bottom while the
-	// page it is on still fits.
-	h := m.height - brandLines - footerLines - barLines - 8
-	if h < perRow*3 {
-		h = perRow * 3
-	}
-	return h
-}
-
-func (m model) renderHelp() string {
-	var b strings.Builder
-	b.WriteString("  " + m.st.title.Render("RouterCafe") + "\n\n")
-	b.WriteString("  " + m.st.value.Render("An OpenRouter you reach with ssh, paid for in SOL.") + "\n\n")
-	b.WriteString("  " + m.st.label.Render("tab") + m.st.dim.Render("  next page, and into the field when a page has one") + "\n")
-	b.WriteString("  " + m.st.label.Render("shift+tab") + m.st.dim.Render("  previous page") + "\n")
-	b.WriteString("  " + m.st.label.Render("hjkl") + m.st.dim.Render("  move through a list, and page it with h and l") + "\n")
-	b.WriteString("  " + m.st.label.Render("enter") + m.st.dim.Render("  act on where the cursor is, or on the field") + "\n")
-	b.WriteString("  " + m.st.label.Render("esc") + m.st.dim.Render("  put the caret down without leaving the page") + "\n")
-	b.WriteString("  " + m.st.label.Render("r") + m.st.dim.Render("  re-read the balance") + "\n")
-	b.WriteString("  " + m.st.label.Render("y") + m.st.dim.Render("  copy a key just minted, using OSC 52") + "\n")
-	b.WriteString("  " + m.st.label.Render("q") + m.st.dim.Render("  disconnect") + "\n\n")
-	b.WriteString("  " + m.st.dim.Render("There are no letters that jump between pages. The bar at the top is the") + "\n")
-	b.WriteString("  " + m.st.dim.Render("whole of the navigation, so nothing has to be remembered and nothing can") + "\n")
-	b.WriteString("  " + m.st.dim.Render("mean two things on the same screen.") + "\n\n")
-
-	b.WriteString("  " + m.st.title.Render("what this is not") + "\n\n")
-	b.WriteString("  " + m.st.dim.Render("There is no shell here. Nothing you type is run on this machine,") + "\n")
-	b.WriteString("  " + m.st.dim.Render("because there is no way to ask it to: the session is a program,") + "\n")
-	b.WriteString("  " + m.st.dim.Render("not a command line, and a command sent instead of a shell is ignored.") + "\n\n")
-	b.WriteString("  " + m.st.dim.Render("Your private key never leaves your machine. This server asks the agent") + "\n")
-	b.WriteString("  " + m.st.dim.Render("you forwarded with ssh -A, and checks the transaction it gets back.") + "\n")
-	b.WriteString("  " + m.st.dim.Render("The same, more carefully, is at "+Domain+".") + "\n")
-
-	// The version, because this screen is where somebody goes to work out what
-	// they are talking to - and the answer comes from the server, not from the
-	// binary they happen to have. Left off entirely when there is none: a blank
-	// or bare "dev" line reads as a bug, where no line reads as a build.
-	if v := strings.TrimSpace(m.deps.Version); v != "" && v != "dev" {
-		b.WriteString("\n  " + m.st.dim.Render("server version "+v) + "\n")
-	}
-	return b.String()
 }
 
 // notOwned is what every action that changes an account says without one.
@@ -1300,7 +1428,15 @@ func (m model) contentWidth() int {
 // Not lipgloss's Wrap: that breaks on words and will not break a URL or an
 // address, and both of those are things a session needs to read in full.
 func (m model) wrap(s string, style lipgloss.Style) string {
-	width := m.contentWidth()
+	return m.wrapTo(s, style, m.contentWidth())
+}
+
+// wrapTo is wrap at a width the caller has been told about rather than one it
+// has to guess, which is what a pager needs: it is told how wide it is, and
+// prose wrapped to any other width is prose with its last few words off the
+// right-hand edge of a box that is two columns wider than the one it was
+// written for.
+func (m model) wrapTo(s string, style lipgloss.Style, width int) string {
 	if width < 20 {
 		width = 20
 	}

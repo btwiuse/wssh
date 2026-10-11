@@ -267,12 +267,16 @@ func (s *Server) modelFor(w who) tea.Model {
 		st:      newStyles(),
 		view:    screenHome,
 		account: s.opts.Ledger.Account(address),
+		help:    newHelp(),
 		width:   80,
 		height:  24,
 	}
 	// The two lists are built here rather than lazily on first visit, so that
 	// arriving at one is not the thing that discovers there is no catalogue.
+	// The pager is sized here for the same reason it is not sized by its own
+	// draw: a View cannot keep what it measures.
 	m.syncLists()
+	m.sizeHelp()
 	return m
 }
 
@@ -381,17 +385,6 @@ func (r refuseModel) View() tea.View {
 		// than a guess, and wide enough that nothing is cut.
 		width = 80
 	}
-	var b strings.Builder
-	b.WriteString("  " + wrapText(r.reason, bodyWidth(width), st.errText))
-	b.WriteString("\n")
-	b.WriteString(wrapText("make a key, then connect with it:", bodyWidth(width), st.title))
-	b.WriteString("\n\n")
-	b.WriteString(wrapText(KeyCommand, bodyWidth(width), st.accent))
-	b.WriteString("\n\n")
-	b.WriteString(wrapText("then:", bodyWidth(width), st.title))
-	b.WriteString("\n\n")
-	b.WriteString(wrapText("ssh -A -i ~/.ssh/routercafe "+Domain, bodyWidth(width), st.accent))
-	b.WriteString("\n\n")
 	// Same chrome as every other screen, so a refusal reads as this program
 	// refusing rather than as a different program that happens to share a name.
 	//
@@ -402,8 +395,40 @@ func (r refuseModel) View() tea.View {
 	if height <= 0 {
 		height = refusalHeight
 	}
+
+	inside := bodyWidth(width)
+	var fix strings.Builder
+	fix.WriteString(wrapText("make a key, then connect with it:", inside, st.title))
+	fix.WriteString("\n\n")
+	fix.WriteString(wrapText(KeyCommand, inside, st.accent))
+	fix.WriteString("\n\n")
+	fix.WriteString(wrapText("then:", inside, st.title))
+	fix.WriteString("\n\n")
+	fix.WriteString(wrapText("ssh -A -i ~/.ssh/routercafe "+Domain, inside, st.accent))
+	fix.WriteString("\n")
+
+	// The explanation goes first when there is not room for it, and it is
+	// asked for rather than discovered. A frame cuts what does not fit from
+	// the bottom, which on this screen would cut the command - and
+	// KeyCommand's own note says a half-printed command is the one thing it
+	// must never show.
+	//
+	// So the reason is given up a paragraph at a time. The first paragraph is
+	// the sentence saying what happened, which is the half somebody reading a
+	// refusal in a phone-width window can still act on; the second is why
+	// ed25519 is the shape an account takes, which is worth having and is not
+	// worth a cut-off command.
+	room := height - brandLines - footerLines - topEdgeLines - 1
+	body := wrapText(r.reason, inside, st.errText) + "\n\n" + fix.String()
+	if countLines(body) > room {
+		first, _, _ := strings.Cut(r.reason, "\n\n")
+		body = wrapText(first, inside, st.errText) + "\n\n" + fix.String()
+	}
+	if countLines(body) > room {
+		body = fix.String()
+	}
 	return ownedView(frame(st, width, height, "",
-		strings.TrimRight(b.String(), "\n"),
+		strings.TrimRight(body, "\n"),
 		"  "+st.dim.Render("q to disconnect")))
 }
 

@@ -401,13 +401,16 @@ func TestANamedUsernameOutranksTheKeyThatAuthenticated(t *testing.T) {
 // A build with no version ldflags must say nothing at all: a blank line, or a
 // bare "dev", reads as a bug rather than as an unversioned build.
 func TestTheHelpScreenSaysWhichServerThisIs(t *testing.T) {
-	m := model{st: newStyles(), width: 100, deps: deps{Version: "0.1.0"}}
+	// Tall enough to hold the whole of the help, which is now a pager rather
+	// than a block of text: the version line is the last thing on it and a
+	// short window scrolls it off the top of the box rather than cutting it.
+	m := model{st: newStyles(), width: 100, height: 40, deps: deps{Version: "0.1.0"}}
 	if got := m.renderHelp(); !strings.Contains(got, "server version 0.1.0") {
 		t.Errorf("the help screen does not say the version:\n%s", got)
 	}
 
 	for _, none := range []string{"", "   ", "dev"} {
-		got := model{st: newStyles(), width: 100, deps: deps{Version: none}}.renderHelp()
+		got := model{st: newStyles(), width: 100, height: 40, deps: deps{Version: none}}.renderHelp()
 		if strings.Contains(got, "server version") {
 			t.Errorf("an unversioned build (%q) printed a version line", none)
 		}
@@ -1255,6 +1258,21 @@ func TestAListCannotTakeTheProgramsKeys(t *testing.T) {
 		t.Errorf("the list answers to %v; a filter would want esc", got)
 	}
 
+	// And the claim list a list is asked about agrees with the bindings: a
+	// key the component is bound to is the component's, and every key it is
+	// not bound to has to be the programs, or it is a key nobody presses.
+	km = listKeyMap()
+	for _, k := range []string{"up", "k", "down", "j", "left", "h", "right", "l", "pgup", "pgdown", "home", "g", "end", "G", "ctrl+c"} {
+		if !listClaims(km, k) {
+			t.Errorf("the list is bound to %q but does not claim it", k)
+		}
+	}
+	for _, k := range []string{"q", "y", "n", "r", "?", "esc", "enter", "tab", "shift+tab", "b", "d", "f", "u", "space"} {
+		if listClaims(km, k) {
+			t.Errorf("the list claims %q, which is not its binding", k)
+		}
+	}
+
 	// Paging stays narrow on purpose. Nothing needs b, d, f or u any more -
 	// there are no page shortcuts - but a list that takes four ways to page is
 	// a list with four things to remember, and this is a program about money.
@@ -1423,8 +1441,8 @@ func TestClickingARowMovesTheCursorAndFocusesTheList(t *testing.T) {
 	m.syncLists()
 	m.focus = false
 	_, where := m.frame()
-	if where.perRow != 1 || where.rows == 0 {
-		t.Fatalf("the routes list reported %d rows of %d lines", where.rows, where.perRow)
+	if len(where.rows) == 0 {
+		t.Fatalf("the routes list reported %d rows", len(where.rows))
 	}
 
 	row, ok := where.rowAt(40, where.listTop+2)
@@ -1451,17 +1469,31 @@ func TestClickingARowMovesTheCursorAndFocusesTheList(t *testing.T) {
 	k := m
 	k.account = ledger.Account(treasuryAddress)
 	k.view = screenKeys
+	k.syncLists()
 	_, kw := k.frame()
-	if kw.perRow != 2 {
-		t.Errorf("the keys list reported %d lines per row, want 2", kw.perRow)
-	}
 	// Both lines of a key row are that row: the key is on the first and the
 	// dates on the second, and nobody aims at the first one.
-	if r, ok := kw.rowAt(40, kw.listTop+1); !ok || r != 0 {
-		t.Errorf("the second line of the first key gave row %d found=%v, want 0", r, ok)
+	for _, tc := range []struct {
+		off  int
+		want int
+	}{
+		{2, 0}, {3, 0},
+		{5, 1}, {6, 1},
+	} {
+		if r, ok := kw.rowAt(40, kw.listTop+tc.off); !ok || r != tc.want {
+			t.Errorf("a click %d lines into the list gave row %d found=%v, want %d", tc.off, r, ok, tc.want)
+		}
 	}
-	if r, ok := kw.rowAt(40, kw.listTop+2); !ok || r != 1 {
-		t.Errorf("a click on the second key gave row %d found=%v, want 1", r, ok)
+	// The blank between two key rows belongs to neither of them, and a click
+	// that picked one of them would be selecting a key the cursor was never
+	// anywhere near.
+	if r, ok := kw.rowAt(40, kw.listTop+4); ok {
+		t.Errorf("the gap between two keys selected row %d", r)
+	}
+	// Nor is the status bar or the line under it a row, though they are inside
+	// the list.
+	if r, ok := kw.rowAt(40, kw.listTop); ok {
+		t.Errorf("a click on the status bar selected row %d", r)
 	}
 }
 
@@ -1484,7 +1516,8 @@ func TestAClickOnNothingInParticularSelectsNothing(t *testing.T) {
 	if _, ok := where.rowAt(40, where.listTop-1); ok {
 		t.Error("a click on the line above the list selected a row")
 	}
-	if _, ok := where.rowAt(40, where.listTop+where.rows*where.perRow); ok {
+	last := where.rows[len(where.rows)-1]
+	if _, ok := where.rowAt(40, where.listTop+last.start+last.lines); ok {
 		t.Error("a click below the last visible row selected a row")
 	}
 }
@@ -1602,6 +1635,236 @@ func TestTheThreeScreensAreTheSameShape(t *testing.T) {
 	for name, out := range map[string]string{"picker": picker, "refusal": refusal} {
 		if got, want := len(strings.Split(out, "\n")), len(strings.Split(account, "\n")); got != want {
 			t.Errorf("the %s is %d lines against the account screen's %d", name, got, want)
+		}
+	}
+}
+
+// The key that started all this: `n` on the api keys page did nothing, and
+// the reason is the whole of the focus rule in one place. The page arrives
+// focused, so that hjkl works without a keystroke, and a focused list used to
+// swallow every key it had no binding for - including the one that mints.
+func TestNOnTheKeysScreenMintsAKey(t *testing.T) {
+	ledger := testLedger(t)
+	m := model{
+		st: newStyles(), view: screenKeys, focus: true, width: 100, height: 40,
+		deps: deps{
+			Address: treasuryAddress, Ledger: ledger, Treasury: testTreasury(),
+			Catalogue: DefaultCatalogue(), Proven: true, Host: Domain,
+		},
+	}
+	m.syncLists()
+
+	next, cmd := m.onKey(tea.KeyPressMsg(tea.Key{Code: 'n', Text: "n"}))
+	got := next.(model)
+	if got.busy == "" {
+		t.Error("pressing n did not start minting anything")
+	}
+	if cmd == nil {
+		t.Fatal("pressing n returned nothing to do")
+	}
+	if _, ok := cmd().(keyMintedMsg); !ok {
+		t.Error("pressing n did not mint a key")
+	}
+	if n := len(got.account.Keys); n != 0 {
+		t.Errorf("the account already had %d keys before the command ran", n)
+	}
+}
+
+// The other half of the same rule: the programs own keys still work on a page
+// that arrives focused, and a text field still keeps them, because a field
+// that disconnects the session because somebody typed n into an amount is the
+// trap the focus exists to avoid.
+func TestTheFocusRuleHoldsOnEveryWidget(t *testing.T) {
+	base := func(view screen, focus bool) model {
+		m := model{
+			st: newStyles(), view: view, focus: focus, width: 100, height: 40,
+			deps: deps{
+				Address: treasuryAddress, Ledger: testLedger(t), Treasury: testTreasury(),
+				Catalogue: DefaultCatalogue(), Proven: true, Host: Domain,
+			},
+		}
+		m.syncLists()
+		return m
+	}
+
+	// Focused: a key arrives on the page, not in a widget.
+	for _, view := range []screen{screenKeys, screenModels} {
+		m := base(view, true)
+		_, cmd := m.onKey(tea.KeyPressMsg(tea.Key{Code: 'r', Text: "r"}))
+		if _, ok := cmd().(refreshedMsg); !ok {
+			t.Errorf("%s: a focused list swallowed r", pageName(view))
+		}
+	}
+	// Unfocused, a list is an ordinary page: the programs own keys still work,
+	// and hjkl still does not, which is what the line under the list says.
+	m := base(screenKeys, false)
+	if _, cmd := m.onKey(tea.KeyPressMsg(tea.Key{Code: 'j', Text: "j"})); cmd != nil {
+		t.Error("an unfocused list moved its cursor")
+	}
+	next, cmd := m.onKey(tea.KeyPressMsg(tea.Key{Code: 'n', Text: "n"}))
+	if next.(model).busy == "" || cmd == nil {
+		t.Error("n did nothing on a page that was not focused")
+	}
+	// A focused amount keeps everything, including the letters that would
+	// otherwise leave the page.
+	m = base(screenDeposit, true)
+	next, _ = m.onKey(tea.KeyPressMsg(tea.Key{Code: '5', Text: "5"}))
+	if next.(model).amount != "5" {
+		t.Error("a focused amount did not take a digit")
+	}
+	if next, _ := m.onKey(tea.KeyPressMsg(tea.Key{Code: 'q', Text: "q"})); next.(model).view != screenDeposit {
+		t.Error("q left the deposit page while the amount was focused")
+	}
+}
+
+// The frame is a box, and a box with more in it than fits is still a box. The
+// bottom edge going missing is the version of this that looks like a bug: it
+// is what a terminal scrolled by one line looks like.
+func TestTheFrameIsClosedAtAnySize(t *testing.T) {
+	acct := Account{Address: treasuryAddress, Keys: []Key{
+		{Label: "a1b2c3d4"}, {Label: "e5f6a7b8"}, {Label: "c9d0e1f2"},
+	}}
+	for _, size := range [][2]int{{100, 30}, {100, 24}, {80, 40}, {60, 20}, {100, 12}} {
+		m := model{
+			st: newStyles(), width: size[0], height: size[1],
+			deps: deps{Catalogue: DefaultCatalogue(), Proven: true, Address: treasuryAddress},
+		}
+		m.account = acct
+		m.syncLists()
+		for _, page := range screens {
+			got := m.show(page.view)
+			// A notice long enough to be worth wrapping to three lines is
+			// what pushes a page past the box, so give it one.
+			got.notice = notice{noticeBad, strings.Repeat("a fairly long sentence about what happened, ", 4)}
+			lines := strings.Split(got.frameString(), "\n")
+			if n := len(lines); n != size[1] {
+				t.Errorf("%dx%d %s: %d lines", size[0], size[1], pageName(page.view), n)
+			}
+			// Every line of the box is the width of the window, so a line
+			// that pushes past the right edge is a frame that has broken the
+			// terminal's own geometry rather than one that merely looks odd.
+			for i, line := range lines[brandLines+barLines : len(lines)-footerLines] {
+				if got := lipgloss.Width(stripForTest(line)); got != size[0] {
+					t.Errorf("%dx%d %s: the box's line %d is %d columns: %q",
+						size[0], size[1], pageName(page.view), i, got, stripForTest(line))
+				}
+			}
+			last := stripForTest(lines[len(lines)-2])
+			if !strings.HasPrefix(last, "\u2514") {
+				t.Errorf("%dx%d %s: no bottom edge: %q", size[0], size[1], pageName(page.view), last)
+			}
+			// The edge the box is missing a top of is the bar's bottom
+			// line: the bar is only as wide as the names in it, and the box
+			// is as wide as the window.
+			if edge := stripForTest(lines[barTop+barLines-1]); !strings.HasSuffix(edge, "\u2510") {
+				t.Errorf("%dx%d %s: the top edge stops short: %q", size[0], size[1], pageName(page.view), edge)
+			}
+		}
+	}
+}
+
+// frameString is the drawn frame, for a test that wants to look at the screen
+// rather than at what can be clicked.
+func (m model) frameString() string {
+	content, _ := m.frame()
+	return content
+}
+
+// The top edge of the box is the bar's bottom edge, and the bar is only as
+// wide as the names in it. Without a run carrying on to the right-hand corner
+// the frame has a lid over its left third and open sky over the rest.
+func TestTheBarsEdgeCarriesToTheCorner(t *testing.T) {
+	m := model{st: newStyles(), view: screenHome, width: 100, height: 30,
+		deps: deps{Catalogue: DefaultCatalogue(), Proven: true}}
+	line := stripForTest(strings.Split(m.frameString(), "\n")[barTop+2])
+	if w := lipgloss.Width(line); w != 100 {
+		t.Errorf("the bar's bottom edge is %d columns of %d: %q", w, 100, line)
+	}
+	if !strings.HasSuffix(line, "\u2510") {
+		t.Errorf("the bar's bottom edge does not reach the corner: %q", line)
+	}
+}
+
+// The help screen is longer than most terminals, so it scrolls rather than
+// being cut. What is cut is the bottom of a page, and on this page the bottom
+// is the version line and the last paragraph.
+func TestTheHelpScreenScrolls(t *testing.T) {
+	m := model{st: newStyles(), view: screenHelp, width: 100, height: 24,
+		deps: deps{Catalogue: DefaultCatalogue(), Proven: true, Version: "0.1.0"}}
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = next.(model)
+
+	if !m.helpOverflows() {
+		t.Fatal("the help claims to fit a window it does not fit")
+	}
+	top := stripForTest(m.renderHelp())
+	if !strings.Contains(top, "RouterCafe") {
+		t.Errorf("the help does not start at the top: %q", top)
+	}
+	if strings.Contains(top, "server version 0.1.0") {
+		t.Error("the whole help fitted in a window it does not fit")
+	}
+
+	// The keys that move it are the ones a list already uses, and nothing
+	// else: q and ? have to reach the program.
+	for range 40 {
+		m = m.scrollHelp(tea.KeyPressMsg(tea.Key{Code: 'j', Text: "j"}))
+	}
+	bottom := stripForTest(m.renderHelp())
+	if !strings.Contains(bottom, "server version 0.1.0") {
+		t.Errorf("scrolling to the end did not reach the version: %q", bottom)
+	}
+	if strings.Contains(bottom, "An OpenRouter you reach") {
+		t.Error("the pager scrolled past the bottom")
+	}
+
+	// g and G are the two a viewport has no binding for.
+	m = m.scrollHelp(tea.KeyPressMsg(tea.Key{Code: 'g', Text: "g"}))
+	if !strings.Contains(stripForTest(m.renderHelp()), "An OpenRouter you reach") {
+		t.Error("g did not go back to the top")
+	}
+	for _, k := range []string{"q", "?", "r", "y", "n"} {
+		if helpKeys[k] {
+			t.Errorf("the pager claims %q", k)
+		}
+	}
+}
+
+// A click has to land on the row that is under it. The list is laid out by a
+// component that puts a status bar above its rows and a blank between them,
+// and arithmetic that guesses any of that is a click one row out - which on
+// the keys screen is a revoke of somebody else's key.
+func TestAClickLandsOnTheRowThatWasDrawn(t *testing.T) {
+	m := model{
+		st: newStyles(), view: screenKeys, width: 100, height: 40,
+		deps: deps{Catalogue: DefaultCatalogue(), Proven: true, Address: treasuryAddress},
+	}
+	m.account = Account{Address: treasuryAddress, Keys: []Key{
+		{Label: "aaaa"}, {Label: "bbbb"}, {Label: "cccc"}, {Label: "dddd"},
+	}}
+	m.syncLists()
+
+	lines := strings.Split(stripForTest(m.frameString()), "\n")
+	for row, label := range []string{"aaaa", "bbbb", "cccc"} {
+		found := -1
+		for i, line := range lines {
+			if strings.Contains(line, "rc_live_"+label) {
+				found = i
+				break
+			}
+		}
+		if found < 0 {
+			t.Fatalf("the key %s is not on the screen at all", label)
+		}
+		_, where := m.frame()
+		got, ok := where.rowAt(40, found)
+		if !ok || got != row {
+			t.Errorf("a click on the line %s drew gave row %d found=%v, want %d", label, got, ok, row)
+		}
+		// And the other line of that row is the same row: nobody aims at the
+		// key when they could aim at the dates under it.
+		if got, ok := where.rowAt(40, found+1); ok && got != row {
+			t.Errorf("a click under %s gave row %d, want %d", label, got, row)
 		}
 	}
 }
