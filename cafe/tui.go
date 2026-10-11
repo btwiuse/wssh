@@ -130,6 +130,12 @@ type styles struct {
 	caret lipgloss.Style
 	idle  lipgloss.Style
 
+	// homeIdle and homeActive are the first tab, which is the only one drawn
+	// without a border. They are the same two colours as the tabs either side
+	// of them, so the name reads as one of them rather than as a heading.
+	homeIdle   lipgloss.Style
+	homeActive lipgloss.Style
+
 	// tabIdle and tabActive are the two states of the bar at the top of every
 	// screen. They carry a bottom edge of their own rather than closing, so
 	// the current page looks joined to the content under it instead of boxed
@@ -144,24 +150,26 @@ type styles struct {
 
 func newStyles() styles {
 	return styles{
-		brand:     lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#34d399")),
-		brandDim:  lipgloss.NewStyle().Foreground(lipgloss.Color("#334155")),
-		label:     lipgloss.NewStyle().Foreground(lipgloss.Color("#64748b")),
-		value:     lipgloss.NewStyle().Foreground(lipgloss.Color("#e2e8f0")),
-		money:     lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#f8fafc")),
-		dim:       lipgloss.NewStyle().Foreground(lipgloss.Color("#64748b")),
-		accent:    lipgloss.NewStyle().Foreground(lipgloss.Color("#38bdf8")),
-		warn:      lipgloss.NewStyle().Foreground(lipgloss.Color("#fbbf24")),
-		key:       lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#34d399")),
-		title:     lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#e2e8f0")),
-		errText:   lipgloss.NewStyle().Foreground(lipgloss.Color("#f87171")),
-		okText:    lipgloss.NewStyle().Foreground(lipgloss.Color("#34d399")),
-		box:       lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#1e293b")).Padding(0, 1),
-		caret:     lipgloss.NewStyle().Bold(true).Reverse(true).Foreground(lipgloss.Color("#0f172a")).Background(lipgloss.Color("#38bdf8")),
-		tabIdle:   lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color("#64748b")).Border(tabBorderWithBottom("\u2534", "\u2500", "\u2534"), true),
-		tabActive: lipgloss.NewStyle().Padding(0, 1).Bold(true).Foreground(lipgloss.Color("#34d399")).Border(tabBorderWithBottom("\u2518", " ", "\u2514"), true),
-		window:    lipgloss.NewStyle().Border(lipgloss.NormalBorder(), true).UnsetBorderTop().BorderForeground(lipgloss.Color("#334155")),
-		idle:      lipgloss.NewStyle().Foreground(lipgloss.Color("#94a3b8")),
+		brand:      lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#34d399")),
+		brandDim:   lipgloss.NewStyle().Foreground(lipgloss.Color("#334155")),
+		label:      lipgloss.NewStyle().Foreground(lipgloss.Color("#64748b")),
+		value:      lipgloss.NewStyle().Foreground(lipgloss.Color("#e2e8f0")),
+		money:      lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#f8fafc")),
+		dim:        lipgloss.NewStyle().Foreground(lipgloss.Color("#64748b")),
+		accent:     lipgloss.NewStyle().Foreground(lipgloss.Color("#38bdf8")),
+		warn:       lipgloss.NewStyle().Foreground(lipgloss.Color("#fbbf24")),
+		key:        lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#34d399")),
+		title:      lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#e2e8f0")),
+		errText:    lipgloss.NewStyle().Foreground(lipgloss.Color("#f87171")),
+		okText:     lipgloss.NewStyle().Foreground(lipgloss.Color("#34d399")),
+		box:        lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#1e293b")).Padding(0, 1),
+		caret:      lipgloss.NewStyle().Bold(true).Reverse(true).Foreground(lipgloss.Color("#0f172a")).Background(lipgloss.Color("#38bdf8")),
+		homeIdle:   lipgloss.NewStyle().Foreground(lipgloss.Color("#64748b")),
+		homeActive: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#34d399")),
+		tabIdle:    lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color("#64748b")).Border(tabBorderWithBottom("\u2534", "\u2500", "\u2534"), true),
+		tabActive:  lipgloss.NewStyle().Padding(0, 1).Bold(true).Foreground(lipgloss.Color("#34d399")).Border(tabBorderWithBottom("\u2518", " ", "\u2514"), true),
+		window:     lipgloss.NewStyle().Border(lipgloss.NormalBorder(), true).UnsetBorderTop().BorderForeground(lipgloss.Color("#334155")),
+		idle:       lipgloss.NewStyle().Foreground(lipgloss.Color("#94a3b8")),
 	}
 }
 
@@ -1148,27 +1156,30 @@ func (m model) header() string {
 // followed by the tabs: both go through the same click handling, because
 // going home is what the balance tab does.
 func (m model) tabBar() (string, []span) {
+	// The first tab is the name, and it is the only one of the six drawn
+	// without a border: plain text on the bar's own line, set in from the
+	// edge, coloured the way a tab is coloured and behaving exactly like one -
+	// it lights up when its page is the one on screen, and a click on it opens
+	// that page. A box drawn round it would be the only tab not shaped like a
+	// tab, which is the whole of what having it in the bar is there to stop.
+	style := m.st.homeIdle
+	if m.view == screens[0].view {
+		style = m.st.homeActive
+	}
+	name := "  " + style.Render(screens[0].name) + "  "
+	left := lipgloss.Width(name)
+
 	cells := make([]string, 0, len(screens))
-	for _, page := range screens {
-		style := m.st.tabIdle
+	for _, page := range screens[1:] {
+		s := m.st.tabIdle
 		if page.view == m.view {
-			style = m.st.tabActive
+			s = m.st.tabActive
 		}
-		// Only the first tab is corrected, to keep its own wall: it starts at
-		// column 0, which is where the box's left wall is, so its corner has
-		// to be one that wall can leave downwards. The last tab keeps the
-		// corner its style gives it, which the tabs example overrides because
-		// there the page is exactly as wide as the bar and the run of edge
-		// stops where the last tab stops. Here the edge carries on past it.
-		border, _, _, _, _ := style.GetBorder()
-		if page.view == screens[0].view {
-			if m.view == screens[0].view {
-				border.BottomLeft = "\u2502"
-			} else {
-				border.BottomLeft = "\u251c"
-			}
-		}
-		cells = append(cells, style.Border(border).Render(page.name))
+		// The last tab keeps the corner its style gives it, which the tabs
+		// example overrides because there the page is exactly as wide as the
+		// bar and the run of edge stops where the last tab stops. Here the edge
+		// carries on past it.
+		cells = append(cells, s.Border(s.GetBorder()).Render(page.name))
 	}
 
 	// Whole tabs are dropped from the end rather than the run being cut: a tab
@@ -1177,34 +1188,39 @@ func (m model) tabBar() (string, []span) {
 	// and shift+tab still walk all of them.
 	//
 	// The run is rebuilt each time rather than measured by adding the cells
-	// up: each cell is three lines tall, and a width measured across the
-	// wrong axis is a bar dropped one tab too eagerly or not eagerly enough.
+	// up: each cell is three lines tall, and a width measured across the wrong
+	// axis is a bar dropped one tab too eagerly or not eagerly enough.
 	run := func() []string {
 		return strings.Split(lipgloss.JoinHorizontal(lipgloss.Top, cells...), "\n")
 	}
 	rows := run()
 	tabs := lipgloss.Width(rows[0])
-	for len(cells) > 2 && tabs+barEdgeGap > m.width {
+	for len(cells) > 1 && left+tabs+barEdgeGap > m.width {
 		cells = cells[:len(cells)-1]
-		rows = run()
-		tabs = lipgloss.Width(rows[0])
+		rows, tabs = run(), lipgloss.Width(run()[0])
 	}
 
 	// Shedding, widest first: the address with the version, the address alone,
-	// then nothing. The name is not here any more - it is the first tab.
+	// then nothing. The name is never one of them - it is the way back.
 	var address string
 	for _, candidate := range []string{m.address(), m.st.dim.Render(Domain), ""} {
-		if tabs+lipgloss.Width(candidate) <= m.width-barEdgeGap {
+		if left+tabs+lipgloss.Width(candidate) <= m.width {
 			address = candidate
 			break
 		}
 	}
 
-	tail := max(0, m.width-tabs-1)
+	tail := max(0, m.width-left-tabs-1)
 	lines := []string{
-		rows[0] + strings.Repeat(" ", tail+1),
-		rows[1] + strings.Repeat(" ", max(0, m.width-tabs-lipgloss.Width(address))) + address,
-		rows[barLines-1] + strings.Repeat("\u2500", tail) + "\u2510",
+		strings.Repeat(" ", left) + rows[0] + strings.Repeat(" ", tail+1),
+		name + rows[1] + strings.Repeat(" ", max(0, m.width-left-tabs-lipgloss.Width(address))) + address,
+		// The top edge of the box, all the way across: a corner at the left
+		// where it turns down into the box's own wall, the tabs' own bottom
+		// edge through the middle, and the corner at the right. Not a rule laid
+		// over a box - it is the box's edge, and a gap in it is a hole with
+		// the page showing through.
+		"\u250c" + strings.Repeat("\u2500", left-1) + rows[barLines-1] +
+			strings.Repeat("\u2500", tail) + "\u2510",
 	}
 	// Cut to the window on the way out. Six tabs are wider than a narrow
 	// terminal, and a bar that runs past the right edge drags the frame out
@@ -1213,8 +1229,9 @@ func (m model) tabBar() (string, []span) {
 		lines[i] = ansi.Truncate(line, m.width, "")
 	}
 
-	clickable := make([]span, 0, len(cells))
-	x := 0
+	clickable := make([]span, 0, len(cells)+1)
+	clickable = append(clickable, span{0, left})
+	x := left
 	for _, cell := range cells {
 		w := lipgloss.Width(cell)
 		clickable = append(clickable, span{x, x + w})

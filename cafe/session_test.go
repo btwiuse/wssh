@@ -1846,18 +1846,11 @@ func TestTheBarsEdgeSpansTheWholeWindow(t *testing.T) {
 			if w := lipgloss.Width(line); w != size[0] {
 				t.Errorf("%s: the top edge is %d columns of %d: %q", where, w, size[0], line)
 			}
-			// The left end is the first tab's own corner, because the tabs
-			// start at column 0 where the box's left wall is and the two are
-			// the same wall. So it carries the wall going down: a `│` with the
-			// first tab open into the page, a `├` where the edge runs on.
-			head := []rune(line)[0]
-			if want := "\u2502"; m.view == screens[0].view {
-				head = []rune(want)[0]
-			} else {
-				head = []rune("\u251c")[0]
-			}
-			if []rune(line)[0] != head {
-				t.Errorf("%s: the top edge starts with %q, want %q", where, []rune(line)[0], head)
+			// The left end is the frame's own corner: the name is the only
+			// tab drawn without a border, so nothing under it belongs to a tab
+			// and the top edge turns down into the box's left wall there.
+			if !strings.HasPrefix(line, "\u250c") {
+				t.Errorf("%s: the top edge has no corner at its left end: %q", where, line)
 			}
 			if !strings.HasSuffix(line, "\u2510") {
 				t.Errorf("%s: the top edge does not reach the corner: %q", where, line)
@@ -1891,8 +1884,8 @@ func TestTheNameIsATabAndTheAddressIsAtTheEdge(t *testing.T) {
 	m := model{st: newStyles(), view: screenHome, width: 100, height: 30,
 		deps: deps{Catalogue: DefaultCatalogue(), Proven: true, Version: "0.1.6"}}
 	labels := strings.Split(stripForTest(m.frameString()), "\n")[barTop+1]
-	if !strings.HasPrefix(labels, "\u2502 RouterCafe \u2502") {
-		t.Errorf("the name is not the first tab: %q", labels)
+	if !strings.HasPrefix(labels, "  RouterCafe  \u2502 balance \u2502") {
+		t.Errorf("the name is not the first tab, in plain text: %q", labels)
 	}
 	if !strings.HasSuffix(labels, "router.cafe 0.1.6") {
 		t.Errorf("the address is not against the right edge: %q", labels)

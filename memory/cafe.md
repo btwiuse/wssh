@@ -376,9 +376,9 @@ There are no keys that jump between pages. The top of every screen carries a
 bar of all six and highlights the one you are on, and `tab` walks it:
 
 ```
-╭────────────╮╭─────────╮╭─────────╮╭──────────╮╭────────╮╭──────╮
-│ RouterCafe ││ balance ││ deposit ││ api keys ││ routes ││ help │   router.cafe 0.1.6
-├────────────┴┘         └┴─────────┴┴──────────┴┴────────┴┴──────┴─────────────┐
+              ╭─────────╮╭─────────╮╭──────────╮╭────────╮╭──────╮
+  RouterCafe  │ balance ││ deposit ││ api keys ││ routes ││ help │   router.cafe 0.1.6
+┌─────────────┴─────────┴┴──────────┴┴──────────┴┴────────┴┴──────┴─────────────┐
 │                             _ \            |            __|        _|          │
 │                              /  _ \ |  |  _|  -_)  _|(     _` |  _|-_)         │
 │                           _|_\\___/\_,_|\__|\___|_| \___|\__,_|_|\___|         │
@@ -387,20 +387,22 @@ bar of all six and highlights the one you are on, and `tab` walks it:
 │  balance  $0.00                                                         │
 ```
 
-**RouterCafe is the first tab, not a wordmark beside the tabs.** It was, for
-one commit, a link in the left of the bar - and a link that goes where the tab
-next to it goes is two ways of saying the same place, one of them styled like a
-tab and one of it not. As a tab it has its own page: the name spelled out and
-the balance at a glance, with `balance` beside it for the numbers and the keys
-and the exports and the price list. A splash carrying all of that as well would
-be the balance tab with a logo on it.
+**RouterCafe is the first tab, and the only one drawn without a border.** It
+was, for one commit, a link in the left of the bar - and a link that goes where
+the tab next to it goes is two ways of saying the same place, one of them styled
+like a tab and one of it not. As a tab it has its own page: the name spelled
+out and the balance at a glance, with `balance` beside it for the numbers and
+the keys and the exports and the price list. A splash carrying all of that as
+well would be the balance tab with a logo on it.
 
-That is also why the first tab's corner is corrected and the last tab's is not,
-which is the tabs example's treatment restored: the tabs start at column 0,
-where the box's left wall is, so the first tab's own wall *is* the box's wall
-and its corner has to carry that wall going downwards (`│` when it is the open
-tab, `├` when the edge runs on). The last tab's corner needs no help, because
-here the edge carries on past it rather than stopping where it stops.
+The border is the part it does *not* have. `homeIdle`/`homeActive` are the same
+two colours as the tabs either side of them and nothing else - no padding, no
+border - because a box drawn round it would be the only tab not shaped like a
+tab, which is the whole of what having it in the bar is there to stop. Which
+also puts the frame's own corner back at column 0: nothing under the name
+belongs to a tab now, so the top edge turns down into the box's left wall there
+and opens with `┌`. The last tab's corner still needs no help, because the edge
+carries on past it rather than stopping where it stops.
 
 The address and the version sit on the bar's own line, right-aligned, and the
 version used to be at the bottom of the help screen instead - which put it on
