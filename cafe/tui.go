@@ -1139,89 +1139,78 @@ func (m model) header() string {
 // going home is what the balance tab does.
 func (m model) tabBar() (string, []span) {
 	rendered := make([]string, 0, len(screens))
-	for i, s := range screens {
+	for _, s := range screens {
 		style := m.st.tabIdle
 		if s.view == m.view {
 			style = m.st.tabActive
 		}
-		// Only the first tab is corrected, to keep its own wall: the leftmost
-		// tab's left edge is the box's left edge, so its bottom-left corner
-		// has to be one that a vertical line can leave downwards - a plain bar
-		// beside the page has a box to run into and a corner that turns into
-		// one does too.
-		//
-		// The last tab keeps the corner its style gives it, which the tabs
-		// example overrides because there the page is exactly as wide as the
-		// bar. Here it is not: the bar stops wherever the names stop and the
-		// box's top edge carries on to the right of it, so the corner that
-		// suits it is the one that runs along with that edge.
-		border, _, _, _, _ := style.GetBorder()
-		first, active := i == 0, s.view == m.view
-		switch {
-		case first && active:
-			border.BottomLeft = "\u2502"
-		case first && !active:
-			border.BottomLeft = "\u251c"
-		}
-		rendered = append(rendered, style.Border(border).Render(s.name))
+		// No corner is corrected, which is the one thing the tabs example has
+		// to do and this does not. The example overrides both ends because
+		// there the page is exactly as wide as the bar, so the run of edge
+		// stops where the last tab stops. Here the rule carries on either side
+		// of the tabs, and the corners the style gives are already the right
+		// ones for a rule that continues: `┴` where it passes under an
+		// inactive tab, `┘` and `└` where the active tab opens into the page.
+		rendered = append(rendered, style.Border(style.GetBorder()).Render(s.name))
 	}
-	tabs := lipgloss.JoinHorizontal(lipgloss.Top, rendered...)
-	tabsWidth := lipgloss.Width(tabs)
+	// The three lines of the tab run, taken apart rather than joined whole:
+	// each one of the bar's own lines is a line of tabs plus something either
+	// side of them, and a run spliced in whole brings its other two lines with
+	// it.
+	rows := strings.Split(lipgloss.JoinHorizontal(lipgloss.Top, rendered...), "\n")
+	tabs := lipgloss.Width(rows[0])
 
 	// Shedding, widest first: the name and the address together, then the
-	// address without the version, then the name alone. The name goes last
-	// and not first because it is the one piece of this line that is also the
-	// way back to the balance screen - a logo dropped for want of room is a
-	// logo nobody can get home from.
-	name := m.vertical(m.st.brand.Render("RouterCafe") + "  ")
-	for _, tail := range []string{
-		m.vertical("  " + m.address()),
-		m.vertical("  " + m.st.dim.Render(Domain)),
-		"",
+	// address without the version, then the name alone. The name goes last and
+	// not first because it is the one piece of this line that is also the way
+	// back to the balance screen - a logo dropped for want of room is a logo
+	// nobody can get home from.
+	var name, address string
+	for _, pair := range [][2]string{
+		{"  " + m.st.brand.Render("RouterCafe") + "  ", m.address()},
+		{"  " + m.st.brand.Render("RouterCafe") + "  ", m.st.dim.Render(Domain)},
+		{"  " + m.st.brand.Render("RouterCafe") + "  ", ""},
+		{"", m.address()},
+		{"", ""},
 	} {
-		if name == "" && tail == "" {
-			break
-		}
-		if lipgloss.Width(name)+tabsWidth+lipgloss.Width(tail) > m.width {
+		if lipgloss.Width(pair[0])+tabs+lipgloss.Width(pair[1])+barEdgeGap > m.width {
 			continue
 		}
-		offset := lipgloss.Width(name)
-		clickable := make([]span, 0, len(screens)+1)
-		if offset > 0 {
-			clickable = append(clickable, span{0, offset})
-		}
-		x := offset
-		for _, cell := range rendered {
-			w := lipgloss.Width(cell)
-			clickable = append(clickable, span{x, x + w})
-			x += w
-		}
-		bar := lipgloss.JoinHorizontal(lipgloss.Top, name, tabs, tail)
-		return m.carryBarEdge(bar, x+lipgloss.Width(tail)), clickable
+		name, address = pair[0], pair[1]
+		break
 	}
 
-	// Narrower than the tabs and a name together. The bar still draws; it
-	// simply has nothing to the left of it, and that is the whole of what
-	// happens on a terminal too small to be navigated in comfort.
-	clickable := make([]span, 0, len(screens))
-	x := 0
+	// Three lines, each built the whole width of the window rather than
+	// padded out of blocks that happen to add up. It matters on the bottom
+	// one more than anywhere: that line is the top edge of the box, so a gap
+	// in it is a hole in the top of the frame with the page showing through,
+	// which is the one thing a frame cannot have.
+	left, addr := lipgloss.Width(name), lipgloss.Width(address)
+	tail := max(0, m.width-left-tabs-1)
+	bar := strings.Join([]string{
+		strings.Repeat(" ", left) + rows[0] + strings.Repeat(" ", tail+1),
+		name + rows[1] + strings.Repeat(" ", max(0, m.width-left-tabs-addr)) + address,
+		strings.Repeat("\u2500", left) + rows[barLines-1] +
+			strings.Repeat("\u2500", tail) + "\u2510",
+	}, "\n")
+
+	clickable := make([]span, 0, len(screens)+1)
+	if left > 0 {
+		clickable = append(clickable, span{0, left})
+	}
+	x := left
 	for _, cell := range rendered {
 		w := lipgloss.Width(cell)
 		clickable = append(clickable, span{x, x + w})
 		x += w
 	}
-	return m.carryBarEdge(tabs, x), clickable
+	return bar, clickable
 }
 
-// vertical puts a line of text in the middle of a block as tall as the tab
-// bar, so the name and the address sit on the row the tab labels are on
-// rather than floating above or below them.
-func (m model) vertical(text string) string {
-	if text == "" {
-		return ""
-	}
-	return lipgloss.PlaceVertical(barLines, lipgloss.Center, text)
-}
+// barEdgeGap is the columns kept clear between the right of the tabs and the
+// right of the window. Without it the last tab and the address are the same
+// object with no gap in it, which reads as one run of text.
+const barEdgeGap = 2
 
 // address is the domain, and the version of the server beside it.
 //

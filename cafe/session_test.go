@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -1825,18 +1826,59 @@ func (m model) frameString() string {
 	return content
 }
 
-// The top edge of the box is the bar's bottom edge, and the bar is only as
-// wide as the names in it. Without a run carrying on to the right-hand corner
-// the frame has a lid over its left third and open sky over the rest.
-func TestTheBarsEdgeCarriesToTheCorner(t *testing.T) {
-	m := model{st: newStyles(), view: screenHome, width: 100, height: 30,
-		deps: deps{Catalogue: DefaultCatalogue(), Proven: true}}
-	line := stripForTest(strings.Split(m.frameString(), "\n")[barTop+2])
-	if w := lipgloss.Width(line); w != 100 {
-		t.Errorf("the bar's bottom edge is %d columns of %d: %q", w, 100, line)
+// The top edge of the box is the bar's bottom edge, so that line is the full
+// width of the window and not the width of the tabs: a gap in it is a hole in
+// the top of the frame with the page showing through. The name is set in from
+// the edge, and the address is against it.
+func TestTheBarsEdgeSpansTheWholeWindow(t *testing.T) {
+	for _, size := range [][2]int{{100, 30}, {80, 24}, {140, 40}} {
+		for _, page := range screens {
+			m := model{
+				st: newStyles(), view: page.view, width: size[0], height: size[1],
+				deps: deps{Catalogue: DefaultCatalogue(), Proven: true, Version: "0.1.6"},
+			}
+			lines := strings.Split(stripForTest(m.frameString()), "\n")
+			line := lines[barTop+barLines-1]
+			where := screenName(size, page)
+			if w := lipgloss.Width(line); w != size[0] {
+				t.Errorf("%s: the top edge is %d columns of %d: %q", where, w, size[0], line)
+			}
+			if !strings.HasSuffix(line, "\u2510") {
+				t.Errorf("%s: the top edge does not reach the corner: %q", where, line)
+			}
+			// Every character on it is either the rule or the active tab's
+			// opening into the page. Anything else is a hole with the page
+			// showing through the top of the frame.
+			for _, r := range line {
+				if r != ' ' && !strings.ContainsRune("\u2500\u250c\u2510\u2514\u2518\u251c\u2524\u252c\u2534\u253c", r) {
+					t.Errorf("%s: the top edge has a hole in it at %q: %q", where, r, line)
+					break
+				}
+			}
+		}
 	}
-	if !strings.HasSuffix(line, "\u2510") {
-		t.Errorf("the bar's bottom edge does not reach the corner: %q", line)
+}
+
+// screenName is how a test says which screen it is complaining about.
+func screenName(size [2]int, page struct {
+	view screen
+	name string
+}) string {
+	return fmt.Sprintf("%dx%d %s", size[0], size[1], pageName(page.view))
+}
+
+// The name is set in from the edge and the address is against it, because a
+// name hard against column 0 next to a box that also starts at column 0 is two
+// things competing for the same left edge.
+func TestTheNameIsSetInAndTheAddressIsNot(t *testing.T) {
+	m := model{st: newStyles(), view: screenHome, width: 100, height: 30,
+		deps: deps{Catalogue: DefaultCatalogue(), Proven: true, Version: "0.1.6"}}
+	labels := strings.Split(stripForTest(m.frameString()), "\n")[barTop+1]
+	if !strings.HasPrefix(labels, "  RouterCafe") {
+		t.Errorf("the name is not set in from the edge: %q", labels)
+	}
+	if !strings.HasSuffix(labels, "router.cafe 0.1.6") {
+		t.Errorf("the address is not against the right edge: %q", labels)
 	}
 }
 
