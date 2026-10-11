@@ -630,11 +630,9 @@ cup is on the one page that has something to show instead of a name, and the
 other four show their contents. A title line and its blank underneath are two
 lines of every screen spent on something the chrome is already saying.
 
-The caption under it is **centred**, and the page starts on it. The mark is
-the first thing on the page and it takes no blank above it, because a picture
-against the top of a frame is a masthead and a picture with air above it is a
-diagram - and that also gives the export lines their two lines back on a
-thirty-row terminal, which they had stopped fitting on.
+The caption under it is **centred**, and the page has a blank line above the
+mark and one below the caption. Both are decoration around a picture, and the
+picture is the thing on the page that is not text.
 
 The caption is centred rather than set in like everything else because it
 belongs to the cup rather than to the page: cup centred, caption centred, and
@@ -876,12 +874,22 @@ because they are proper nouns and because a list of lowercase words reads as a
 list of commands, which is the one thing they stopped being when the letters
 went away.
 
-A key is shown as **`rc_abcd...wxyz`** - the shape of the key rather than the
+A key is shown as **`rc_abcd...wxyz`** everywhere one is named - the list, the
+home page, and the notice that says which key was just revoked. - the shape of the key rather than the
 shape of a label. `rc_live_` in front of four characters says "here is a key"
 without saying *which*, and the eight are eight characters of a 192-bit secret,
 which narrows nothing. `Key.Prefix` is the first four, `Key.Label` the last
 four, and `Key.Hint()` puts them together; a key minted before `Prefix` existed
 falls back to `rc_...wxyz` rather than pretending to a prefix it does not have.
+
+**A key minted before `Prefix` existed cannot show one**, and falls back to
+`rc_...wxyz`. The digest is a hash of the key, not the key, so the first four
+cannot be recovered from a ledger that only has it - the fallback is the honest
+shape for those, not a guess at one.
+
+`proven` next to an account said how the account was established rather than
+what that gets you, and had to be explained to somebody reading the screen. It
+is **`yours`** now.
 
 The only place the full key is ever printed is the notice on the one screen
 where it is minted.

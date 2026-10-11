@@ -1001,11 +1001,11 @@ func (m model) revokeKey(oneBased int) (tea.Model, tea.Cmd) {
 	}
 	d := m.deps
 	key := m.account.Keys[idx]
-	m.busy = "revoking " + key.Label
+	m.busy = "revoking " + key.Hint()
 	m.notice = notice{}
 	return m, func() tea.Msg {
 		ok, err := d.Ledger.RevokeKey(d.Address, key.Digest)
-		return keyRevokedMsg{label: key.Label, ok: ok, err: err}
+		return keyRevokedMsg{label: key.Hint(), ok: ok, err: err}
 	}
 }
 
@@ -1773,15 +1773,19 @@ func (m model) renderAccount() string {
 	}
 	out := lead + m.st.value.Render(whole)
 
-	// Proven or not is said here rather than as a banner on every page of the
-	// session: it is the difference between a balance you may spend and one you
-	// may only read, and it belongs next to the number.
+	// Whether this one can be spent from is said here rather than as a banner
+	// on every page: it is the difference between a balance you may spend and
+	// one you may only read, and it belongs next to the number.
+	//
+	// "yours" rather than "proven", because "proven" says how the account was
+	// established and "yours" says what that gets you - and the first version
+	// of this had to be explained to somebody reading the screen.
 	detail := strings.TrimSpace(c.comment)
 	if c.proven {
 		if detail == "" {
-			detail = "proven"
+			detail = "yours"
 		} else {
-			detail += "  proven"
+			detail += "  " + m.st.okText.Render("yours")
 		}
 	}
 	if detail == "" {
@@ -1818,7 +1822,6 @@ func (m *model) renderHome() string {
 	}
 	var b strings.Builder
 	acct := m.account
-	b.WriteString(m.wordmark())
 	// The one line the landing page opens with, under the cup, on the one page
 	// somebody lands on. It is here rather than on every page because it is the
 	// thing this page is for, and because a sentence under a picture is what
@@ -1828,7 +1831,8 @@ func (m *model) renderHome() string {
 	// it belongs to the cup and not to the page: the cup is centred, its
 	// caption is centred, and the account below is the first thing that is
 	// just text.
-	b.WriteString("\n" + lipgloss.PlaceHorizontal(bodyWidth(m.width), lipgloss.Center,
+	b.WriteString(m.wordmark())
+	b.WriteString(lipgloss.PlaceHorizontal(bodyWidth(m.width), lipgloss.Center,
 		m.st.dim.Render("A little café for every AI model, in your terminal.")) + "\n\n")
 	b.WriteString(m.renderAccount())
 	b.WriteString(m.field("balance", m.st.money.Render(FormatUSD(acct.Balance))))
@@ -2014,6 +2018,10 @@ func (m *model) wordmark() string {
 	}
 
 	var b strings.Builder
+	// One blank above the mark. Without it the cup sits against the top edge
+	// of the box, which reads as a frame that is one line short rather than as
+	// a picture at the top of a page.
+	b.WriteString("\n")
 	for i, line := range lines {
 		// Padded out to one width before it is centred. The drawing's lines
 		// are all a different length - it was made by hand where they were
@@ -2032,9 +2040,9 @@ func (m *model) wordmark() string {
 		b.WriteString(lipgloss.PlaceHorizontal(inside, lipgloss.Center, style.Render(line)) + "\n")
 	}
 
-	// The mark is the first thing on the page and the page starts on the line
-	// after the bar's bottom edge, so that is where the mark starts.
-	top := barLines
+	// The page starts on the line after the bar's bottom edge and the mark
+	// starts one line into it.
+	top := barLines + 1
 	m.mark = box{
 		x0: 1 + (inside-widest)/2, x0y: top,
 		x1: 1 + (inside-widest)/2 + widest, y1: top + len(lines) - 1,

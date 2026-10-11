@@ -767,8 +767,8 @@ func TestCyclingAccountsProvesTheOnesTheAgentHolds(t *testing.T) {
 	if !owned.candidates[owned.at].proven {
 		t.Error("the candidate itself was not marked proved, so the next visit re-asks")
 	}
-	if got := stripForTest(owned.renderHome()); !strings.Contains(got, "proven") {
-		t.Errorf("the page does not say the account is proved: %q", got)
+	if got := stripForTest(owned.renderHome()); !strings.Contains(got, "yours") {
+		t.Errorf("the page does not say the account is yours: %q", got)
 	}
 
 	// Wrapping both ways, because a cycle that stops at the end is a list.
@@ -1691,7 +1691,8 @@ func TestTheWordmarkIsDrawnExactlyAsItIsWritten(t *testing.T) {
 			continue
 		}
 		inside := bodyWidth(width)
-		for i, line := range strings.Split(strings.TrimRight(m.wordmark(), "\n"), "\n") {
+		for i, line := range strings.Split(strings.TrimPrefix(m.wordmark(), "\n"), "\n") {
+			_ = i
 			got := strings.TrimRight(stripForTest(line), " ")
 			if got == "" {
 				continue
