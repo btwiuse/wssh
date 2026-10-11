@@ -66,40 +66,45 @@ const (
 // client which has gone away does not hold a connection open.
 const siwsExchangeTimeout = 3 * time.Minute
 
-// exchangeSignIn asks the client to prove an account and reports whether it
-// did.
+// exchangeSignIn asks the client to prove an account, and returns which one
+// and whether it did.
+//
+// The address comes back because a server that does something per account needs
+// it and cannot work it out later: the SSH context that could carry it is built
+// after this exchange, and on a wallet connection there is no public key to
+// read it from. See WalletAddress.
 //
 // host is the one this client actually reached, which is what the signed
 // message has to name. It is not fixed at startup because one server can be
 // reachable under more than one name.
-func (s *Server) exchangeSignIn(ctx context.Context, conn *websocket.Conn, host string) bool {
+func (s *Server) exchangeSignIn(ctx context.Context, conn *websocket.Conn, host string) (string, bool) {
 	cfg := s.opts.WalletAuth
 
 	challenge, err := cfg.Challenge(host)
 	if err != nil {
 		s.refuse(ctx, conn, fmt.Sprintf("the server could not make a sign-in request: %v", err))
-		return false
+		return "", false
 	}
 	if err := writeSIWS(ctx, conn, siwsMessage{
 		Kind:      siwsKindChallenge,
 		Challenge: &challenge,
 	}); err != nil {
 		s.opts.Logger.Debug("could not send the sign-in challenge", "error", err)
-		return false
+		return "", false
 	}
 
 	var answer siwsMessage
 	if err := readSIWS(ctx, conn, &answer); err != nil {
 		s.refuse(ctx, conn, "the sign-in could not be read: "+err.Error())
-		return false
+		return "", false
 	}
 	if answer.Kind != siwsKindSignIn {
 		s.refuse(ctx, conn, fmt.Sprintf("expected a sign-in, got %q", answer.Kind))
-		return false
+		return "", false
 	}
 	if len(answer.Signature) != 64 {
 		s.refuse(ctx, conn, "the wallet returned no signature to check")
-		return false
+		return "", false
 	}
 
 	// The account comes back even when the check failed, which is the whole
@@ -113,15 +118,15 @@ func (s *Server) exchangeSignIn(ctx context.Context, conn *websocket.Conn, host 
 		}
 		s.opts.Logger.Warn("wallet sign-in refused", "reason", err, "account", address, "host", host)
 		s.refuse(ctx, conn, reason)
-		return false
+		return "", false
 	}
 
 	if err := writeSIWS(ctx, conn, siwsMessage{Kind: siwsKindReady, Address: address}); err != nil {
 		s.opts.Logger.Debug("could not confirm the sign-in", "error", err)
-		return false
+		return "", false
 	}
 	s.opts.Logger.Debug("wallet sign-in accepted", "address", address, "host", host)
-	return true
+	return address, true
 }
 
 // refuse sends the reason back over the socket, where the client is still

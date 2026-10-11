@@ -242,14 +242,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// everyone put the bytes of a sign-in request in front of a client that
 	// came with a key and never wanted one, which is functionally the same as
 	// refusing it.
-	var authorized bool
+	var walletAddress string
 	if conn.Subprotocol() == SIWSSubprotocol {
-		authorized = s.exchangeSignIn(ctx, conn, r.Host)
-		if !authorized {
+		address, ok := s.exchangeSignIn(ctx, conn, r.Host)
+		if !ok {
 			// The reason has already gone back over the socket, in full.
 			_ = conn.Close(websocket.StatusPolicyViolation, "sign-in refused")
 			return
 		}
+		walletAddress = address
 	}
 
 	// A wallet sign-in arrives in the query string, because a browser cannot
@@ -257,8 +258,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// being checked here: this handler is the one place that can see the HTTP
 	// request, and the SSH server has already started by the time it returns.
 	var netConn net.Conn = websocket.NetConn(ctx, conn, websocket.MessageBinary)
-	if authorized {
-		netConn = &walletConn{Conn: netConn, authorized: true}
+	if walletAddress != "" {
+		netConn = &walletConn{Conn: netConn, authorized: true, address: walletAddress}
 	}
 	defer netConn.Close() //nolint:errcheck
 
@@ -303,9 +304,22 @@ func (s *Server) ServeTCP(ln net.Listener) error {
 	}
 }
 
-// walletAddressKey marks a connection that arrived with a verified wallet
-// sign-in. It is read by the config hook below, and by nothing else.
+// walletAddressKey holds the account a connection proved with a wallet sign-in,
+// base58. It is read by the config hook below and by WalletAddress, and by
+// nothing else.
 const walletAddressKey = "wssh.wallet-address"
+
+// WalletAddress returns the Solana account a connection signed in with, or "".
+//
+// Empty means the connection did not arrive that way, which is every ordinary
+// key-authenticated session. A handler that bills, credits or routes per
+// account needs this and cannot get the answer anywhere else: an SSH username
+// is chosen by the client and proves nothing, and the public key is nil on a
+// connection that was let through on a wallet signature instead.
+func WalletAddress(ctx context.Context) string {
+	addr, _ := ctx.Value(walletAddressKey).(string)
+	return addr
+}
 
 // walletConn carries a completed sign-in to the point where it is needed.
 //
@@ -315,6 +329,10 @@ const walletAddressKey = "wssh.wallet-address"
 type walletConn struct {
 	net.Conn
 	authorized bool
+
+	// address is the account the sign-in verified, carried here because the
+	// exchange already knew it and the SSH context is not available yet.
+	address string
 }
 
 // installWalletAuth makes a verified wallet sign-in into a completed SSH
@@ -338,7 +356,7 @@ func installWalletAuth(srv *ssh.Server, cfg *siws.SIWSAuth) {
 		if !ok || !carrier.authorized {
 			return conn
 		}
-		ctx.SetValue(walletAddressKey, true)
+		ctx.SetValue(walletAddressKey, carrier.address)
 		return conn
 	}
 
