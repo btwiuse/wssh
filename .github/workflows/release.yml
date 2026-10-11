@@ -25,13 +25,16 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # The archive has to carry the same Go release as the toolchain that
-      # compiled it: ssh.wasm and wasm_exec.js come as a pair and disagree
-      # about the runtime ABI otherwise, which fails as a confusing web error
-      # rather than a build error.
-      - name: Build the browser client
-        run: ./client/build.sh
-
+      # The browser client is built by a goreleaser before-hook rather than
+      # here. go.sum is gitignored in this repository, so a fresh checkout has
+      # no checksums at all and nothing compiles until the modules have been
+      # resolved; running the build script ahead of that fails on missing
+      # go.sum entries rather than on anything to do with the client.
+      #
+      # It also has to be the same Go release as the toolchain compiling it:
+      # ssh.wasm and wasm_exec.js come as a pair and disagree about the
+      # runtime ABI otherwise, which fails as a confusing web error rather
+      # than as a build error.
       - name: Release
         uses: goreleaser/goreleaser-action@v6
         with:

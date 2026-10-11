@@ -21,11 +21,17 @@ project_name: wssh
 
 before:
   hooks:
+    # go.sum is gitignored here, so a fresh checkout has no checksums and
+    # nothing compiles until the modules are resolved. This has to come
+    # before the build below, and before anything else, for the same reason.
     - go mod download
-    # The browser client is a build artefact of the wssh binary, not a separate
-    # download: it is compiled into it and served from it. A release without it
-    # would ship a server whose front end dies on a 404, so it is built here
-    # rather than left to whoever cuts the release.
+    # The browser client is a build artefact of the wssh binary, not a
+    # separate download: it is compiled into it and served from it. A release
+    # without it would ship a server whose front end dies on a 404, so it is
+    # built here rather than left to whoever cuts the release. It also has to
+    # be the same Go release as the toolchain compiling it: ssh.wasm and
+    # wasm_exec.js come as a pair and disagree about the runtime ABI
+    # otherwise, which fails as a confusing web error rather than a build one.
     - ./client/build.sh
 
 builds:
