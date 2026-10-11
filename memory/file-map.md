@@ -24,7 +24,7 @@ already exists for it.
 | `cmd/wssh/web.go` | `wssh web` subcommand (server + front end, `--ui-only`, `--open`, `--path /ws`). Carries `//go:embed all:static` and `//go:generate bash ../../client/build.sh`; `wasmClientMissing` warns at startup if the wasm is absent. |
 | `cmd/wssh/client.go` | `wssh client` subcommand (terminal raw mode, `known_hosts`, password/key auth, custom command via trailing args). |
 | `cmd/wssh/keygen.go` | `wssh keygen` (ed25519/rsa/ecdsa, `--authorized-keys` to append). |
-| `cmd/wssh/upgrade.go` | `wssh upgrade`, over `go-selfupdate`, reading releases from `btwiuse/wssh`. A binary built without the version ldflags reports `dev` and refuses rather than downloading over itself. |
+| `cmd/wssh/upgrade.go` | `wssh upgrade`, over `go-selfupdate`, reading releases from `btwiuse/wssh`. Three things about it are not obvious and each is a real failure: a binary built without the version ldflags reports `dev` and refuses rather than downloading over itself; the asset is chosen by a filter, because three binaries share the platform suffix and the library takes the first that fits; and the executable must be called `wssh`, because the library names the archive entry after the file it is overwriting. |
 | `cmd/wssh/prompt.go` | Shared secret prompt helper (refuses non-terminal stdin). |
 | `cmd/wssh/static/index.html` | xterm + React + htm (no bundler). Contains `__WSSH_SESSION_PATH__` placeholder. |
 | `cmd/wssh/static/app.js` | React UI (terminal, endpoints, credentials panel, optional command field, `?cmd=` support). |

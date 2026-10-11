@@ -85,3 +85,26 @@ func TestTheAssetPrefixIsWssh(t *testing.T) {
 		t.Errorf("the release config does not name assets %s<version>_<os>_<arch>, which is what the upgrade looks for", assetPrefix)
 	}
 }
+
+// go-selfupdate takes the file it replaces out of the archive by the name of
+// the file it is overwriting, so a renamed binary cannot find its own
+// replacement in an archive that holds `wssh`. The alternative is a tar error
+// naming an archive this command had no trouble with a moment earlier.
+func TestARenamedBinarySaysSoRatherThanReportingATarError(t *testing.T) {
+	if binaryName != "wssh" {
+		t.Errorf("binary name is %q, which the release archives do not hold", binaryName)
+	}
+	// canReplaceItself, so true means "this one can upgrade itself".
+	for exe, want := range map[string]bool{
+		"/usr/local/bin/wssh": true,
+		"wssh":                true,
+		"wssh.exe":            true,
+		"renamed-wssh":        false,
+		"wssh-old":            false,
+		"sol-tx":              false,
+	} {
+		if got := canReplaceItself(exe); got != want {
+			t.Errorf("canReplaceItself(%q) = %v, want %v", exe, got, want)
+		}
+	}
+}
