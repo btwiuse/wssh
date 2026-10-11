@@ -1766,7 +1766,7 @@ func TestTheTwoLinesOfAKeyRowLineUp(t *testing.T) {
 		t.Fatalf("a key row is %d lines, want 2", len(lines))
 	}
 	plain := func(l string) string { return stripForTest(l) }
-	first := strings.Index(plain(lines[0]), "rc_live_")
+	first := strings.Index(plain(lines[0]), "rc_")
 	second := len(plain(lines[1])) - len(strings.TrimLeft(plain(lines[1]), " "))
 	if first != second {
 		t.Errorf("the key starts at column %d and its dates at %d", first, second)
@@ -2206,8 +2206,15 @@ func TestTheNameIsATabAndTheAddressIsSetIn(t *testing.T) {
 		deps: deps{Address: treasuryAddress, Catalogue: DefaultCatalogue(), Proven: true, Version: "0.1.6"}}
 	m.syncLists()
 	labels := strings.Split(stripForTest(m.frameString()), "\n")[barTop+1]
-	if !strings.HasPrefix(labels, "  RouterCafe  \u2502 deposit \u2502") {
-		t.Errorf("the name is not the first tab, in plain text: %q", labels)
+	for _, want := range []string{
+		"RouterCafe", "Deposit", "API Keys", "Models", "FAQs",
+	} {
+		if !strings.Contains(labels, want) {
+			t.Errorf("the bar does not carry %q: %q", want, labels)
+		}
+	}
+	if !strings.HasPrefix(labels, "  RouterCafe  ") {
+		t.Errorf("the name is not set in at the left: %q", labels)
 	}
 	// Set in from the right edge by the same two columns the name is set in
 	// from the left, so the two ends of the line look placed rather than one
@@ -2313,7 +2320,7 @@ func TestAClickLandsOnTheRowThatWasDrawn(t *testing.T) {
 	for row, label := range []string{"aaaa", "bbbb", "cccc"} {
 		found := -1
 		for i, line := range lines {
-			if strings.Contains(line, "rc_live_"+label) {
+			if strings.Contains(line, "..."+label) {
 				found = i
 				break
 			}

@@ -79,9 +79,19 @@ type Key struct {
 	// only part of it that is kept.
 	Digest string `json:"digest"`
 
-	// Label is what the TUI shows instead of the key: the last four
-	// characters, enough to tell two keys apart and useless on its own.
+	// Label is the last four characters of the key, enough to tell two keys
+	// apart and useless on its own.
 	Label string `json:"label"`
+
+	// Prefix is the first four, so that a listing shows the same shape as the
+	// key itself - rc_abcd...wxyz - rather than a shape that belongs to no
+	// key anybody holds. Empty on a key minted before this existed, which is
+	// why Hint falls back rather than assuming it.
+	//
+	// Eight characters of a 192-bit secret, which narrows nothing: the point
+	// is that somebody holding the ledger can still recognise their own key in
+	// a list, which four characters at one end does not quite manage.
+	Prefix string `json:"prefix,omitempty"`
 
 	// Created is when it was minted, and Touched when it was last used, so
 	// an operator can see at a glance which of a person's keys is live.
@@ -336,6 +346,7 @@ func (l *Ledger) MintKey(address, label string) (string, error) {
 	acct.Keys = append(acct.Keys, Key{
 		Digest:  Digest(key),
 		Label:   labelFor(key, label),
+		Prefix:  prefixFor(key),
 		Created: now,
 		Touched: now,
 	})
@@ -344,6 +355,28 @@ func (l *Ledger) MintKey(address, label string) (string, error) {
 		return "", err
 	}
 	return key, nil
+}
+
+// Hint is how a key is shown in a listing: rc_abcd...wxyz.
+//
+// Shaped like the key rather than like a label, because `rc_live_` in front of
+// four characters says "here is a key" without saying *which*, and the prefix
+// is eight characters of the whole thing - four more than before, which still
+// narrows nothing and does let somebody find their own key in a list.
+func (k Key) Hint() string {
+	if k.Prefix == "" {
+		return "rc_..." + k.Label
+	}
+	return "rc_" + k.Prefix + "..." + k.Label
+}
+
+// prefixFor is the first four characters of a key, for Hint.
+func prefixFor(key string) string {
+	rest, ok := strings.CutPrefix(key, APIKeyPrefix)
+	if !ok || len(rest) < 4 {
+		return ""
+	}
+	return rest[:4]
 }
 
 // labelFor is what a key is called in a listing: the caller's label if it gave

@@ -56,9 +56,9 @@ const (
 // for it to be anything but the same page twice.
 var screens = []tab{
 	{screenHome, "RouterCafe"},
-	{screenDeposit, "deposit"},
-	{screenKeys, "api keys"},
-	{screenModels, "models"},
+	{screenDeposit, "Deposit"},
+	{screenKeys, "API Keys"},
+	{screenModels, "Models"},
 	{screenFAQ, "FAQs"},
 }
 
@@ -1836,7 +1836,7 @@ func (m *model) renderHome() string {
 	} else {
 		b.WriteString("\n\n  " + m.st.title.Render("api keys") + "\n")
 		for _, k := range acct.Keys {
-			b.WriteString("  " + m.st.accent.Render("rc_live_"+k.Label) +
+			b.WriteString("  " + m.st.accent.Render(k.Hint()) +
 				m.st.dim.Render("   last used "+ago(k.Touched)) + "\n")
 		}
 	}

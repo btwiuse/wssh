@@ -858,6 +858,23 @@ delegate looks up, because **the delegate cannot see the model** (see
 that changes the set. That is the one place a list is rebuilt per keystroke in
 this program, and it is seven items.
 
+## Tab names, and how a key is shown
+
+The bar reads `RouterCafe | Deposit | API Keys | Models | FAQs`. Capitalised
+because they are proper nouns and because a list of lowercase words reads as a
+list of commands, which is the one thing they stopped being when the letters
+went away.
+
+A key is shown as **`rc_abcd...wxyz`** - the shape of the key rather than the
+shape of a label. `rc_live_` in front of four characters says "here is a key"
+without saying *which*, and the eight are eight characters of a 192-bit secret,
+which narrows nothing. `Key.Prefix` is the first four, `Key.Label` the last
+four, and `Key.Hint()` puts them together; a key minted before `Prefix` existed
+falls back to `rc_...wxyz` rather than pretending to a prefix it does not have.
+
+The only place the full key is ever printed is the notice on the one screen
+where it is minted.
+
 ## What is not built
 
 The upstream is configured with one `--upstream` and one `--upstream-key`. With

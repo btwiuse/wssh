@@ -128,6 +128,7 @@ func (i routeItem) lines(st *styles, sel, focused bool) (string, int) {
 // when it was made and last used.
 type keyItem struct {
 	label   string
+	hint    string
 	created string
 	touched string
 }
@@ -145,7 +146,7 @@ func (i keyItem) lines(st *styles, sel, focused bool) (string, int) {
 	// len() would indent that row twenty columns further than the others and
 	// make the one that is selected the one that does not line up.
 	return marker + " " +
-		lead.Render("rc_live_"+i.label) + "\n" +
+		lead.Render(i.hint) + "\n" +
 		strings.Repeat(" ", lipgloss.Width(marker)+1) +
 		trail.Render(fit("made "+i.created+", last used "+i.touched, 68)), 2
 }
@@ -280,6 +281,7 @@ func keysList(acct Account, width int, focused bool) list.Model {
 	for _, k := range acct.Keys {
 		items = append(items, keyItem{
 			label:   k.Label,
+			hint:    k.Hint(),
 			created: ago(k.Created),
 			touched: ago(k.Touched),
 		})
