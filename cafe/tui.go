@@ -36,7 +36,6 @@ type screen int
 
 const (
 	screenHome screen = iota
-	screenBalance
 	screenDeposit
 	screenKeys
 	screenModels
@@ -50,17 +49,16 @@ const (
 // and finding out how to get somewhere else should not be the default next
 // thing you do.
 //
-// Home and balance are two pages and not one, because the name at the left of
-// the bar is a link and a link that lands on the same page as the tab beside
-// it is a link that looks like a second way of spelling that tab. Home is the
-// name spelled out and the balance at a glance; balance is the numbers with
-// the keys, the exports and the price list under them.
+// The first tab is the name, drawn as plain text rather than in a box, and it
+// opens home: the wordmark, the numbers, the keys, the exports and the price
+// list. It was briefly a splash screen of its own - the name and the balance
+// at a glance - with the numbers on the tab beside it, and there was no reason
+// for it to be anything but the same page twice.
 var screens = []struct {
 	view screen
 	name string
 }{
 	{screenHome, "RouterCafe"},
-	{screenBalance, "balance"},
 	{screenDeposit, "deposit"},
 	{screenKeys, "api keys"},
 	{screenModels, "routes"},
@@ -856,8 +854,6 @@ func (m *model) renderPage() (string, int) {
 	switch m.view {
 	case screenHome:
 		b.WriteString(m.renderHome())
-	case screenBalance:
-		b.WriteString(m.renderBalance())
 	case screenDeposit:
 		b.WriteString(m.renderDeposit())
 	case screenKeys:
@@ -1382,33 +1378,16 @@ func (m model) footer() string {
 	return strings.TrimRight(b.String(), " ")
 }
 
-// renderHome is the page the name at the left of the bar opens: the name
-// spelled out, and the one number somebody connected to look at.
+// renderHome is the page the name at the left of the bar opens: the wordmark,
+// the numbers, and everything that belongs with them.
 //
-// Deliberately short. The balance tab beside it has the same number with the
-// keys, the exports and the price list under it, and a splash that carried all
-// of that as well would be the balance tab with a logo on it.
+// The wordmark is on it rather than on a splash page of its own because there
+// is nothing a splash page could have said that this does not also say - the
+// name, the balance, and what to do next were already all here.
 func (m *model) renderHome() string {
-	acct := m.account
 	var b strings.Builder
+	acct := m.account
 	b.WriteString(m.wordmark())
-	b.WriteString("\n  " + m.st.dim.Render("An OpenRouter you reach with ssh, paid for in SOL.") + "\n\n")
-	b.WriteString("  " + m.st.label.Render("account") + "  " + m.st.value.Render(m.shortAddress(acct.Address)) + "\n")
-	b.WriteString("  " + m.st.label.Render("balance") + "  " + m.st.money.Render(FormatUSD(acct.Balance)) + "\n\n")
-	if len(acct.Keys) == 0 && m.deps.Proven {
-		b.WriteString("  " + m.st.warn.Render("no API key yet") + "\n")
-		b.WriteString("  " + m.st.dim.Render("tab along to mint one, then point any OpenAI client at") + "\n")
-		b.WriteString("  " + m.st.accent.Render("https://"+m.endpointHost()) + "\n")
-	} else {
-		b.WriteString("  " + m.st.dim.Render("tab along for your api keys, the routes, or the price list.") + "\n")
-	}
-	return b.String()
-}
-
-// renderBalance is the numbers with everything that belongs with them.
-func (m *model) renderBalance() string {
-	var b strings.Builder
-	acct := m.account
 	b.WriteString(m.field("account", m.shortAddress(acct.Address)))
 	b.WriteString(m.field("balance", m.st.money.Render(FormatUSD(acct.Balance))))
 	b.WriteString(m.field("paid in", FormatUSD(acct.Deposits)))

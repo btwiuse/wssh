@@ -1060,10 +1060,10 @@ func TestCopyIsOnlyOfferedWhenThereIsSomethingToCopy(t *testing.T) {
 // because hjkl is only ever wanted by something looking at a list. An amount
 // field arrives cold, which is the whole reason it was given focus.
 func TestTabWalksTheRingAndOnlyTakesTheAmountWhenAsked(t *testing.T) {
-	m := model{st: newStyles(), view: screenBalance, deps: deps{Catalogue: DefaultCatalogue(), Proven: true}, width: 100, height: 40}
+	m := model{st: newStyles(), view: screenHome, deps: deps{Catalogue: DefaultCatalogue(), Proven: true}, width: 100, height: 40}
 	m.syncLists()
 
-	// From the balance screen, one tab lands on the deposit screen without
+	// From the home screen, one tab lands on the deposit screen without
 	// touching the amount: there is no widget to take yet.
 	next, _ := m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
 	m = next.(model)
@@ -1924,7 +1924,7 @@ func TestTheNameIsATabAndTheAddressIsSetIn(t *testing.T) {
 	m := model{st: newStyles(), view: screenHome, width: 100, height: 30,
 		deps: deps{Catalogue: DefaultCatalogue(), Proven: true, Version: "0.1.6"}}
 	labels := strings.Split(stripForTest(m.frameString()), "\n")[barTop+1]
-	if !strings.HasPrefix(labels, "  RouterCafe  \u2502 balance \u2502") {
+	if !strings.HasPrefix(labels, "  RouterCafe  \u2502 deposit \u2502") {
 		t.Errorf("the name is not the first tab, in plain text: %q", labels)
 	}
 	// Set in from the right edge by the same two columns the name is set in
@@ -1933,15 +1933,19 @@ func TestTheNameIsATabAndTheAddressIsSetIn(t *testing.T) {
 	if !strings.HasSuffix(labels, "router.cafe 0.1.6  ") {
 		t.Errorf("the address is not set in from the right edge: %q", labels)
 	}
-	// And the logo is on the page it belongs to rather than on balance, which
-	// is the page beside it.
-	home := strings.Join(strings.Split(stripForTest(m.frameString()), "\n"), "\n")
-	if !strings.Contains(home, "_|") {
-		t.Error("the wordmark is not on the home page")
-	}
-	balance := m.show(screenBalance)
-	if strings.Contains(stripForTest(balance.frameString()), "_|") {
-		t.Error("the wordmark is on the balance page as well")
+	// And the wordmark is on the page its label opens, rather than on a
+	// splash page beside it. There is no splash page: the name, the balance
+	// and what to do next were all already on this one.
+	for _, page := range screenList() {
+		shown := m.show(page)
+		content, where := shown.frame()
+		drawn := strings.Contains(stripForTest(content), "_|")
+		if drawn != (page == screenHome) {
+			t.Errorf("%s draws the wordmark: %v, want it on home only", pageName(page), drawn)
+		}
+		if drawn != (where.mark != (box{})) {
+			t.Errorf("%s drew a wordmark it did not record, or recorded one it did not draw", pageName(page))
+		}
 	}
 }
 

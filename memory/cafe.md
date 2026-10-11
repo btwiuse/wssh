@@ -378,12 +378,12 @@ the way out.
 ## Navigation: a bar, not a list of letters
 
 There are no keys that jump between pages. The top of every screen carries a
-bar of all six and highlights the one you are on, and `tab` walks it:
+bar of all five and highlights the one you are on, and `tab` walks it:
 
 ```
-              ╭─────────╮╭─────────╮╭──────────╮╭────────╮╭──────╮
-  RouterCafe  │ balance ││ deposit ││ api keys ││ routes ││ help │   router.cafe 0.1.6
-┌─────────────┴─────────┴┴──────────┴┴──────────┴┴────────┴┴──────┴─────────────┐
+              ╭─────────╮╭──────────╮╭────────╮╭──────╮
+  RouterCafe  │ deposit ││ api keys ││ routes ││ help │                          router.cafe 0.1.6
+┌─────────────┴─────────┴┴──────────┴┴────────┴┴──────┴────────────────────────────────────────────┐
 │                          _____             _             _____       __          │
 │                         |  __ \           | |           / ____|     / _|        │
 │                       | |__) |___  _   _| |_ ___ _ __| |     __ _| |_ ___        │
@@ -391,17 +391,19 @@ bar of all six and highlights the one you are on, and `tab` walks it:
 │                       | | \ \ (_) | |_| | ||  __/ |  | |___| (_| | ||  __/      │
 │                      |_|  \\_\\___/ \\__,_|\\__|\\___|_|   \\_____|\\__,_|_| \\___|     │
 │                                                                        │
-│  account  6YSosJ…AsrUKL                                                 │
-│  balance  $0.00                                                         │
+│  account    6YSosJ…AsrUKL                                               │
+│  balance    $0.00                                                       │
 ```
 
 **RouterCafe is the first tab, and the only one drawn without a border.** It
-was, for one commit, a link in the left of the bar - and a link that goes where
-the tab next to it goes is two ways of saying the same place, one of them styled
-like a tab and one of it not. As a tab it has its own page: the name spelled
-out and the balance at a glance, with `balance` beside it for the numbers and
-the keys and the exports and the price list. A splash carrying all of that as
-well would be the balance tab with a logo on it.
+went through three shapes and this is the third: a link in the left of the bar
+that went wherever the balance tab went (two ways of saying the same place,
+one styled like a tab and one not), then a tab with a splash page of its own,
+then this - the name, as a tab, opening the page it was always going to open.
+The splash existed for one commit and had nothing on it that the home page did
+not already say: the name, the balance, and what to do next. There is no
+`balance` tab and no second page; the bar is five entries and home carries the
+wordmark, the numbers, the keys, the exports and the price list.
 
 The border is the part it does *not* have. `homeIdle`/`homeActive` are the same
 two colours as the tabs either side of them and nothing else - no padding, no
