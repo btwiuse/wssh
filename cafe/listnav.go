@@ -11,7 +11,7 @@ import (
 )
 
 // The two screens of this program that are a list rather than a page are the
-// routes you can send to and the API keys on file. Both are built from the
+// models you can send to and the API keys on file. Both are built from the
 // same component, so navigating one of them is learning how to navigate the
 // other and hjkl works identically in both.
 //
@@ -100,7 +100,7 @@ type rowItem interface {
 	lines(st *styles, sel, focused bool) (text string, height int)
 }
 
-// routeItem is one row of the routes list: what it is, who serves it, what it
+// routeItem is one row of the models list: what it is, who serves it, what it
 // costs to talk to it.
 type routeItem struct {
 	id       string
@@ -234,21 +234,21 @@ func rowStyles(st *styles, sel, focused bool) (lead, trail lipgloss.Style, marke
 	}
 }
 
-// routesList builds the list of routes. Its height is set on every frame by
-// the page that owns it, which is the only thing that knows how much room is
-// left between the title above and the prose under.
-func routesList(catalogue *Catalogue, width int, focused bool) list.Model {
+// modelsList builds the list of models. Its height is set on every frame by the
+// page that owns it, which is the only thing that knows how much room is left
+// between the title above and the prose under.
+func modelsList(catalogue *Catalogue, width int, focused bool) list.Model {
 	models := catalogue.Models()
 	items := make([]list.Item, 0, len(models))
-	for _, route := range models {
+	for _, model := range models {
 		items = append(items, routeItem{
-			id:       route.ID,
-			provider: route.Provider,
-			in:       perMTok(route.InputPerMTok),
-			out:      perMTok(route.OutputPerMTok),
+			id:       model.ID,
+			provider: model.Provider,
+			in:       perMTok(model.InputPerMTok),
+			out:      perMTok(model.OutputPerMTok),
 		})
 	}
-	return newNavList(items, width, focused, "route", "routes", 1)
+	return newNavList(items, width, focused, "model", "models", 1)
 }
 
 // keysList builds the list of API keys on file.
@@ -276,6 +276,12 @@ func newNavList(items []list.Item, width int, focused bool, one, many string, pe
 	l.SetShowHelp(false)
 	l.SetFilteringEnabled(false)
 	l.SetShowFilter(false)
+	// With nothing in it, the component says "No keys" twice - once in the
+	// status bar and once in the body - and the page underneath says it again
+	// in prose. The status bar is the one to lose: with no rows it is saying
+	// nothing a body that says the same thing does not already say, and its
+	// absence is a line the page gets back.
+	l.SetShowStatusBar(len(items) > 0)
 	l.SetStatusBarItemName(one, many)
 
 	dim := navStyles.dim
@@ -322,7 +328,7 @@ func (m *model) paintFocus() {
 // the top would move the target out from under a following enter.
 func (m *model) syncLists() {
 	idx := m.apiKeys.Index()
-	m.routes = routesList(m.deps.catalogue(), m.listWidth(), m.focus)
+	m.routes = modelsList(m.deps.catalogue(), m.listWidth(), m.focus)
 	m.apiKeys = keysList(m.account, m.listWidth(), m.focus)
 	if n := len(m.account.Keys); n > 0 {
 		if idx >= n {

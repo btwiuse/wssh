@@ -507,6 +507,30 @@ and `u` for paging could not coexist with a footer promising those letters were
 pages. The bar cannot go stale that way, because it is the navigation rather
 than a description of it.
 
+One more rename, one more binding, one more line. The ring reads `RouterCafe |
+deposit | api keys | models | help` — **models, not routes**: what is listed
+there is a model you can send to, and "routes" reads as the request path.
+
+**`hjkl` is described once, at the foot of every page**, in whatever words fit
+what is on it — through a list, through this list, down the help page. It was
+under each list instead, which meant the two pages that have a list said it in
+two different words and the three that do not said nothing at all. A binding
+that is only described on some pages is a binding half the program will not
+admit to. The frame gives it its line: it reserves the room, so a page with
+more on it than fits loses prose rather than losing the one line that is the
+same everywhere, and pushes it to the last line of the box rather than
+letting it float half way down a short page.
+
+**Revoking a key is `x`, not `enter`.** Enter means "act on what is under the
+cursor", and standing on a key does not make standing near it the same as
+agreeing to destroy it. On the models list enter means nothing at all and says
+so, which is what it did before.
+
+An empty list says what it is once. The component says "No keys" twice - once
+in its status bar, once in its body - and the page underneath said it a third
+time; the status bar is the one that goes, because with no rows it says
+nothing the body does not, and its absence is a line the page gets back.
+
 Inside the ring, one asymmetry that is deliberate:
 
 | Page | Arrives | Because |

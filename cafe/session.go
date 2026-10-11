@@ -454,7 +454,7 @@ func (r refuseModel) View() tea.View {
 		body = fix.String()
 	}
 	return ownedView(frame(st, width, height, "",
-		strings.TrimRight(body, "\n"),
+		strings.TrimRight(body, "\n"), "",
 		"  "+st.dim.Render("q to disconnect")))
 }
 

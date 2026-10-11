@@ -1295,8 +1295,10 @@ func TestAListCannotTakeTheProgramsKeys(t *testing.T) {
 	}
 }
 
-// Enter means different things on the two lists, and the one where it means
-// nothing has to say so rather than sitting there looking like a dead key.
+// Revoking a key is `x` and not `enter`. Enter means "act on what is under
+// the cursor", and standing on a key does not make standing near it the same as
+// agreeing to destroy it - and on the models list enter means nothing at all,
+// which has to say so rather than sit there looking like a dead key.
 func TestEnterMeansSomethingDifferentOnEachList(t *testing.T) {
 	ledger := testLedger(t)
 	d := deps{
@@ -1698,6 +1700,38 @@ func TestTheWordmarkIsDrawnExactlyAsItIsWritten(t *testing.T) {
 				t.Errorf("width %d line %d:\n got %q\nwant %q", width, i, got, strings.Repeat(" ", lead)+want)
 			}
 		}
+	}
+}
+
+// hjkl is described once, at the foot of every page. It used to be described
+// under each list, in two different words, and not at all on the three pages
+// that have no list - and a binding that is only on some pages is a binding
+// half the program will not admit to.
+func TestEveryPageSaysWhatHjklDoesThere(t *testing.T) {
+	m := model{st: newStyles(true), width: 100, height: 30,
+		deps: deps{Address: treasuryAddress, Ledger: testLedger(t), Catalogue: DefaultCatalogue(), Proven: true}}
+	m.syncLists()
+	for _, page := range m.screenList() {
+		shown := m.show(page)
+		lines := strings.Split(stripForTest(shown.frameString()), "\n")
+		last := strings.TrimSpace(lines[len(lines)-3])
+		if !strings.Contains(last, "hjkl") {
+			t.Errorf("%s: the line above the footer is %q, want it to say what hjkl does", pageName(page), last)
+		}
+	}
+}
+
+// The list component says "No keys" twice when it is empty - once in its
+// status bar, once in its body - and the page underneath says it again. One of
+// them has to go, and it is the status bar: with no rows it says nothing the
+// body does not, and its absence is a line the page gets back.
+func TestAnEmptyListDoesNotSayItIsEmptyTwice(t *testing.T) {
+	m := model{st: newStyles(true), view: screenKeys, width: 100, height: 30,
+		deps: deps{Address: treasuryAddress, Ledger: testLedger(t), Catalogue: DefaultCatalogue(), Proven: true}}
+	m.syncLists()
+	got := stripForTest(m.frameString())
+	if n := strings.Count(got, "No keys"); n != 1 {
+		t.Errorf("an empty key list says \"No keys\" %d times, want once", n)
 	}
 }
 

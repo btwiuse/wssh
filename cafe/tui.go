@@ -59,7 +59,7 @@ var screens = []tab{
 	{screenHome, "RouterCafe"},
 	{screenDeposit, "deposit"},
 	{screenKeys, "api keys"},
-	{screenModels, "routes"},
+	{screenModels, "models"},
 	{screenHelp, "help"},
 }
 
@@ -475,7 +475,7 @@ type model struct {
 	// the job needs.
 	amount string
 
-	// routes and apiKeys are the two screens that are a list rather than a
+	// routes and apiKeys are the two pages that are a list rather than a
 	// page. Held here rather than built per render because the cursor, the
 	// page and the scroll offset all live in them and rebuilding on every
 	// frame would reset all three.
@@ -843,6 +843,15 @@ func (m model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "enter":
 			return m.onListEnter()
+		case "x":
+			// Revoking on enter is a lie about what enter is for: enter is
+			// "act on the thing under the cursor", and standing on a key does
+			// not make standing near it the same as agreeing to destroy it.
+			// `x` is the key people already reach for when something is
+			// selected and they want it gone.
+			if m.view == screenKeys {
+				return m.revokeSelected()
+			}
 		}
 		if listClaims(l.KeyMap, msg.String()) {
 			return m.onListKey(msg)
@@ -1008,9 +1017,16 @@ func (m model) onListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // would be a button that does nothing.
 func (m model) onListEnter() (tea.Model, tea.Cmd) {
 	if m.view != screenKeys {
-		m.notice = notice{noticeBad, "a route is chosen by naming it in the request, not from here"}
+		m.notice = notice{noticeBad, "a model is chosen by naming it in the request, not from here"}
 		return m, nil
 	}
+	m.notice = notice{noticeBad, "press x to revoke it"}
+	return m, nil
+}
+
+// revokeSelected is `x` on the api keys screen: the key under the cursor goes,
+// and only that one.
+func (m model) revokeSelected() (tea.Model, tea.Cmd) {
 	i := m.apiKeys.Index()
 	if i < 0 || i >= len(m.account.Keys) {
 		return m, nil
@@ -1149,7 +1165,7 @@ func (m *model) renderPage() (string, int) {
 		listTop = countLines(b.String() + head)
 		b.WriteString(head + view + "\n" + tail)
 	case screenModels:
-		head, tail := m.routesPage()
+		head, tail := m.modelsPage()
 		l, view, rows := m.fitted(m.routes, 1, head, tail)
 		m.routes, m.rows = l, rows
 		listTop = countLines(b.String() + head)
@@ -1329,7 +1345,7 @@ func (m *model) frame() (string, clicks) {
 	// the same way the name on the bar is. It is read after the page is drawn
 	// because where it landed is a fact about what was drawn.
 	where.mark = m.mark
-	return frame(m.st, m.width, m.height, bar, page, m.footer()), where
+	return frame(m.st, m.width, m.height, bar, page, m.hint(), m.footer()), where
 }
 
 // clicks is what the last frame put on screen and where, so that a mouse
@@ -1895,8 +1911,10 @@ func (m model) keysPage() (head, tail string) {
 	h.WriteString("  " + m.st.title.Render("api keys") + "\n\n")
 
 	t.WriteString("  " + m.st.key.Render("n") + m.st.dim.Render(" mint a new key    ") +
-		m.st.key.Render("enter") + m.st.dim.Render(" revoke the selected one") + "\n")
-	t.WriteString("\n  " + m.listHint("to revoke it") + "\n")
+		m.st.key.Render("x") + m.st.dim.Render(" revoke the selected one") + "\n")
+	if len(m.account.Keys) == 0 {
+		t.WriteString("\n  " + m.st.dim.Render("nothing here yet - press n to mint one") + "\n")
+	}
 	if m.fresh != "" {
 		t.WriteString("\n  " + m.st.key.Render("y") + m.st.dim.Render(" copy the key above") + "\n")
 	}
@@ -1922,32 +1940,32 @@ func (m model) keysPage() (head, tail string) {
 	return head, tail
 }
 
-// routesPage is the routes screen without the list in it, for the same reason.
-func (m model) routesPage() (head, tail string) {
+// modelsPage is the models screen without the list in it, for the same reason.
+func (m model) modelsPage() (head, tail string) {
 	var h, t strings.Builder
-	h.WriteString("  " + m.st.title.Render("routes") + "\n\n")
+	h.WriteString("  " + m.st.title.Render("models") + "\n\n")
 
 	t.WriteString("  " + m.st.dim.Render("ask for one by putting its name in \"model\". Prices are per million tokens,") + "\n")
 	t.WriteString("  " + m.st.dim.Render("and what they are is the rate your balance is actually billed at.") + "\n")
-	t.WriteString("\n  " + m.listHint("") + "\n")
 	return h.String(), t.String()
 }
 
-// listHint says what the list above it will answer to, and it depends on
-// whether the list has the focus. Unfocused a list takes no keys at all, and
-// saying so is the whole of why pressing b from the routes screen still opens
-// the balance screen.
-// listHint is the line under a list.
+// hint is the line at the foot of every page, saying what hjkl does here.
 //
-// What enter means on it differs between the two, so the caller says. On the
-// routes it would be a lie to offer the binding at all: a route is named in
-// the request, not chosen by standing on it here.
-func (m model) listHint(enterMeans string) string {
-	hint := m.st.key.Render("hjkl") + m.st.dim.Render(" to move a page")
-	if enterMeans != "" {
-		hint += "    " + m.st.key.Render("enter") + m.st.dim.Render(" "+enterMeans)
+// One place rather than one per list, at the bottom rather than under the
+// thing it is about. It used to be under each list, which meant the two pages
+// that have a list said it in two different words and the three that do not
+// said nothing at all - and a binding that is only described on some pages is
+// a binding half the program does not admit to.
+func (m model) hint() string {
+	what := " to move through a list"
+	switch m.view {
+	case screenKeys, screenModels:
+		what = " to move through this list, h and l to page it"
+	case screenHelp:
+		what = " to scroll this page"
 	}
-	return hint
+	return "  " + m.st.key.Render("hjkl") + m.st.dim.Render(what)
 }
 
 // listWidth is what a list gets inside the pane, which is the inside of the
