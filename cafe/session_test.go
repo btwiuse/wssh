@@ -1792,6 +1792,41 @@ func TestAKeyIsAbbreviatedWithOneEllipsis(t *testing.T) {
 	}
 }
 
+// The frame rebuilds the delegate on every frame, and a delegate that has lost
+// its row height turns every entry back into a single line - which is how the
+// FAQs were a list of questions with their answers somewhere else on the page
+// for a moment. So more than one entry has to fit on a page.
+func TestTheFAQsListKeepsItsRowHeight(t *testing.T) {
+	m := model{st: newStyles(true), view: screenFAQ, focus: true, width: 100, height: 30,
+		deps: deps{Address: treasuryAddress, Ledger: testLedger(t), Catalogue: DefaultCatalogue(), Proven: true}}
+	m.syncLists()
+
+	row := faqRowHeight(m.listWidth())
+	if row < 2 {
+		t.Fatalf("a question and its answer are %d lines tall", row)
+	}
+	if got := m.faqRowHeight(); got != row {
+		t.Errorf("the frame asked for rows of %d, the list built %d", got, row)
+	}
+	_, tail := m.faqPage()
+	l, view, rows := m.fitted(m.faqs, 1, "", tail)
+	if onPage := len(rows); onPage < 2 {
+		t.Errorf("%d entries on a page of %d lines with rows of %d lines",
+			onPage, countLines(view), row)
+	}
+	// And every one of them is a whole entry rather than a line of one: the
+	// component pads a short answer to the row height, so the recorded height
+	// varies while the row does not.
+	for _, r := range rows {
+		if r.lines < 2 {
+			t.Errorf("an entry is %d line(s): a question without its answer", r.lines)
+		}
+	}
+	if l.Paginator.TotalPages < 2 {
+		t.Errorf("the whole list is %d page(s); it should be more", l.Paginator.TotalPages)
+	}
+}
+
 // Every line of the frame is drawn in one colour, and that is checked on the
 // bytes that actually leave rather than on the styles that were meant to
 // produce them - because a style is an intention and a frame is a thing on a
@@ -2257,64 +2292,77 @@ func TestTheNameIsATabAndTheAddressIsSetIn(t *testing.T) {
 	}
 }
 
-// The FAQs expand and collapse, and the page is sized around what is open: an
-// answer is not one line, and a page that grew a list row to hold one pushed
-// the rest of itself off the bottom every time somebody opened a long question.
-func TestTheFAQsOpenAndClose(t *testing.T) {
+// Every question carries its answer, and the answer is under the question it
+// belongs to.
+//
+// It was a disclosure - `enter` to open one - and it was wrong twice over: the
+// answers came out below the whole list rather than under the question they
+// belonged to, and a row that grew to hold one pushed the rest of the page off
+// the bottom every time somebody opened a long question. So the rows are as tall
+// as the longest answer and the list pages over them.
+func TestEveryFAQCarriesItsAnswer(t *testing.T) {
 	m := model{st: newStyles(true), view: screenFAQ, focus: true, width: 100, height: 30,
 		deps: deps{Address: treasuryAddress, Ledger: testLedger(t), Catalogue: DefaultCatalogue(), Proven: true}}
 	m.syncLists()
 
-	// The answers are wrapped into a box, so comparing one against what is on
-	// the screen means taking the box's own walls and line breaks back out
-	// again - otherwise a sentence that straddles two lines is not found on
-	// either of them.
-	shown := func() string {
-		var out []string
-		for _, line := range strings.Split(stripForTest(m.show(screenFAQ).frameString()), "\n") {
-			out = append(out, strings.Trim(line, "\u2502 "))
+	// Every entry carries its answer, whatever page of the list it is on: the
+	// answers are what the screen is for, and a question whose answer is on
+	// another page is a question that reads as unanswered.
+	items := m.faqs.Items()
+	if len(items) != len(faqs) {
+		t.Fatalf("the list has %d entries, want %d", len(items), len(faqs))
+	}
+	for i, f := range faqs {
+		it, ok := items[i].(faqItem)
+		if !ok {
+			t.Fatalf("entry %d is %T, want a question", i, items[i])
 		}
-		return flowed(strings.Join(out, " "))
-	}
-
-	if strings.Contains(shown(), flowed(faqs[0].a)) {
-		t.Error("an answer is on the screen before anything was opened")
-	}
-	// Every question is, because a list you cannot see the whole of is a
-	// scrollbar, and the bar already has one.
-	for _, f := range faqs {
-		if !strings.Contains(shown(), flowed(f.q)) {
-			t.Errorf("the question %q is not on the screen", f.q)
+		if it.n != i {
+			t.Errorf("entry %d holds question %d", i, it.n)
+		}
+		if len(it.body) == 0 {
+			t.Errorf("the entry for %q carries no answer", f.q)
+		}
+		if got := flowed(it.body[0]); got == "" {
+			t.Errorf("the entry for %q has an empty answer", f.q)
+		}
+		if !strings.Contains(flowed(strings.Join(it.body, " ")), flowed(firstWords(f.a, 6))) {
+			t.Errorf("the entry for %q does not carry its own answer", f.q)
 		}
 	}
-
-	m.toggleFAQ()
-	if !strings.Contains(shown(), flowed(faqs[0].a)) {
-		t.Error("enter did not open the answer")
-	}
-	if !strings.Contains(shown(), flowed(faqs[0].q)) {
-		t.Error("an open answer lost the question it belongs to")
-	}
-
-	// A second one opens beside the first: somebody comparing two answers wants
-	// both, and a disclosure that only ever shows one is a cursor.
-	m.faqs.Select(2)
-	m.toggleFAQ()
-	if !strings.Contains(shown(), flowed(faqs[0].a)) || !strings.Contains(shown(), flowed(faqs[2].a)) {
-		t.Error("opening a second answer closed the first")
-	}
-
-	// And the page is still the height of the window with two of them open,
-	// which is what sizing it around them was for.
+	// The first one, in full, and the answer directly under it rather than
+	// below the list.
 	lines := strings.Split(stripForTest(m.show(screenFAQ).frameString()), "\n")
-	if len(lines) != 30 {
-		t.Errorf("with two answers open the page is %d lines, want 30", len(lines))
+	qAt, aAt := -1, -1
+	for i, line := range lines {
+		if qAt < 0 && strings.Contains(line, faqs[0].q) {
+			qAt = i
+			continue
+		}
+		if qAt >= 0 && aAt < 0 && strings.Contains(line, "You may well") {
+			aAt = i
+		}
 	}
+	if qAt < 0 || aAt < 0 {
+		t.Fatalf("the first question and its answer are not both on the page (%d, %d)", qAt, aAt)
+	}
+	if aAt <= qAt {
+		t.Errorf("the answer is on line %d and its question on %d", aAt, qAt)
+	}
+	// And what is between the two is the answer, not the list running on.
+	if got := strings.Join(lines[qAt:aAt], " "); strings.Contains(flowed(got), flowed(faqs[1].q)) {
+		t.Errorf("the second question came between the first and its answer: %q", got)
+	}
+}
 
-	m.toggleFAQ()
-	if !strings.Contains(shown(), flowed(faqs[0].a)) {
-		t.Error("enter did not close the answer")
+// firstWords is the opening of a sentence, which is what a wrapped answer still
+// starts with.
+func firstWords(s string, n int) string {
+	w := strings.Fields(s)
+	if len(w) > n {
+		w = w[:n]
 	}
+	return strings.Join(w, " ")
 }
 
 // flowed is a string with every run of whitespace collapsed to one space, so

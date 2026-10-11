@@ -277,7 +277,6 @@ func (s *Server) modelFor(w who) tea.Model {
 		st:      newStyles(true),
 		view:    screenHome,
 		account: s.opts.Ledger.Account(address),
-		open:    map[int]bool{},
 		width:   80,
 		height:  24,
 	}

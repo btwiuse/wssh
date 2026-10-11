@@ -514,13 +514,10 @@ type model struct {
 	// same code path as the bar: a logo takes you home.
 	mark box
 
-	// faqs is the list of questions on the last page, and open is which of
-	// their answers are showing. Held for the same reason as the other two
-	// lists: where somebody is reading is theirs, not something to be reset
-	// every frame - and an expansion that resets when the window resizes is an
-	// expansion that closes itself.
+	// faqs is the list of questions on the last page, with their answers.
+	// Held for the same reason as the other two lists: where somebody is
+	// reading is theirs, not something to be reset every frame.
 	faqs list.Model
-	open map[int]bool
 
 	// focus is whether a text field is taking keystrokes. Off by default,
 	// and that is the whole point: a field that swallows every key while it
@@ -857,10 +854,6 @@ func (m model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.paintFocus()
 			return m, nil
 		case "enter":
-			if m.view == screenFAQ {
-				m.toggleFAQ()
-				return m, nil
-			}
 			return m.onListEnter()
 		case "x":
 			// Revoking on enter is a lie about what enter is for: enter is
@@ -1264,7 +1257,7 @@ func (m *model) fitted(l list.Model, perRow int, head, tail string) (list.Model,
 	// The delegate starts as if it had already written the lines the
 	// component puts above the first row, so what it records is a line on the
 	// screen rather than a line inside the component.
-	d := &rowDelegate{focused: m.focus, written: listLead}
+	d := &rowDelegate{focused: m.focus, written: listLead, height: m.rowHeight(perRow)}
 	l.SetDelegate(d)
 	l.SetWidth(m.listWidth())
 	floor := m.listFloor(perRow)
@@ -1283,6 +1276,17 @@ func (m *model) fitted(l list.Model, perRow int, head, tail string) (list.Model,
 	}
 	d.drawn, d.written = nil, listLead
 	return l, l.View(), d.drawn
+}
+
+// rowHeight is how tall a row of the list on this page is. One line everywhere
+// except the FAQs, whose rows are a question and its answer.
+func (m model) faqRowHeight() int { return faqRowHeight(m.listWidth()) }
+
+func (m model) rowHeight(perRow int) int {
+	if m.view == screenFAQ {
+		return faqRowHeight(m.listWidth())
+	}
+	return maxRowHeight
 }
 
 // listFloor is the smallest a list on this page is allowed to be: three rows,

@@ -159,6 +159,10 @@ func (i keyItem) lines(st *styles, sel, focused bool) (string, int) {
 // component just before that row is written, and nowhere else is told. A copy
 // would be thrown away between rows and the note would come back empty.
 type rowDelegate struct {
+	// height overrides the row height, for a list whose rows are blocks
+	// rather than single lines.
+	height int
+
 	// focused is copied in when the delegate is set rather than read from the
 	// model: the list calls Render from inside its own View and has no way to
 	// be told what the rest of the program is doing.
@@ -184,7 +188,19 @@ type drawnRow struct {
 	lines int
 }
 
-func (d *rowDelegate) Height() int { return maxRowHeight }
+// Height is how tall every row is.
+//
+// Tall enough for the tallest row this list has, which is one value for the
+// whole list: the component asks its delegate once and gives every row that
+// much. So a list whose rows are a question and its answer is as tall as the
+// longest answer, and the shorter ones are padded - which is the price of a
+// list paging itself over blocks, and a cheap one next to not paging at all.
+func (d *rowDelegate) Height() int {
+	if d.height > 0 {
+		return d.height
+	}
+	return maxRowHeight
+}
 
 func (d *rowDelegate) Spacing() int { return 0 }
 
@@ -293,9 +309,15 @@ func keysList(acct Account, width int, focused bool) list.Model {
 // same keymap, the same chrome and the same focus treatment without either
 // screen having to know the other exists.
 func newNavList(items []list.Item, width int, focused bool, one, many string, perRow int) list.Model {
+	return newNavListOfHeight(items, width, focused, one, many, perRow, 0)
+}
+
+// newNavListOfHeight is newNavList with a row height that is not two lines,
+// for the one list here whose rows are blocks.
+func newNavListOfHeight(items []list.Item, width int, focused bool, one, many string, perRow, rowHeight int) list.Model {
 	// A placeholder height: the page sets the real one on every frame, and
 	// three rows is the floor everywhere else in this program.
-	l := list.New(items, &rowDelegate{focused: focused}, width, perRow*3)
+	l := list.New(items, &rowDelegate{focused: focused, height: rowHeight}, width, perRow*3)
 	l.KeyMap = listKeyMap()
 	l.SetShowTitle(false)
 	l.SetShowHelp(false)
@@ -315,7 +337,7 @@ func newNavList(items []list.Item, width int, focused bool, one, many string, pe
 	l.Styles.NoItems = l.Styles.NoItems.PaddingLeft(2).Foreground(dim.GetForeground())
 	l.Styles.PaginationStyle = l.Styles.PaginationStyle.PaddingLeft(2).Foreground(dim.GetForeground())
 
-	l.SetDelegate(&rowDelegate{focused: focused})
+	l.SetDelegate(&rowDelegate{focused: focused, height: rowHeight})
 	return l
 }
 
@@ -357,10 +379,7 @@ func (m *model) syncLists() {
 	idx := m.apiKeys.Index()
 	m.routes = modelsList(m.deps.catalogue(), m.listWidth(), m.focus)
 	m.apiKeys = keysList(m.account, m.listWidth(), m.focus)
-	if m.open == nil {
-		m.open = map[int]bool{}
-	}
-	m.faqs = faqsList(m.listWidth(), m.focus, m.open)
+	m.faqs = faqsList(m.listWidth(), m.focus)
 	if n := len(m.account.Keys); n > 0 {
 		if idx >= n {
 			idx = n - 1

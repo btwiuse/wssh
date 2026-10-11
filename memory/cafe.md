@@ -852,22 +852,25 @@ how the two stop agreeing. **The landing page's base URL was corrected to match
 the app's at the same time** (`api.router.cafe/v1`), which is the same class of
 mistake: two copies of a fact that drift.
 
-`enter` opens the question under the cursor. **Several can be open at once**,
-because somebody comparing two answers wants both, and a disclosure that only
-ever shows one is a cursor with a slower response.
+**Every question carries its answer, and the answer is under the question.**
+It was a disclosure - `enter` to open one - and it was wrong twice over: the
+answers came out below the whole list rather than under the question they
+belonged to, and a row that grew to hold one pushed the rest of the page off
+the bottom every time somebody opened a long question. So the rows are as tall
+as the longest answer, the list pages over them, and `enter` does nothing here
+rather than pretending to.
 
-The answers are drawn *under* the list rather than inside the rows: an answer is
-not one line, and the component gives every row the same height, so a row that
-grew to hold one pushed the rest of the page off the bottom every time somebody
-opened a long question. Because the answers are part of the page's tail, the
-list is sized around them automatically - opening a long answer makes the list
-shorter rather than making the answer the thing that gets cut.
+Seven questions over two pages at a hundred columns is not a problem. An answer
+that appears somewhere else is.
 
-Whether a question is open is a field on its item rather than something the
-delegate looks up, because **the delegate cannot see the model** (see
-`navStyles` in `listnav.go`), so the list of seven is rebuilt on the keystroke
-that changes the set. That is the one place a list is rebuilt per keystroke in
-this program, and it is seven items.
+Two consequences of the component's rules, both of which cost an afternoon:
+
+- **Every row gets the same height**, so the height is the longest answer on the
+  page and the shorter ones are padded. `newNavListOfHeight` is how a list in
+  this program asks for that.
+- **The frame rebuilds the delegate on every frame**, and the rebuild has to
+  carry the height over or every entry collapses back to one line. That is
+  `m.rowHeight`, and `TestTheFAQsListKeepsItsRowHeight` is what stops it.
 
 ## Tab names, and how a key is shown
 

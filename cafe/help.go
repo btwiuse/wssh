@@ -1,7 +1,6 @@
 package cafe
 
 import (
-	"strconv"
 	"strings"
 
 	"charm.land/bubbles/v2/list"
@@ -65,99 +64,93 @@ var faqs = []faq{
 	},
 }
 
-// faqItem is one question in the list, and whether its answer is showing.
+// faqItem is one question and its answer, wrapped when the list was built.
 //
-// Open on the row itself, not only by what is under the list. A page that
-// changes under the cursor and changes back when the cursor moves away is a
-// cursor, and somebody reading two answers wants to see that both are open.
-//
-// It is a field on the item rather than something the delegate looks up
-// because the delegate cannot see the model - see `navStyles` in listnav.go -
-// so the list is rebuilt when the set changes, which is seven items and a
-// keystroke.
+// **The answer is always there.** It was a disclosure - `enter` to open one -
+// and it was wrong twice over: the answers came out below the whole list rather
+// than under the question they answer, and a row that grew to hold an answer
+// pushed the rest of the page off the bottom every time one was opened. So
+// every question carries its answer, the rows are as tall as the longest one,
+// and the list pages over them. Seven questions over four pages at a hundred
+// columns is not a problem; an answer that appears somewhere else is.
 type faqItem struct {
 	n    int
-	open bool
+	body []string
 }
 
 func (i faqItem) FilterValue() string { return faqs[i.n].q }
 
+// lines is the whole block: the question with the cursor beside it, then the
+// answer under it.
+//
+// No blank after the answer: the component already puts one between rows, and
+// a second one costs a row a page for nothing.
 func (i faqItem) lines(st *styles, sel, focused bool) (string, int) {
 	lead, trail, marker := rowStyles(st, sel, focused)
-	if i.open {
-		return marker + " " + lead.Render("v ") + trail.Render(faqs[i.n].q), 1
+	out := []string{marker + " " + lead.Render(faqs[i.n].q)}
+	for _, line := range i.body {
+		out = append(out, "  "+trail.Render(line))
 	}
-	return marker + " " + trail.Render(faqs[i.n].q), 1
+	return strings.Join(out, "\n"), len(out)
 }
 
-// faqsList builds the list of questions.
-func faqsList(width int, focused bool, open map[int]bool) list.Model {
+// faqsList builds the list of questions with their answers wrapped to the width
+// the list has.
+func faqsList(width int, focused bool) list.Model {
 	items := make([]list.Item, 0, len(faqs))
-	for i := range faqs {
-		items = append(items, faqItem{n: i, open: open[i]})
+	for i, f := range faqs {
+		items = append(items, faqItem{n: i, body: wrapPlain(f.a, faqInner(width))})
 	}
-	return newNavList(items, width, focused, "question", "questions", 1)
+	return newNavListOfHeight(items, width, focused, "question", "questions", 1, faqRowHeight(width))
 }
 
-// faqPage is the page: the questions as a list, and under it the answers of
-// whichever ones are open.
+// faqInner is how wide an answer is written at, which is the list's width less
+// the indent the rows carry.
+func faqInner(width int) int { return max(20, width-4) }
+
+// faqRowHeight is how tall a question and its answer are: the question, plus
+// the longest answer on the page.
 //
-// Split that way because an answer is not one line, and a row that grew to hold
-// one would push the rest of the page off the bottom every time somebody
-// opened a long question.
-func (m model) faqPage() (head, tail string) {
-	// Nothing above the list: the questions are the page, and the answers
-	// belong under the thing they answer rather than over it.
-	var t strings.Builder
-	if n := len(m.open); n == 0 {
-		t.WriteString("  " + m.st.dim.Render("enter on a question to open its answer") + "\n")
-	} else {
-		t.WriteString("  " + m.st.dim.Render(strconv.Itoa(n)+" open") +
-			m.st.dim.Render(", enter on another to open it too") + "\n")
+// The component asks its delegate once for a row height and gives every row
+// that much, so this is one number for the whole list and the shorter answers
+// are padded. It is read here as well as when the list is built, because the
+// frame replaces the delegate on every frame and a delegate that has lost its
+// height turns every entry back into a single line.
+func faqRowHeight(width int) int {
+	tallest := 1
+	for _, f := range faqs {
+		tallest = max(tallest, len(wrapPlain(f.a, faqInner(width))))
 	}
-	t.WriteString("\n  " + m.st.dim.Render("the same questions as "+Domain+"'s landing page") + "\n")
-	return "", m.openAnswers() + "\n" + t.String()
+	return tallest + 1
 }
 
-// openAnswers is the block under the list: the answer of every question that is
-// open, each under its own question so that it is answerable on its own.
-func (m model) openAnswers() string {
-	var b strings.Builder
-	for _, n := range sortedKeys(m.open) {
-		b.WriteString("\n  " + m.st.title.Render(faqs[n].q) + "\n")
-		b.WriteString(m.wrap(m.st.dim.Render(faqs[n].a), m.st.dim) + "\n")
+// wrapPlain breaks a paragraph into lines of at most n columns, on spaces.
+//
+// Plain rather than lipgloss's Wrap, for the reason the rest of this program
+// does its own wrapping: that one is happy to lose a token too long for a
+// line, and a URL in an answer has to survive.
+func wrapPlain(s string, n int) []string {
+	words := strings.Fields(s)
+	if len(words) == 0 {
+		return nil
 	}
-	return b.String()
-}
-
-// sortedKeys is a map's keys in order, because the answers come out in the
-// order the questions are asked in rather than in Go's map order, which is not
-// an order at all.
-func sortedKeys(m map[int]bool) []int {
-	out := make([]int, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && out[j-1] > out[j]; j-- {
-			out[j-1], out[j] = out[j], out[j-1]
+	var out []string
+	line := words[0]
+	for _, w := range words[1:] {
+		if len(line)+1+len(w) > n {
+			out = append(out, line)
+			line = w
+			continue
 		}
+		line += " " + w
 	}
-	return out
+	return append(out, line)
 }
 
-// toggleFAQ opens the question under the cursor, or closes it if it is open.
-func (m *model) toggleFAQ() {
-	i := m.faqs.Index()
-	if i < 0 || i >= len(faqs) {
-		return
-	}
-	if m.open[i] {
-		delete(m.open, i)
-	} else {
-		m.open[i] = true
-	}
-	m.faqs = faqsList(m.listWidth(), m.focus, m.open)
-	m.faqs.Select(i)
-	m.paintFocus()
+// faqPage is the page: the questions, with their answers, as a list.
+func (m model) faqPage() (head, tail string) { return "", m.faqTail() }
+
+// faqTail is the line under the list.
+func (m model) faqTail() string {
+	return "  " + m.st.dim.Render("the same questions as "+Domain+"'s landing page") + "\n"
 }
