@@ -585,6 +585,19 @@ plus the two lines the component puts above the first row. It also records the
 on the second page is not the third item, and a click that selected the third
 item would revoke a key on a different page from the one under the cursor.
 
+A two-line row's two lines line up, and which one did not is the interesting
+part. The marker is a **styled** string, and on the selected row it carries
+twenty bytes of escape with it, so `len(marker)` indented that row twenty
+columns further than the others - **the row you are looking at was the row that
+did not line up**. `lipgloss.Width`, not `len`.
+
+The rows also go in two columns per line rather than once per row, for the
+same reason: a row is one or two lines and only the first carries the marker,
+so indenting the string as a whole left the second line two columns short of
+the text it belongs to. The indent itself matches every other line on a page -
+the component draws its rows against the wall of its own viewport, which is
+the wall of the box, while every line of prose around them is two columns in.
+
 The arithmetic this replaced (`off / linesPerRow`) was a guess about a component
 that puts a status bar above its rows and a blank between them, and it was wrong
 by a line and a half - which on this screen is a revoke of somebody else's key.
