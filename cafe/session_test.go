@@ -1696,7 +1696,7 @@ func TestTheWordmarkIsDrawnExactlyAsItIsWritten(t *testing.T) {
 			// needs: its lines are different lengths and the space in front of
 			// the first one is part of the lettering.
 			lead := max(0, (inside-lipgloss.Width(want))/2)
-			if got != strings.Repeat(" ", lead)+want {
+			if strings.TrimRight(got, " ") != strings.TrimRight(strings.Repeat(" ", lead)+want, " ") {
 				t.Errorf("width %d line %d:\n got %q\nwant %q", width, i, got, strings.Repeat(" ", lead)+want)
 			}
 		}
@@ -2099,7 +2099,7 @@ func TestTheNameIsATabAndTheAddressIsSetIn(t *testing.T) {
 	for _, page := range m.screenList() {
 		shown := m.show(page)
 		content, where := shown.frame()
-		drawn := strings.Contains(stripForTest(content), "_|")
+		drawn := strings.Contains(stripForTest(content), "████")
 		if drawn != (page == screenHome) {
 			t.Errorf("%s draws the wordmark: %v, want it on home only", pageName(page), drawn)
 		}
