@@ -272,6 +272,7 @@ export function CredentialsPanel({ workerRef, onClose, onChange }) {
           publicKey: msg.publicKey,
           privateKey: msg.privateKey,
           fingerprint: '',
+          solana: msg.solana || '',
           encrypted: false,
           enabled: true,
         }));
@@ -297,6 +298,7 @@ export function CredentialsPanel({ workerRef, onClose, onChange }) {
           publicKey: info.publicKey || '',
           privateKey: pasted,
           fingerprint: info.fingerprint || '',
+          solana: info.solana || '',
           encrypted: !!info.encrypted,
           enabled: true,
         }));
@@ -361,7 +363,13 @@ export function CredentialsPanel({ workerRef, onClose, onChange }) {
     <div class="absolute z-30 top-full mt-1 right-0 w-[30rem] max-w-[95vw] rounded border border-slate-700
                 bg-slate-900 shadow-2xl p-3 text-slate-200">
       <div class="flex items-center gap-2 mb-2">
-        <span class="font-semibold text-sm">Credentials</span>
+        <!--
+          SSH Credentials, not Credentials: the panel holds SSH keys and the
+          passwords that go with them, and "Credentials" on its own reads as
+          everything this page can authenticate with - which is what the wallet
+          button beside it also is.
+        -->
+        <span class="font-semibold text-sm">SSH Credentials</span>
         <label class="ml-auto flex items-center gap-1.5 text-xs text-slate-400 select-none">
           <input
             type="checkbox"
@@ -391,8 +399,13 @@ export function CredentialsPanel({ workerRef, onClose, onChange }) {
               title="Offer this key when connecting"
               onChange=${() => toggleKey(key.id)}
             />
-            <span class="text-xs font-mono truncate flex-1" title=${key.publicKey || key.name}>
-              ${key.name}${key.encrypted ? ' 🔒' : ''}
+            <span
+              class="text-xs font-mono truncate flex-1"
+              title=${`${key.publicKey || key.name}${key.solana ? `\nsolana:${key.solana}` : ''}`}
+            >
+              ${key.name}${key.encrypted ? ' 🔒' : ''}${
+                key.solana && html`<span class="ml-2 text-slate-500">solana:${key.solana}</span>`
+              }
             </span>
             ${key.fingerprint && html`
               <span class="text-[10px] text-slate-500 font-mono shrink-0"

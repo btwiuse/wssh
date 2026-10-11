@@ -12,6 +12,7 @@ import (
 	gossh "golang.org/x/crypto/ssh"
 
 	"github.com/routercafe/routercafe/auth/agentkey"
+	"github.com/routercafe/routercafe/solana"
 )
 
 // errNoPassword is returned when the page declines to supply a password. It
@@ -239,10 +240,19 @@ func jsGenerateKey(_ js.Value, args []js.Value) any {
 		return nil
 	}
 
+	// The account this key names, so the page can label it the same way it
+	// labels a pasted one. An ed25519 key already is an address; an RSA key
+	// names none, and is left blank rather than given something invented.
+	account := ""
+	if pub, _, _, _, err := gossh.ParseAuthorizedKey([]byte(pair.AuthorizedKey())); err == nil {
+		account, _ = solana.AddressFor(pub)
+	}
+
 	post(map[string]any{
 		"type":       "generatedKey",
 		"publicKey":  pair.AuthorizedKey(),
 		"privateKey": string(pair.RawPrivateKey()),
+		"solana":     account,
 	})
 	return nil
 }
@@ -273,15 +283,24 @@ func jsKeyInfo(_ js.Value, args []js.Value) any {
 
 	// The public half can be read without the passphrase for most formats,
 	// which is what makes a fingerprint possible before anything is opened.
+	// solana is the account the key names, blank for anything that is not
+	// ed25519 - every other kind of SSH key, and none of those is an account.
+	// The page shows it beside the key's own comment so a person can tell at a
+	// glance which of three keys in a list is the one they meant.
+	solanaAccount := ""
 	if pub, _, _, _, err := gossh.ParseAuthorizedKey([]byte(raw)); err == nil {
 		info["type"] = pub.Type()
 		info["fingerprint"] = gossh.FingerprintSHA256(pub)
 		info["publicKey"] = strings.TrimSpace(string(gossh.MarshalAuthorizedKey(pub)))
+		solanaAccount, _ = solana.AddressFor(pub)
 	} else if signer, err := gossh.ParsePrivateKey([]byte(raw)); err == nil {
-		info["type"] = signer.PublicKey().Type()
-		info["fingerprint"] = gossh.FingerprintSHA256(signer.PublicKey())
-		info["publicKey"] = strings.TrimSpace(string(gossh.MarshalAuthorizedKey(signer.PublicKey())))
+		pub := signer.PublicKey()
+		info["type"] = pub.Type()
+		info["fingerprint"] = gossh.FingerprintSHA256(pub)
+		info["publicKey"] = strings.TrimSpace(string(gossh.MarshalAuthorizedKey(pub)))
+		solanaAccount, _ = solana.AddressFor(pub)
 	}
+	info["solana"] = solanaAccount
 
 	post(map[string]any{"type": "keyInfo", "info": info})
 	return nil

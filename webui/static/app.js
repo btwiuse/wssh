@@ -755,7 +755,7 @@ function App() {
           <button
             class="flex items-center gap-1 px-2 py-1 text-xs rounded bg-slate-800
                    hover:bg-slate-700 text-slate-300 disabled:opacity-50"
-            title="Keys and passwords to authenticate with"
+            title="SSH keys and passwords to authenticate with"
             disabled=${connected || status === 'connecting'}
             onMouseDown=${(e) => e.preventDefault()}
             onClick=${() => setCredsOpen((open) => !open)}
