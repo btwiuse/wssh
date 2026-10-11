@@ -136,14 +136,6 @@ func (m model) helpText() string {
 	b.WriteString("  " + m.st.title.Render("what this is not") + "\n\n")
 	b.WriteString(m.wrapTo("There is no shell here. Nothing you type is run on this machine, because there is no way to ask it to: the session is a program, not a command line, and a command sent instead of a shell is ignored.", m.st.dim, wide) + "\n\n")
 	b.WriteString(m.wrapTo("Your private key never leaves your machine. This server asks the agent you forwarded with ssh -A, and checks the transaction it gets back. The same, more carefully, is at "+Domain+".", m.st.dim, wide) + "\n")
-
-	// The version, because this screen is where somebody goes to work out what
-	// they are talking to - and the answer comes from the server, not from the
-	// binary they happen to have. Left off entirely when there is none: a blank
-	// or bare "dev" line reads as a bug, where no line reads as a build.
-	if v := strings.TrimSpace(m.deps.Version); v != "" && v != "dev" {
-		b.WriteString("\n" + m.st.dim.Render("server version "+v) + "\n")
-	}
 	return b.String()
 }
 

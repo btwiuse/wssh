@@ -39,15 +39,14 @@ func frame(st styles, width, height int, bar, body, footer string) string {
 	if width < 20 {
 		width = 20
 	}
-	chrome := brandLines + footerLines
+	// A bar carries the brand on its own line, so there is nothing above it to
+	// spend a line on. The three screens with no bar still get the brand line
+	// and the line their top edge is drawn on.
+	chrome := footerLines
 	if bar != "" {
 		chrome += barLines
 	} else {
-		// The line the top edge is drawn on. With a bar that line is the
-		// bar's own bottom edge and is already in barLines; without one it is
-		// a line of its own, and leaving it out is how the frame ends up one
-		// taller than the window it is supposed to be filling.
-		chrome += topEdgeLines
+		chrome += brandLines + topEdgeLines
 	}
 	box := height - chrome
 	if box < 3 {
@@ -55,26 +54,26 @@ func frame(st styles, width, height int, bar, body, footer string) string {
 	}
 
 	var b strings.Builder
-	b.WriteString(st.brand.Render("RouterCafe"))
-	// The domain is dropped rather than wrapped when there is no room for it.
-	// A brand line that breaks in two on a narrow terminal is worse than a
-	// brand line without the address on it, and the address is in the help
-	// screen and the landing page anyway.
-	gap := width - lipgloss.Width("RouterCafe") - lipgloss.Width(Domain)
-	if gap >= 1 {
-		b.WriteString(strings.Repeat(" ", gap))
-		b.WriteString(st.dim.Render(Domain))
-	}
-	if bar == "" {
-		// The box has no top edge of its own - on the screens with a bar the
-		// bar's bottom edge is it - so with no bar there is nothing at all
-		// along the top, and a frame open along one whole side reads as a
-		// panel still loading rather than as a window. The edge is drawn
-		// here in the box's own colour so it is indistinguishable from the
-		// one the bar would have supplied.
-		b.WriteString("\n" + edge.Render(strings.Repeat("─", width)))
+	if bar != "" {
+		b.WriteString(bar)
 	} else {
-		b.WriteString("\n" + bar)
+		// No bar, so the name goes on a line of its own - together with the
+		// box's missing top edge. On a screen with a bar that edge is the
+		// bar's bottom edge; with no bar there is nothing at all along the
+		// top, and a frame open along one whole side reads as a panel still
+		// loading rather than as a window. Drawn in the box's own colour, so
+		// it is indistinguishable from the one the bar would have supplied.
+		b.WriteString(st.brand.Render("RouterCafe"))
+		// The domain is dropped rather than wrapped when there is no room for
+		// it. A brand line that breaks in two on a narrow terminal is worse
+		// than a brand line without the address on it, and the address is in
+		// the help screen and the landing page anyway.
+		gap := width - lipgloss.Width("RouterCafe") - lipgloss.Width(Domain)
+		if gap >= 1 {
+			b.WriteString(strings.Repeat(" ", gap))
+			b.WriteString(st.dim.Render(Domain))
+		}
+		b.WriteString("\n" + edge.Render(strings.Repeat("\u2500", width)))
 	}
 	// The page is wrapped to the inside of the box before it is counted.
 	// lipgloss wraps whatever is wider than that on its way into the border,

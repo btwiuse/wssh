@@ -66,6 +66,18 @@ func (v screen) widget() bool {
 	return v == screenDeposit || v == screenKeys || v == screenModels
 }
 
+// screenList is the ring in the order the bar shows it, for turning a
+// column into a page. The name at the left of the bar goes to the balance
+// screen and is not in the ring, so the bar's own order is carried by one
+// slice rather than by arithmetic over a list it no longer lines up with.
+func screenList() []screen {
+	out := make([]screen, 0, len(screens))
+	for _, s := range screens {
+		out = append(out, s.view)
+	}
+	return out
+}
+
 // step moves n places through the ring of screens, wrapping at both ends.
 //
 // Wrapping rather than stopping is deliberate: tab is a cycle here, and a
@@ -245,6 +257,11 @@ type model struct {
 	// the wrong key.
 	rows []drawnRow
 
+	// mark is where the wordmark on the balance screen landed, so a click on
+	// it navigates rather than doing nothing. A link like any other, and the
+	// same code path as the bar: a logo takes you home.
+	mark box
+
 	// help is the pager on the one page with more on it than a window shows.
 	// Held for the same reason as the lists: where in the help somebody is
 	// reading is theirs, not something to be reset every frame.
@@ -336,7 +353,7 @@ func clickTo(where clicks) func(tea.MouseMsg) tea.Cmd {
 		if m.Button != tea.MouseLeft {
 			return nil
 		}
-		if view, ok := where.tabAt(m.X, m.Y); ok {
+		if view, ok := where.link(m.X, m.Y); ok {
 			return func() tea.Msg { return gotoScreenMsg{view} }
 		}
 		if row, ok := where.rowAt(m.X, m.Y); ok {
@@ -880,15 +897,15 @@ func (m model) note() string {
 }
 
 // pageRoom is how many terminal lines the page inside the box has to fill:
-// the window, less the brand line, the bar, the footer, and the box's own
-// bottom edge. One fewer than the box because the box's height counts its
+// the window, less the bar, the footer, and the box's own bottom edge. There
+// is no brand line to take off, because the bar carries the name. One fewer than the box because the box's height counts its
 // border, and the page does not have one along the bottom of its own.
 //
 // Floored, because a model built by hand in a test has no window and a
 // negative height is a component that draws nothing rather than a small one
 // that draws something.
 func (m model) pageRoom() int {
-	return max(1, m.height-brandLines-footerLines-barLines-1)
+	return max(1, m.height-footerLines-barLines-1)
 }
 
 // fitted gives a list the room left on the page and returns it with what it
@@ -983,14 +1000,19 @@ func countLines(s string) int {
 // Both are per-frame facts that the click handling has to agree with, and a
 // copy of the model would have thrown them away.
 func (m *model) frame() (string, clicks) {
-	m.rows = nil
-	bar, spans := m.tabBar()
+	m.rows, m.mark = nil, box{}
+	bar, tabs := m.tabBar()
 	page, listAt := m.renderPage()
 
-	where := clicks{
-		tabs:    spans,
-		tabLine: barTop,
-		inside:  span{x0: 1, x1: m.width - 1},
+	// The bar is three lines - the top of the box, the labels, the bottom edge
+	// - and a click on any of them is a click on the tab under it.
+	where := clicks{inside: span{x0: 1, x1: m.width - 1}}
+	barViews := append([]screen{screenHome}, screenList()...)
+	for i, tab := range tabs {
+		where.tabs = append(where.tabs, barTab{
+			box{x0: tab.x0, x0y: barTop, x1: tab.x1, y1: barTop + barLines - 1},
+			barViews[i],
+		})
 	}
 	// The page starts on the line after the bar's underline, and the box has no
 	// top edge of its own, so a line on the page is a line on the terminal from
@@ -999,9 +1021,13 @@ func (m *model) frame() (string, clicks) {
 	// under it rather than on a row counted by a formula that a later release
 	// of the component would move.
 	if listAt >= 0 {
-		where.listTop = brandLines + barLines + listAt
+		where.listTop = barLines + listAt
 		where.rows = m.rows
 	}
+	// The wordmark on the balance screen is a link to the balance screen, in
+	// the same way the name on the bar is. It is read after the page is drawn
+	// because where it landed is a fact about what was drawn.
+	where.mark = m.mark
 	return frame(m.st, m.width, m.height, bar, page, m.footer()), where
 }
 
@@ -1012,7 +1038,7 @@ func (m *model) frame() (string, clicks) {
 // current, which row the cursor is on - differs on every frame, and a click
 // against yesterday's layout is worse than no click at all.
 type clicks struct {
-	tabs    []span
+	tabs    []barTab
 	tabLine int
 
 	// listTop is the line the current page's first list row is on and rows are
@@ -1025,11 +1051,17 @@ type clicks struct {
 	// inside is the horizontal extent of the box, so a click on its border is
 	// not a click on the row behind the border.
 	inside span
+
+	// mark is the wordmark on the balance screen, where it actually landed.
+	// It is a second kind of link rather than one of the tabs because it is
+	// only ever on one screen and only when there is room for it - but it is
+	// the same act, so link() answers for both.
+	mark box
 }
 
-// barTop is where the bar starts counting from: the brand line is line 0 and
-// the bar is drawn on the two after it.
-const barTop = 1
+// barTop is where the bar starts counting from. It is line 0: the name and the
+// address are on the bar's own line, so there is nothing above it.
+const barTop = 0
 
 // listLead is how many lines the list component puts above its first row: the
 // status bar that says how many keys there are, and the blank line under it.
@@ -1038,17 +1070,16 @@ const barTop = 1
 // clicks revoke the wrong key.
 const listLead = 2
 
-// tabAt returns the page a click on line y column x landed on.
-func (c clicks) tabAt(x, y int) (screen, bool) {
-	// The bar is three lines: the top of the box, the labels, the bottom edge.
-	// A click on any of them is a click on the tab.
-	if y < c.tabLine || y > c.tabLine+2 {
-		return 0, false
-	}
-	for i, sp := range c.tabs {
-		if sp.contains(x) {
-			return screens[i].view, true
+// link returns the page a click on line y column x navigates to, from the bar
+// or from the wordmark. Both are the same act and both go through here.
+func (c clicks) link(x, y int) (screen, bool) {
+	for _, tab := range c.tabs {
+		if tab.area.contains(x, y) {
+			return tab.view, true
 		}
+	}
+	if c.mark.contains(x, y) {
+		return screenHome, true
 	}
 	return 0, false
 }
@@ -1088,20 +1119,36 @@ func (m model) header() string {
 // screen could not show the same letters as shortcuts and mean them. A bar
 // shows where you are and where you can go, and cannot go stale the way a
 // legend does.
+// tabBar is where every page is, all at once, with the name of this thing at
+// the left of it and where it is served from at the right.
+//
+// It replaces the footer that used to list what each letter did. That footer
+// had to be right on every screen or it was a lie, which is why a list
+// component that wanted b, d, f and u was a problem rather than a detail: the
+// screen could not show the same letters as shortcuts and mean them. A bar
+// shows where you are and where you can go, and cannot go stale the way a
+// legend does.
+//
+// The brand and the address sit on the bar's own line rather than on one above
+// it, for the same reason the bar exists: a line of chrome that changes nothing
+// is a line somebody has to look past. Which also means the name is where a
+// logo goes, and it is clickable - a logo takes you home everywhere it is.
+//
+// Returns the bar and the columns that can be clicked, which is the logo
+// followed by the tabs: both go through the same click handling, because
+// going home is what the balance tab does.
 func (m model) tabBar() (string, []span) {
 	rendered := make([]string, 0, len(screens))
-	spans := make([]span, 0, len(screens))
-	x := 0
 	for i, s := range screens {
 		style := m.st.tabIdle
 		if s.view == m.view {
 			style = m.st.tabActive
 		}
 		// Only the first tab is corrected, to keep its own wall: the leftmost
-		// tab's left edge is also the box's left edge, so its bottom-left
-		// corner has to be one that a vertical line can leave downwards -
-		// a plain bar beside the page has a box to run into and a corner that
-		// turns into one does too.
+		// tab's left edge is the box's left edge, so its bottom-left corner
+		// has to be one that a vertical line can leave downwards - a plain bar
+		// beside the page has a box to run into and a corner that turns into
+		// one does too.
 		//
 		// The last tab keeps the corner its style gives it, which the tabs
 		// example overrides because there the page is exactly as wide as the
@@ -1116,15 +1163,80 @@ func (m model) tabBar() (string, []span) {
 		case first && !active:
 			border.BottomLeft = "\u251c"
 		}
-		cell := style.Border(border).Render(s.name)
-		rendered = append(rendered, cell)
+		rendered = append(rendered, style.Border(border).Render(s.name))
+	}
+	tabs := lipgloss.JoinHorizontal(lipgloss.Top, rendered...)
+	tabsWidth := lipgloss.Width(tabs)
 
+	// Shedding, widest first: the name and the address together, then the
+	// address without the version, then the name alone. The name goes last
+	// and not first because it is the one piece of this line that is also the
+	// way back to the balance screen - a logo dropped for want of room is a
+	// logo nobody can get home from.
+	name := m.vertical(m.st.brand.Render("RouterCafe") + "  ")
+	for _, tail := range []string{
+		m.vertical("  " + m.address()),
+		m.vertical("  " + m.st.dim.Render(Domain)),
+		"",
+	} {
+		if name == "" && tail == "" {
+			break
+		}
+		if lipgloss.Width(name)+tabsWidth+lipgloss.Width(tail) > m.width {
+			continue
+		}
+		offset := lipgloss.Width(name)
+		clickable := make([]span, 0, len(screens)+1)
+		if offset > 0 {
+			clickable = append(clickable, span{0, offset})
+		}
+		x := offset
+		for _, cell := range rendered {
+			w := lipgloss.Width(cell)
+			clickable = append(clickable, span{x, x + w})
+			x += w
+		}
+		bar := lipgloss.JoinHorizontal(lipgloss.Top, name, tabs, tail)
+		return m.carryBarEdge(bar, x+lipgloss.Width(tail)), clickable
+	}
+
+	// Narrower than the tabs and a name together. The bar still draws; it
+	// simply has nothing to the left of it, and that is the whole of what
+	// happens on a terminal too small to be navigated in comfort.
+	clickable := make([]span, 0, len(screens))
+	x := 0
+	for _, cell := range rendered {
 		w := lipgloss.Width(cell)
-		spans = append(spans, span{x0: x, x1: x + w})
+		clickable = append(clickable, span{x, x + w})
 		x += w
 	}
-	bar := lipgloss.JoinHorizontal(lipgloss.Top, rendered...)
-	return m.carryBarEdge(bar, x), spans
+	return m.carryBarEdge(tabs, x), clickable
+}
+
+// vertical puts a line of text in the middle of a block as tall as the tab
+// bar, so the name and the address sit on the row the tab labels are on
+// rather than floating above or below them.
+func (m model) vertical(text string) string {
+	if text == "" {
+		return ""
+	}
+	return lipgloss.PlaceVertical(barLines, lipgloss.Center, text)
+}
+
+// address is the domain, and the version of the server beside it.
+//
+// On the bar rather than at the bottom of the help screen, which is where it
+// used to be: there it was on one screen of five and cut off on the terminals
+// with least room, and here it is where somebody looks when they want to know
+// what they are talking to. A build with no version ldflags says nothing at
+// all - a bare "dev", or a blank, reads as a bug rather than as an
+// unversioned build.
+func (m model) address() string {
+	v := strings.TrimSpace(m.deps.Version)
+	if v == "" || v == "dev" {
+		return m.st.dim.Render(Domain)
+	}
+	return m.st.dim.Render(Domain + " " + v)
 }
 
 // carryBarEdge runs the bar's bottom edge on to the right-hand corner of the
@@ -1150,12 +1262,37 @@ func (m model) carryBarEdge(bar string, barWidth int) string {
 	return strings.Join(lines, "\n")
 }
 
+// barTab is one thing on the bar you can click and where it goes.
+//
+// The destination is carried with the area rather than worked out from the
+// order, because the name at the left of the bar goes somewhere as well and
+// is not one of the pages in the ring - a bar whose clicks are indexed against
+// a list it no longer lines up with is a bar that navigates to the wrong page
+// the moment anything is added to either side of it.
+type barTab struct {
+	area box
+	view screen
+}
+
 // span is a run of terminal columns something clickable occupies.
 type span struct{ x0, x1 int }
 
 // contains reports whether a column falls inside, half-open: the right edge is
 // the first column of whatever comes next.
 func (s span) contains(x int) bool { return x >= s.x0 && x < s.x1 }
+
+// box is a rectangle on the screen: columns from x0 up to x1, lines from y0
+// down to y1. Columns are half-open for the reason spans are - two things
+// sharing a column is a click that lands on whichever was asked about last -
+// and lines are inclusive, because a rectangle is a rectangle.
+type box struct{ x0, x0y, x1, y1 int }
+
+// contains reports whether a cell is inside. An empty box contains nothing,
+// which is what lets a page that drew no wordmark leave the rectangle zero and
+// have every click on it fall through.
+func (b box) contains(x, y int) bool {
+	return x >= b.x0 && x < b.x1 && y >= b.x0y && y <= b.y1
+}
 
 // tabBorderWithBottom is a rounded border with its bottom edge replaced, which
 // is what makes an active tab look joined to the page under it instead of
@@ -1213,9 +1350,10 @@ func (m model) footer() string {
 	return strings.TrimRight(b.String(), " ")
 }
 
-func (m model) renderHome() string {
+func (m *model) renderHome() string {
 	var b strings.Builder
 	acct := m.account
+	b.WriteString(m.wordmark())
 	b.WriteString(m.field("account", m.shortAddress(acct.Address)))
 	b.WriteString(m.field("balance", m.st.money.Render(FormatUSD(acct.Balance))))
 	b.WriteString(m.field("paid in", FormatUSD(acct.Deposits)))
@@ -1399,6 +1537,71 @@ func (m model) refuse(reason string) (tea.Model, tea.Cmd) {
 	m.notice = notice{noticeBad, reason}
 	return m, nil
 }
+
+// wordmark is the name on the balance screen, spelled out.
+//
+// Clickable, like the name at the left of the bar: both go home, and both go
+// through the same click handling. Where the bar's name is a way of getting
+// back, this one is what somebody lands on when they arrive, and a logo you
+// cannot click is a logo that is only decoration.
+//
+// Left out entirely on a terminal too narrow for it rather than shrunk or cut:
+// a wordmark wrapped to two half-words is worse than no wordmark, and the
+// balance is on the same screen either way.
+func (m *model) wordmark() string {
+	if m.width < wordmarkWidth+8 {
+		return ""
+	}
+	// The top line is the brand colour and the two under it are the same
+	// colour quieter. A wordmark in one flat colour is a block of text; a
+	// wordmark that fades reads as a mark.
+	// Inside the box, not inside the window: centring on the window's own
+	// width puts the mark one column right of everything under it, and one
+	// column is all it takes for the frame to wrap the line. The box's wall is
+	// one column further left again, which is where the click offset comes
+	// from - a mark that is centred but not clickable is decoration.
+	inside := bodyWidth(m.width)
+	widest := 0
+	for _, line := range strings.Split(wordmark, "\n") {
+		widest = max(widest, lipgloss.Width(line))
+	}
+
+	var b strings.Builder
+	b.WriteString("\n")
+	for i, line := range strings.Split(wordmark, "\n") {
+		style := m.st.brandDim
+		if i == 0 {
+			// The top line is the brand colour and the two under it are the
+			// same colour quieter. A wordmark in one flat colour is a block of
+			// text; one that fades reads as a mark.
+			style = m.st.brand
+		}
+		b.WriteString(lipgloss.PlaceHorizontal(inside, lipgloss.Center, style.Render(line)) + "\n")
+	}
+	b.WriteString("\n")
+
+	// The page's line one is the bar's three, so the blank above the mark is
+	// the fourth of the screen and the mark is the fifth through the seventh.
+	top := barLines + 1
+	m.mark = box{
+		x0: 1 + (inside-widest)/2, x0y: top,
+		x1: 1 + (inside-widest)/2 + widest, y1: top + barLines - 1,
+	}
+	return b.String()
+}
+
+// wordmarkWidth is how wide the name is, and how a page decides whether there
+// is room for it.
+const wordmarkWidth = 44
+
+// wordmark is RouterCafe, set in a fixed-width face. Generated once and
+// pasted rather than drawn: it is a piece of lettering, not a layout, and
+// nothing about it wants to be computed at runtime.
+var wordmark = strings.Join([]string{
+	" _ \\            |            __|        _|",
+	"   /  _ \\ |  |  _|  -_)  _|(     _` |  _|-_)",
+	"_|_\\\\___/\\_,_|\\__|\\___|_| \\___|\\__,_|_|\\___|",
+}, "\n")
 
 func (m model) field(label, value string) string {
 	return "  " + pad(m.st.label.Render(label), 11) + value + "\n"

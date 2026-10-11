@@ -373,23 +373,47 @@ the way out.
 ## Navigation: a bar, not a list of letters
 
 There are no keys that jump between pages. The top of every screen carries a
-bar of all five and highlights the one you are on, and `tab` walks it:
+bar of all five and highlights the one you are on, and `tab` walks it. **The
+name and the address are on the bar's own line**, not on one above it:
 
 ```
-╭─────────╮╭─────────╮╭──────────╮╭────────╮╭──────╮
-│ balance ││ deposit ││ api keys ││ routes ││ help │
-│         └┴─────────┴┴──────────┴┴────────┴┴──────┤
-│  account    6YSosJ…AsrUKL                            │
-│  balance    $0.00                                    │
+            ╭─────────╮╭─────────╮╭──────────╮╭────────╮╭──────╮
+RouterCafe  │ balance ││ deposit ││ api keys ││ routes ││ help │  router.cafe 0.1.6
+            │         └┴─────────┴┴──────────┴┴────────┴┴──────┴───────────────┐
+│                             _ \            |            __|        _|          │
+│                              /  _ \ |  |  _|  -_)  _|(     _` |  _|-_)         │
+│                           _|_\\___/\_,_|\__|\___|_| \___|\__,_|_|\___|         │
+│                                                                        │
+│  account    6YSosJ…AsrUKL                                                │
+│  balance    $0.00                                                        │
 ```
+
+A line of chrome that changes nothing is a line somebody has to look past, and
+the brand line above the bar was exactly that. Folding it in gives the page one
+more line for content, which it wanted.
+
+**The version is on the bar, not at the bottom of the help screen.** It was
+there once, which put it on one screen of five and below the fold on exactly the
+terminals with least room - the same terminals that cut the bottom off
+everything else. It is on every screen now, and the help screen says what this
+is rather than what build of it. A build with no version ldflags prints no
+version: a bare `dev`, or a blank, reads as a bug rather than as an unversioned
+build.
 
 The bar is drawn with the bubbletea tabs example's borders: a rounded top, and
 a bottom edge that is either `┴─┴` when inactive or `┘ └` when active. The page
 sits in a box with **no top edge**, so the active tab's blank bottom opens into
 it. That second half is the whole of the effect: a bar floating above a wall of
 text reads as chrome, and a bar whose current tab opens into the page reads as
-navigation. The ends close the run rather than each closing themselves, so the
-first tab keeps its left wall and only its corner changes.
+navigation. Only the first tab's corner is corrected, and it keeps its left
+wall.
+
+What the bar sheds when the terminal is too narrow, in order: the version, then
+the address, then **the name**, then the whole thing either side of the tabs.
+The name goes last on purpose - it is the one piece of the line that is also
+the way back to the balance screen, and a logo dropped for want of room is a
+logo nobody can get home from. `carryBarEdge` runs the bottom edge on to the
+right-hand corner afterwards, so the frame has a lid over all of its width.
 
 `shift+tab` goes back, wrapping at both ends. `esc` puts a caret down without
 leaving the page. This replaced a footer listing what `b`, `d`, `k`, `m` and
@@ -462,8 +486,25 @@ against itself.
 | Click | Does |
 |---|---|
 | a tab | switch to it |
+| the name at the left of the bar | switch to the balance screen, which is what the balance tab does |
+| the wordmark on the balance screen | switch to the balance screen, the same act by the same code path |
 | a row in a list | move the cursor there **and** focus it - a cursor that moved without lighting up leaves it impossible to tell what the next keypress will do |
 | a key in the anonymous picker | adopt it, the same as enter |
+
+Both links go through `clicks.link`, and the destination is carried with the
+area rather than worked out from the position. The name at the left of the bar
+goes somewhere and is not one of the pages in the ring, so a bar whose clicks
+are indexed against `screens` navigates to the wrong page the moment anything is
+added to either side of it.
+
+**The wordmark is a wordmark, not a layout**: `RouterCafe` in a fixed-width
+face, generated once with figlet and pasted in. Clickable, like the name on the
+bar - where that one is a way of getting back, this one is what somebody lands
+on, and a logo you cannot click is a logo that is only decoration. It is left
+out entirely below 52 columns rather than shrunk or cut: a wordmark wrapped to
+two half-words is worse than none, and the balance is on the same screen
+either way. `m.mark` records where it landed, because that is a fact about what
+was drawn and `frame` is where the click map is built.
 
 Clicks on the box border, above the list, below the last visible row, or on a
 row that is on another page select nothing, deliberately.

@@ -394,25 +394,37 @@ func TestANamedUsernameOutranksTheKeyThatAuthenticated(t *testing.T) {
 	}
 }
 
-// The help screen says which server this is. It is the screen somebody goes
-// to when they need to know, and the answer has to come from the server
-// rather than from the binary the client happens to have.
+// The bar says which server this is, on every screen, because that is where
+// somebody looks for it. It used to be at the bottom of the help screen, which
+// put it on one screen of five and below the fold on exactly the terminals with
+// least room.
 //
-// A build with no version ldflags must say nothing at all: a blank line, or a
-// bare "dev", reads as a bug rather than as an unversioned build.
-func TestTheHelpScreenSaysWhichServerThisIs(t *testing.T) {
-	// Tall enough to hold the whole of the help, which is now a pager rather
-	// than a block of text: the version line is the last thing on it and a
-	// short window scrolls it off the top of the box rather than cutting it.
-	m := model{st: newStyles(), width: 100, height: 40, deps: deps{Version: "0.1.0"}}
-	if got := m.renderHelp(); !strings.Contains(got, "server version 0.1.0") {
-		t.Errorf("the help screen does not say the version:\n%s", got)
+// The answer has to come from the server rather than from the binary the client
+// happens to have. A build with no version ldflags must say nothing at all: a
+// blank line, or a bare "dev", reads as a bug rather than as an unversioned
+// build.
+func TestTheBarSaysWhichServerThisIs(t *testing.T) {
+	m := model{
+		st: newStyles(), view: screenHome, width: 100, height: 40,
+		deps: deps{Catalogue: DefaultCatalogue(), Proven: true, Version: "0.1.0"},
+	}
+	if got := m.address(); !strings.Contains(stripForTest(got), "router.cafe 0.1.0") {
+		t.Errorf("the bar does not say the version: %q", got)
+	}
+	if got := stripForTest(m.frameString()); !strings.Contains(got, "router.cafe 0.1.0") {
+		t.Error("the version is not on the bar")
+	}
+	// Not on the help screen either: it says what this is, not what build of
+	// it, and the same line in two places is one of them going stale.
+	help := model{st: newStyles(), width: 100, height: 40, deps: deps{Version: "0.1.0"}}.renderHelp()
+	if strings.Contains(stripForTest(help), "0.1.0") {
+		t.Error("the help screen still carries the version")
 	}
 
 	for _, none := range []string{"", "   ", "dev"} {
-		got := model{st: newStyles(), width: 100, height: 40, deps: deps{Version: none}}.renderHelp()
-		if strings.Contains(got, "server version") {
-			t.Errorf("an unversioned build (%q) printed a version line", none)
+		got := model{st: newStyles(), width: 100, height: 40, deps: deps{Version: none}}.address()
+		if none != "" && strings.Contains(stripForTest(got), none) {
+			t.Errorf("an unversioned build (%q) printed a version", none)
 		}
 	}
 }
@@ -1404,29 +1416,72 @@ func TestClickingTheBarSelectsThePageUnderneath(t *testing.T) {
 	m.syncLists()
 	_, where := m.frame()
 
-	for i, sp := range where.tabs {
-		got, ok := where.tabAt(sp.x0+1, where.tabLine+1)
-		if !ok || got != screens[i].view {
-			t.Errorf("a click inside tab %d gave %v (found=%v), want %v", i, got, ok, screens[i].view)
+	// The name at the left of the bar is a link too, and it goes to the page
+	// the balance tab goes to: a logo that is only a logo is a logo that
+	// cannot take you home.
+	names := append([]screen{screenHome}, screenList()...)
+	if len(where.tabs) != len(names) {
+		t.Fatalf("the bar offers %d links for %d pages", len(where.tabs), len(names))
+	}
+	for i, tab := range where.tabs {
+		got, ok := where.link(tab.area.x0+1, barTop+1)
+		if !ok || got != names[i] {
+			t.Errorf("a click inside link %d gave %v (found=%v), want %v", i, got, ok, names[i])
 		}
-		// Half-open: the right edge is the first column of the next tab, and
-		// belongs to it. Two tabs sharing a column is how a click lands on the
+		// Half-open: the right edge is the first column of the next thing, and
+		// belongs to it. Two links sharing a column is how a click lands on the
 		// page next door.
 		if i+1 < len(where.tabs) {
-			got, ok := where.tabAt(sp.x1, where.tabLine+1)
-			if !ok || got != screens[i+1].view {
-				t.Errorf("the right edge of tab %d gave %v, want tab %d", i, got, i+1)
+			got, ok := where.link(tab.area.x1, barTop+1)
+			if !ok || got != names[i+1] {
+				t.Errorf("the right edge of link %d gave %v, want %d", i, got, i+1)
+			}
+		}
+		// And the whole height of the bar is the link, not just the labels.
+		for _, y := range []int{barTop, barTop + barLines - 1} {
+			if _, ok := where.link(tab.area.x0+1, y); !ok {
+				t.Errorf("link %d is not clickable on line %d", i, y)
 			}
 		}
 	}
 
-	// Anywhere else on the screen is not a page.
-	// Anywhere else on the screen is not a page: the brand line above the bar,
-	// and the page below it.
-	for _, pt := range [][2]int{{0, 0}, {50, where.tabLine + 3}, {5, 30}} {
-		if _, ok := where.tabAt(pt[0], pt[1]); ok {
+	// Anywhere else on the screen is not a page: below the bar, and to the
+	// right of the address.
+	for _, pt := range [][2]int{{m.width - 1, barTop + 1}, {50, m.height - 4}, {5, m.height - 1}} {
+		if _, ok := where.link(pt[0], pt[1]); ok {
 			t.Errorf("a click at %v selected a page", pt)
 		}
+	}
+}
+
+// The name on the balance screen is a link to the balance screen, in the same
+// way the name on the bar is. A logo you cannot click is a logo that is only
+// decoration.
+func TestClickingTheWordmarkGoesHome(t *testing.T) {
+	m := model{
+		st: newStyles(), view: screenHome, width: 100, height: 40,
+		deps: deps{Catalogue: DefaultCatalogue(), Proven: true, Address: treasuryAddress},
+	}
+	m.syncLists()
+	_, where := m.frame()
+	if where.mark == (box{}) {
+		t.Fatal("the wordmark drew but recorded nowhere")
+	}
+	if got, ok := where.link(where.mark.x0+1, where.mark.x0y); !ok || got != screenHome {
+		t.Errorf("a click on the wordmark gave %v (found=%v), want the balance screen", got, ok)
+	}
+	// A page below it is not part of it, and a click there is a click on
+	// nothing rather than on the nearest link above.
+	if _, ok := where.link(where.mark.x0+1, where.mark.y1+1); ok {
+		t.Error("the wordmark claims the line under it")
+	}
+	// And it is gone on a terminal with no room for it, with nothing left
+	// behind pretending otherwise.
+	small := m
+	small.width = 40
+	_, now := small.frame()
+	if now.mark != (box{}) {
+		t.Error("a wordmark that was not drawn is still clickable")
 	}
 }
 
@@ -1801,7 +1856,7 @@ func TestTheHelpScreenScrolls(t *testing.T) {
 	if !strings.Contains(top, "RouterCafe") {
 		t.Errorf("the help does not start at the top: %q", top)
 	}
-	if strings.Contains(top, "server version 0.1.0") {
+	if strings.Contains(top, "The same, more carefully") {
 		t.Error("the whole help fitted in a window it does not fit")
 	}
 
@@ -1811,8 +1866,8 @@ func TestTheHelpScreenScrolls(t *testing.T) {
 		m = m.scrollHelp(tea.KeyPressMsg(tea.Key{Code: 'j', Text: "j"}))
 	}
 	bottom := stripForTest(m.renderHelp())
-	if !strings.Contains(bottom, "server version 0.1.0") {
-		t.Errorf("scrolling to the end did not reach the version: %q", bottom)
+	if !strings.Contains(bottom, "The same, more carefully") {
+		t.Errorf("scrolling to the end did not reach the last paragraph: %q", bottom)
 	}
 	if strings.Contains(bottom, "An OpenRouter you reach") {
 		t.Error("the pager scrolled past the bottom")
