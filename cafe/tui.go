@@ -11,6 +11,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // The session UI.
@@ -35,6 +36,7 @@ type screen int
 
 const (
 	screenHome screen = iota
+	screenBalance
 	screenDeposit
 	screenKeys
 	screenModels
@@ -47,11 +49,18 @@ const (
 // this slice is what "next" means. Help is last because arriving somewhere
 // and finding out how to get somewhere else should not be the default next
 // thing you do.
+//
+// Home and balance are two pages and not one, because the name at the left of
+// the bar is a link and a link that lands on the same page as the tab beside
+// it is a link that looks like a second way of spelling that tab. Home is the
+// name spelled out and the balance at a glance; balance is the numbers with
+// the keys, the exports and the price list under them.
 var screens = []struct {
 	view screen
 	name string
 }{
-	{screenHome, "balance"},
+	{screenHome, "RouterCafe"},
+	{screenBalance, "balance"},
 	{screenDeposit, "deposit"},
 	{screenKeys, "api keys"},
 	{screenModels, "routes"},
@@ -837,6 +846,10 @@ func (m *model) renderPage() (string, int) {
 	// by frame, which is what knows where the page itself starts.
 	listTop := -1
 	switch m.view {
+	case screenHome:
+		b.WriteString(m.renderHome())
+	case screenBalance:
+		b.WriteString(m.renderBalance())
 	case screenDeposit:
 		b.WriteString(m.renderDeposit())
 	case screenKeys:
@@ -851,10 +864,8 @@ func (m *model) renderPage() (string, int) {
 		m.routes, m.rows = l, rows
 		listTop = countLines(b.String() + head)
 		b.WriteString(head + view + "\n" + tail)
-	case screenHelp:
-		b.WriteString(m.renderHelp())
 	default:
-		b.WriteString(m.renderHome())
+		b.WriteString(m.renderHelp())
 	}
 	if m.busy != "" {
 		b.WriteString("\n\n  " + m.st.warn.Render(m.busy) + "\n")
@@ -1007,11 +1018,10 @@ func (m *model) frame() (string, clicks) {
 	// The bar is three lines - the top of the box, the labels, the bottom edge
 	// - and a click on any of them is a click on the tab under it.
 	where := clicks{inside: span{x0: 1, x1: m.width - 1}}
-	barViews := append([]screen{screenHome}, screenList()...)
 	for i, tab := range tabs {
 		where.tabs = append(where.tabs, barTab{
 			box{x0: tab.x0, x0y: barTop, x1: tab.x1, y1: barTop + barLines - 1},
-			barViews[i],
+			screens[i].view,
 		})
 	}
 	// The page starts on the line after the bar's underline, and the box has no
@@ -1138,94 +1148,79 @@ func (m model) header() string {
 // followed by the tabs: both go through the same click handling, because
 // going home is what the balance tab does.
 func (m model) tabBar() (string, []span) {
-	rendered := make([]string, 0, len(screens))
-	for _, s := range screens {
+	cells := make([]string, 0, len(screens))
+	for _, page := range screens {
 		style := m.st.tabIdle
-		if s.view == m.view {
+		if page.view == m.view {
 			style = m.st.tabActive
 		}
-		// No corner is corrected, which is the one thing the tabs example has
-		// to do and this does not. The example overrides both ends because
-		// there the page is exactly as wide as the bar, so the run of edge
-		// stops where the last tab stops. Here the rule carries on either side
-		// of the tabs, and the corners the style gives are already the right
-		// ones for a rule that continues: `┴` where it passes under an
-		// inactive tab, `┘` and `└` where the active tab opens into the page.
-		rendered = append(rendered, style.Border(style.GetBorder()).Render(s.name))
-	}
-	// The three lines of the tab run, taken apart rather than joined whole:
-	// each one of the bar's own lines is a line of tabs plus something either
-	// side of them, and a run spliced in whole brings its other two lines with
-	// it.
-	rows := strings.Split(lipgloss.JoinHorizontal(lipgloss.Top, rendered...), "\n")
-	tabs := lipgloss.Width(rows[0])
-
-	// Shedding, widest first: the name and the address together, then the
-	// address without the version, then the name alone. The name goes last and
-	// not first because it is the one piece of this line that is also the way
-	// back to the balance screen - a logo dropped for want of room is a logo
-	// nobody can get home from.
-	var name, address string
-	for _, pair := range [][2]string{
-		{"  " + m.st.brand.Render("RouterCafe") + "  ", m.address()},
-		{"  " + m.st.brand.Render("RouterCafe") + "  ", m.st.dim.Render(Domain)},
-		{"  " + m.st.brand.Render("RouterCafe") + "  ", ""},
-		{"", m.address()},
-		{"", ""},
-	} {
-		if lipgloss.Width(pair[0])+tabs+lipgloss.Width(pair[1])+barEdgeGap > m.width {
-			continue
+		// Only the first tab is corrected, to keep its own wall: it starts at
+		// column 0, which is where the box's left wall is, so its corner has
+		// to be one that wall can leave downwards. The last tab keeps the
+		// corner its style gives it, which the tabs example overrides because
+		// there the page is exactly as wide as the bar and the run of edge
+		// stops where the last tab stops. Here the edge carries on past it.
+		border, _, _, _, _ := style.GetBorder()
+		if page.view == screens[0].view {
+			if m.view == screens[0].view {
+				border.BottomLeft = "\u2502"
+			} else {
+				border.BottomLeft = "\u251c"
+			}
 		}
-		name, address = pair[0], pair[1]
-		break
+		cells = append(cells, style.Border(border).Render(page.name))
 	}
 
-	// Three lines, each built the whole width of the window rather than padded
-	// out of blocks that happen to add up. It matters on the bottom one more
-	// than anywhere: that line is the top edge of the box, so a gap in it is a
-	// hole in the top of the frame with the page showing through, which is the
-	// one thing a frame cannot have.
+	// Whole tabs are dropped from the end rather than the run being cut: a tab
+	// with half of its label missing is not a tab, and the frame's top edge
+	// needs somewhere to go after the last one. The ring does not care - tab
+	// and shift+tab still walk all of them.
 	//
-	// It opens with `┌` and not with a dash. That line is not a rule laid over
-	// a box, it is the box's own top edge: the corner is where the top edge
-	// turns down into the box's left wall, and without it the top line
-	// overhangs to the left of the box - a top edge with no top-left corner on
-	// it, which is the shape a frame is not allowed to be.
-	left, addr := lipgloss.Width(name), lipgloss.Width(address)
-	tail := max(0, m.width-left-tabs-1)
-	var edge string
-	if left == 0 {
-		// Nothing to the left of the tabs, so the first tab's own left wall is
-		// the box's left wall - it starts at column 0 - and its corner has to
-		// carry that wall continuing downwards as well as the rule. Which is
-		// the one thing the tabs example has to do, and the only case here
-		// where it still applies.
-		runes := []rune(rows[barLines-1])
-		runes[0] = '\u251c'
-		if m.view == screens[0].view {
-			runes[0] = '\u2502'
-		}
-		edge = string(runes)
-	} else {
-		edge = "\u250c" + strings.Repeat("\u2500", left-1) + rows[barLines-1]
+	// The run is rebuilt each time rather than measured by adding the cells
+	// up: each cell is three lines tall, and a width measured across the
+	// wrong axis is a bar dropped one tab too eagerly or not eagerly enough.
+	run := func() []string {
+		return strings.Split(lipgloss.JoinHorizontal(lipgloss.Top, cells...), "\n")
 	}
-	bar := strings.Join([]string{
-		strings.Repeat(" ", left) + rows[0] + strings.Repeat(" ", tail+1),
-		name + rows[1] + strings.Repeat(" ", max(0, m.width-left-tabs-addr)) + address,
-		edge + strings.Repeat("\u2500", tail) + "\u2510",
-	}, "\n")
+	rows := run()
+	tabs := lipgloss.Width(rows[0])
+	for len(cells) > 2 && tabs+barEdgeGap > m.width {
+		cells = cells[:len(cells)-1]
+		rows = run()
+		tabs = lipgloss.Width(rows[0])
+	}
 
-	clickable := make([]span, 0, len(screens)+1)
-	if left > 0 {
-		clickable = append(clickable, span{0, left})
+	// Shedding, widest first: the address with the version, the address alone,
+	// then nothing. The name is not here any more - it is the first tab.
+	var address string
+	for _, candidate := range []string{m.address(), m.st.dim.Render(Domain), ""} {
+		if tabs+lipgloss.Width(candidate) <= m.width-barEdgeGap {
+			address = candidate
+			break
+		}
 	}
-	x := left
-	for _, cell := range rendered {
+
+	tail := max(0, m.width-tabs-1)
+	lines := []string{
+		rows[0] + strings.Repeat(" ", tail+1),
+		rows[1] + strings.Repeat(" ", max(0, m.width-tabs-lipgloss.Width(address))) + address,
+		rows[barLines-1] + strings.Repeat("\u2500", tail) + "\u2510",
+	}
+	// Cut to the window on the way out. Six tabs are wider than a narrow
+	// terminal, and a bar that runs past the right edge drags the frame out
+	// with it - the one thing the frame's own MaxWidth was there to stop.
+	for i, line := range lines {
+		lines[i] = ansi.Truncate(line, m.width, "")
+	}
+
+	clickable := make([]span, 0, len(cells))
+	x := 0
+	for _, cell := range cells {
 		w := lipgloss.Width(cell)
 		clickable = append(clickable, span{x, x + w})
 		x += w
 	}
-	return bar, clickable
+	return strings.Join(lines, "\n"), clickable
 }
 
 // barEdgeGap is the columns kept clear between the right of the tabs and the
@@ -1360,10 +1355,33 @@ func (m model) footer() string {
 	return strings.TrimRight(b.String(), " ")
 }
 
+// renderHome is the page the name at the left of the bar opens: the name
+// spelled out, and the one number somebody connected to look at.
+//
+// Deliberately short. The balance tab beside it has the same number with the
+// keys, the exports and the price list under it, and a splash that carried all
+// of that as well would be the balance tab with a logo on it.
 func (m *model) renderHome() string {
+	acct := m.account
+	var b strings.Builder
+	b.WriteString(m.wordmark())
+	b.WriteString("\n  " + m.st.dim.Render("An OpenRouter you reach with ssh, paid for in SOL.") + "\n\n")
+	b.WriteString("  " + m.st.label.Render("account") + "  " + m.st.value.Render(m.shortAddress(acct.Address)) + "\n")
+	b.WriteString("  " + m.st.label.Render("balance") + "  " + m.st.money.Render(FormatUSD(acct.Balance)) + "\n\n")
+	if len(acct.Keys) == 0 && m.deps.Proven {
+		b.WriteString("  " + m.st.warn.Render("no API key yet") + "\n")
+		b.WriteString("  " + m.st.dim.Render("tab along to mint one, then point any OpenAI client at") + "\n")
+		b.WriteString("  " + m.st.accent.Render("https://"+m.endpointHost()) + "\n")
+	} else {
+		b.WriteString("  " + m.st.dim.Render("tab along for your api keys, the routes, or the price list.") + "\n")
+	}
+	return b.String()
+}
+
+// renderBalance is the numbers with everything that belongs with them.
+func (m *model) renderBalance() string {
 	var b strings.Builder
 	acct := m.account
-	b.WriteString(m.wordmark())
 	b.WriteString(m.field("account", m.shortAddress(acct.Address)))
 	b.WriteString(m.field("balance", m.st.money.Render(FormatUSD(acct.Balance))))
 	b.WriteString(m.field("paid in", FormatUSD(acct.Deposits)))

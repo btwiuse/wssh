@@ -373,72 +373,59 @@ the way out.
 ## Navigation: a bar, not a list of letters
 
 There are no keys that jump between pages. The top of every screen carries a
-bar of all five and highlights the one you are on, and `tab` walks it. **The
-name and the address are on the bar's own line**, not on one above it:
+bar of all six and highlights the one you are on, and `tab` walks it:
 
 ```
-              ╭─────────╮╭─────────╮╭──────────╮╭────────╮╭──────╮
-  RouterCafe  │ balance ││ deposit ││ api keys ││ routes ││ help │   router.cafe 0.1.6
-──────────────┘         └┴─────────┴┴──────────┴┴────────┴┴──────┴─────────────┐
+╭────────────╮╭─────────╮╭─────────╮╭──────────╮╭────────╮╭──────╮
+│ RouterCafe ││ balance ││ deposit ││ api keys ││ routes ││ help │   router.cafe 0.1.6
+├────────────┴┘         └┴─────────┴┴──────────┴┴────────┴┴──────┴─────────────┐
 │                             _ \            |            __|        _|          │
 │                              /  _ \ |  |  _|  -_)  _|(     _` |  _|-_)         │
 │                           _|_\\___/\_,_|\__|\___|_| \___|\__,_|_|\___|         │
 │                                                                        │
-│  account    6YSosJ…AsrUKL                                                │
-│  balance    $0.00                                                        │
+│  account  6YSosJ…AsrUKL                                                 │
+│  balance  $0.00                                                         │
 ```
 
-**It opens with `┌`, and that is not decoration.** That line is not a rule laid
-over a box, it is the box's own top edge: the corner is where the top edge
-turns down into the box's left wall. With a dash there instead, the top line
-overhangs to the left of the box - a top edge with no top-left corner on it.
-When the name is dropped for want of room the tabs start at column 0 and the
-first tab's own wall *is* the box's wall, so its corner goes back to carrying
-the wall downwards (`│` or `├`), which is the one case where the tabs example's
-override still applies.
+**RouterCafe is the first tab, not a wordmark beside the tabs.** It was, for
+one commit, a link in the left of the bar - and a link that goes where the tab
+next to it goes is two ways of saying the same place, one of them styled like a
+tab and one of it not. As a tab it has its own page: the name spelled out and
+the balance at a glance, with `balance` beside it for the numbers and the keys
+and the exports and the price list. A splash carrying all of that as well would
+be the balance tab with a logo on it.
 
-**The bar's bottom line is the box's top edge, so it is built the whole width
-of the window** and not padded out of blocks that happen to add up. A gap in it
-is a hole in the top of the frame with the page showing through, which is the
-one thing a frame cannot have - and it is invisible to a test that only checks
-the box lines, so `TestTheBarsEdgeSpansTheWholeWindow` checks that line is
-exactly as wide as the window on every screen at every size, and that nothing
-but rule and the active tab's opening is on it. The three rows are therefore
-assembled one at a time out of the tab run's own three rows; splicing the run
-in whole brings its other two rows with it.
+That is also why the first tab's corner is corrected and the last tab's is not,
+which is the tabs example's treatment restored: the tabs start at column 0,
+where the box's left wall is, so the first tab's own wall *is* the box's wall
+and its corner has to carry that wall going downwards (`│` when it is the open
+tab, `├` when the edge runs on). The last tab's corner needs no help, because
+here the edge carries on past it rather than stopping where it stops.
 
-That is also why **no corner is corrected**, which is the one thing the tabs
-example has to do. The example overrides both ends because there the page is
-exactly as wide as the bar, so the run of edge stops where the last tab stops.
-Here the rule continues either side of the tabs, and the corners the style
-gives are already the right ones for a rule that continues: `┴` where it passes
-under an inactive tab, and `┘` and `└` where the active tab opens into the page.
-
-A line of chrome that changes nothing is a line somebody has to look past, and
-the brand line above the bar was exactly that. Folding it in gives the page one
-more line for content, which it wanted.
-
-**The version is on the bar, not at the bottom of the help screen.** It was
-there once, which put it on one screen of five and below the fold on exactly the
-terminals with least room - the same terminals that cut the bottom off
-everything else. It is on every screen now, and the help screen says what this
-is rather than what build of it. A build with no version ldflags prints no
-version: a bare `dev`, or a blank, reads as a bug rather than as an unversioned
-build.
+The address and the version sit on the bar's own line, right-aligned, and the
+version used to be at the bottom of the help screen instead - which put it on
+one screen of six and below the fold on exactly the terminals with least room.
+A build with no version ldflags prints no version: a bare `dev`, or a blank,
+reads as a bug rather than as an unversioned build.
 
 The bar is drawn with the bubbletea tabs example's borders: a rounded top, and
 a bottom edge that is either `┴─┴` when inactive or `┘ └` when active. The page
 sits in a box with **no top edge**, so the active tab's blank bottom opens into
 it. That second half is the whole of the effect: a bar floating above a wall of
 text reads as chrome, and a bar whose current tab opens into the page reads as
-navigation. Only the first tab's corner is corrected, and it keeps its left
-wall.
+navigation.
 
-What the bar sheds when the terminal is too narrow, in order: the version, then
-the address, then **the name**, then the whole thing either side of the tabs.
-The name goes last on purpose - it is the one piece of the line that is also
-the way back to the balance screen, and a logo dropped for want of room is a
-logo nobody can get home from.
+**The bar's bottom line is the box's top edge, so it is built the whole width
+of the window** and not padded out of blocks that happen to add up. A gap in it
+is a hole in the top of the frame with the page showing through, which is the
+one thing a frame cannot have. `TestTheBarsEdgeSpansTheWholeWindow` checks that
+line is exactly as wide as the window on every screen at every size, that it
+ends in `┐`, and that nothing but rule and the active tab's opening is on it.
+
+What the bar sheds when the terminal is too narrow: **whole tabs from the end**,
+never half of one - a tab with its label cut off is not a tab, and the top edge
+needs somewhere to go after the last one. Then the version, then the address.
+The ring does not care: tab and shift+tab still walk all six.
 
 `shift+tab` goes back, wrapping at both ends. `esc` puts a caret down without
 leaving the page. This replaced a footer listing what `b`, `d`, `k`, `m` and
@@ -511,21 +498,20 @@ against itself.
 | Click | Does |
 |---|---|
 | a tab | switch to it |
-| the name at the left of the bar | switch to the balance screen, which is what the balance tab does |
-| the wordmark on the balance screen | switch to the balance screen, the same act by the same code path |
+| the RouterCafe tab | switch to home, the page the wordmark is on |
+| the wordmark on the home page | switch to home, the same act by the same code path |
 | a row in a list | move the cursor there **and** focus it - a cursor that moved without lighting up leaves it impossible to tell what the next keypress will do |
 | a key in the anonymous picker | adopt it, the same as enter |
 
 Both links go through `clicks.link`, and the destination is carried with the
-area rather than worked out from the position. The name at the left of the bar
-goes somewhere and is not one of the pages in the ring, so a bar whose clicks
-are indexed against `screens` navigates to the wrong page the moment anything is
-added to either side of it.
+area rather than worked out from the position - a bar whose clicks are indexed
+against `screens` navigates to the wrong page the moment anything is added to
+either side of the tabs.
 
 **The wordmark is a wordmark, not a layout**: `RouterCafe` in a fixed-width
-face, generated once with figlet and pasted in. Clickable, like the name on the
-bar - where that one is a way of getting back, this one is what somebody lands
-on, and a logo you cannot click is a logo that is only decoration. It is left
+face, generated once with figlet and pasted in. It is on the home page, which
+is the page the RouterCafe tab opens, and clickable - a logo you cannot click
+is a logo that is only decoration. It is left
 out entirely below 52 columns rather than shrunk or cut: a wordmark wrapped to
 two half-words is worse than none, and the balance is on the same screen
 either way. `m.mark` records where it landed, because that is a fact about what

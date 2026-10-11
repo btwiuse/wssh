@@ -1060,7 +1060,7 @@ func TestCopyIsOnlyOfferedWhenThereIsSomethingToCopy(t *testing.T) {
 // because hjkl is only ever wanted by something looking at a list. An amount
 // field arrives cold, which is the whole reason it was given focus.
 func TestTabWalksTheRingAndOnlyTakesTheAmountWhenAsked(t *testing.T) {
-	m := model{st: newStyles(), view: screenHome, deps: deps{Catalogue: DefaultCatalogue(), Proven: true}, width: 100, height: 40}
+	m := model{st: newStyles(), view: screenBalance, deps: deps{Catalogue: DefaultCatalogue(), Proven: true}, width: 100, height: 40}
 	m.syncLists()
 
 	// From the balance screen, one tab lands on the deposit screen without
@@ -1417,10 +1417,13 @@ func TestClickingTheBarSelectsThePageUnderneath(t *testing.T) {
 	m.syncLists()
 	_, where := m.frame()
 
-	// The name at the left of the bar is a link too, and it goes to the page
-	// the balance tab goes to: a logo that is only a logo is a logo that
-	// cannot take you home.
-	names := append([]screen{screenHome}, screenList()...)
+	// The name at the left of the bar is the first tab, not a link beside the
+	// tabs: a logo that is only a logo is a logo nobody can click their way
+	// home from.
+	if where.tabs[0].view != screenHome {
+		t.Errorf("the first thing on the bar goes to %v, want home", where.tabs[0].view)
+	}
+	names := screenList()
 	if len(where.tabs) != len(names) {
 		t.Fatalf("the bar offers %d links for %d pages", len(where.tabs), len(names))
 	}
@@ -1641,7 +1644,7 @@ func TestEveryScreenFillsItsWindow(t *testing.T) {
 		w, h := size[0], size[1]
 
 		screens := map[string]string{}
-		for _, v := range []screen{screenHome, screenDeposit, screenKeys, screenModels, screenHelp} {
+		for _, v := range screenList() {
 			m := model{
 				st: newStyles(), view: v, deps: base,
 				account: ledger.Account(address), width: w, height: h,
@@ -1843,8 +1846,18 @@ func TestTheBarsEdgeSpansTheWholeWindow(t *testing.T) {
 			if w := lipgloss.Width(line); w != size[0] {
 				t.Errorf("%s: the top edge is %d columns of %d: %q", where, w, size[0], line)
 			}
-			if !strings.HasPrefix(line, "\u250c") {
-				t.Errorf("%s: the top edge has no corner at its left end: %q", where, line)
+			// The left end is the first tab's own corner, because the tabs
+			// start at column 0 where the box's left wall is and the two are
+			// the same wall. So it carries the wall going down: a `│` with the
+			// first tab open into the page, a `├` where the edge runs on.
+			head := []rune(line)[0]
+			if want := "\u2502"; m.view == screens[0].view {
+				head = []rune(want)[0]
+			} else {
+				head = []rune("\u251c")[0]
+			}
+			if []rune(line)[0] != head {
+				t.Errorf("%s: the top edge starts with %q, want %q", where, []rune(line)[0], head)
 			}
 			if !strings.HasSuffix(line, "\u2510") {
 				t.Errorf("%s: the top edge does not reach the corner: %q", where, line)
@@ -1870,18 +1883,29 @@ func screenName(size [2]int, page struct {
 	return fmt.Sprintf("%dx%d %s", size[0], size[1], pageName(page.view))
 }
 
-// The name is set in from the edge and the address is against it, because a
-// name hard against column 0 next to a box that also starts at column 0 is two
-// things competing for the same left edge.
-func TestTheNameIsSetInAndTheAddressIsNot(t *testing.T) {
+// The name is a tab, the first one, and the address is against the right edge.
+// It used to be a piece of text to the left of the tabs as well, which made it
+// a link that went wherever the balance tab went - two ways of saying the same
+// place, one of them looking like a tab and one of them not.
+func TestTheNameIsATabAndTheAddressIsAtTheEdge(t *testing.T) {
 	m := model{st: newStyles(), view: screenHome, width: 100, height: 30,
 		deps: deps{Catalogue: DefaultCatalogue(), Proven: true, Version: "0.1.6"}}
 	labels := strings.Split(stripForTest(m.frameString()), "\n")[barTop+1]
-	if !strings.HasPrefix(labels, "  RouterCafe") {
-		t.Errorf("the name is not set in from the edge: %q", labels)
+	if !strings.HasPrefix(labels, "\u2502 RouterCafe \u2502") {
+		t.Errorf("the name is not the first tab: %q", labels)
 	}
 	if !strings.HasSuffix(labels, "router.cafe 0.1.6") {
 		t.Errorf("the address is not against the right edge: %q", labels)
+	}
+	// And the logo is on the page it belongs to rather than on balance, which
+	// is the page beside it.
+	home := strings.Join(strings.Split(stripForTest(m.frameString()), "\n"), "\n")
+	if !strings.Contains(home, "_|") {
+		t.Error("the wordmark is not on the home page")
+	}
+	balance := m.show(screenBalance)
+	if strings.Contains(stripForTest(balance.frameString()), "_|") {
+		t.Error("the wordmark is on the balance page as well")
 	}
 }
 
