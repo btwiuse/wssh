@@ -225,7 +225,12 @@ func (s *Server) modelFor(w who) tea.Model {
 	// who arrived with nothing, not with the wrong thing.
 	if s.opts.AllowAnonymous && w.pub == nil &&
 		w.wallet == "" && !namesAnAccount(w.user) {
-		return anonymousModel{
+		// The same window as everybody else, with no account named: one tab on
+		// the bar and a first page that asks which account it is. It used to be
+		// a separate program that handed this one over the moment it worked
+		// that out, which meant the first thing a new connection saw and the
+		// second thing it saw were drawn by two different sets of rules.
+		return model{
 			deps: deps{
 				SockPath:  sockPath,
 				Local:     w.local,
@@ -237,6 +242,8 @@ func (s *Server) modelFor(w who) tea.Model {
 				Version:   s.opts.Version,
 			},
 			st:     newStyles(),
+			view:   screenHome,
+			help:   newHelp(),
 			width:  80,
 			height: 24,
 		}

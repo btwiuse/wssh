@@ -138,8 +138,25 @@ default**. It admits the connection and then works out who it is by asking the
 forwarded agent to sign a nonce this process made up: the keys in the agent are
 listed, one is picked, and a signature that verifies is what makes it an
 account. With no agent there is nothing to prove and nowhere to keep a balance,
-so the session is shown the merged screen: that same list, plus an address field
-underneath.
+so the session is shown the first page of the ordinary window: that same list,
+plus an address field underneath.
+
+**It is a page and not a screen.** A connection that proved nothing used to be
+handed `anonymousModel` - a whole other program, with its own frame, no bar, its
+own brand line and its own footer - which handed the ordinary session over the
+moment it worked out who it was. So the first thing a new connection saw and the
+second thing it saw were drawn by two sets of rules, and the second one was a
+different shape. Now it is `renderPick` / `onPickKey` on `model`, and the bar
+has **one tab** until an account is named: there is exactly one thing such a
+session can do, and offering it four pages it cannot use is a bar that lies
+about where you can go. `m.tabs()` is the single place that decides, and the
+ring, the clicks and the bar all read from it.
+
+`picking()` is `deps.Address == ""`, deliberately not a flag beside it: a
+flag can disagree with the address, and the disagreement is a session that
+thinks it has an account and does not. The picker keeps `q` for the address
+field and `ctrl+c` as the way out, because `q` is a base58 character and the
+field is most of what the page does.
 
 **Why `none` is refused by default.** A client sends `none` first as a probe,
 so a server that accepts it ends the handshake before a public key is ever
@@ -261,7 +278,8 @@ empty identity.
 
 That identity is the whole design rather than an implementation detail: a local
 run has proved nothing exactly as a connection that arrived without a key has
-proved nothing, so both get `anonymousModel` and the same rules about what may
+proved nothing, so both get a session with no account named and the same rules
+about what may
 be done with what. `who` (`cafe/session.go`) is the three facts a session
 carries - key, wallet, username - pulled out so one constructor serves both.
 `SessionAccount` went with it, since `AccountFor` already took those three

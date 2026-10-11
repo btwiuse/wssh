@@ -709,10 +709,10 @@ func TestATypedAddressOpensAnAccountWithoutProvingIt(t *testing.T) {
 		t.Fatalf("AddressFor: %v", err)
 	}
 
-	m := anonymousModel{deps: deps{Ledger: testLedger(t)}, width: 80, height: 24}
+	m := model{st: newStyles(), deps: deps{Ledger: testLedger(t)}, width: 80, height: 24}
 	for _, c := range address {
 		next, _ := m.onKey(tea.KeyPressMsg(tea.Key{Code: c, Text: string(c)}))
-		m = next.(anonymousModel)
+		m = next.(model)
 	}
 	if m.typed != address {
 		t.Fatalf("typed %q, want %q", m.typed, address)
@@ -734,7 +734,8 @@ func TestATypedAddressOpensAnAccountWithoutProvingIt(t *testing.T) {
 // An address that cannot be one is refused in place. The session stays on the
 // screen that can be typed at, because that is where the correction goes.
 func TestAnAddressThatCannotBeOneIsRefusedInPlace(t *testing.T) {
-	m := anonymousModel{
+	m := model{
+		st:     newStyles(),
 		deps:   deps{Ledger: testLedger(t)},
 		width:  80,
 		height: 24,
@@ -742,12 +743,12 @@ func TestAnAddressThatCannotBeOneIsRefusedInPlace(t *testing.T) {
 		notice: notice{},
 	}
 	next, _ := m.openAddress()
-	if _, ok := next.(model); ok {
-		t.Fatal("an invalid address opened an account")
-	}
-	got := next.(anonymousModel)
+	got := next.(model)
 	if got.notice.kind != noticeBad {
 		t.Errorf("refusing an invalid address said %+v", got.notice)
+	}
+	if !got.picking() {
+		t.Error("an invalid address opened an account")
 	}
 }
 
@@ -757,18 +758,18 @@ func TestAnAddressThatCannotBeOneIsRefusedInPlace(t *testing.T) {
 // quitting: it is a base58 character and the field is most of the screen.
 func TestTypingMovesTheSelectionToTheAddressRow(t *testing.T) {
 	key := &agent.Key{Format: gossh.KeyAlgoED25519, Comment: "me"}
-	m := anonymousModel{
+	m := model{
 		deps:  deps{Ledger: testLedger(t)},
 		keys:  []*agent.Key{key},
 		width: 80, height: 24,
 	}
-	if m.rows() != 2 {
-		t.Fatalf("a screen with one key offers %d rows, want the key and the address", m.rows())
+	if m.addressRow() != 1 {
+		t.Fatalf("a page with one key puts the address on row %d, want row 1", m.addressRow())
 	}
 
 	// Printable characters go to the field, wherever the selection was.
 	next, _ := m.onKey(tea.KeyPressMsg(tea.Key{Code: 'q', Text: "q"}))
-	m = next.(anonymousModel)
+	m = next.(model)
 	if m.typed != "q" {
 		t.Fatalf("typed %q, want q", m.typed)
 	}
@@ -780,7 +781,7 @@ func TestTypingMovesTheSelectionToTheAddressRow(t *testing.T) {
 	// in which it holds something ValidateAddress is about to refuse.
 	for _, c := range []string{"0", "O", "I", "l", "-", " "} {
 		next, _ := m.onKey(tea.KeyPressMsg(tea.Key{Code: rune(c[0]), Text: c}))
-		m = next.(anonymousModel)
+		m = next.(model)
 		if m.typed != "q" {
 			t.Fatalf("typing %q changed the field to %q", c, m.typed)
 		}
@@ -791,13 +792,13 @@ func TestTypingMovesTheSelectionToTheAddressRow(t *testing.T) {
 // asymmetry is the point: quitting by accident throws away what was typed.
 func TestEscapeClearsTheFieldBeforeItQuits(t *testing.T) {
 	esc := tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape})
-	m := anonymousModel{deps: deps{Ledger: testLedger(t)}, width: 80, height: 24, typed: "abc"}
+	m := model{st: newStyles(), deps: deps{Ledger: testLedger(t)}, width: 80, height: 24, typed: "abc"}
 
 	next, cmd := m.onKey(esc)
 	if cmd != nil {
 		t.Error("escape quit a session that had an address typed into it")
 	}
-	m = next.(anonymousModel)
+	m = next.(model)
 	if m.typed != "" {
 		t.Errorf("escape left %q in the field", m.typed)
 	}
@@ -809,7 +810,7 @@ func TestEscapeClearsTheFieldBeforeItQuits(t *testing.T) {
 // ctrl+c is the only key that always quits, because on this screen almost
 // every other character is something to type.
 func TestControlCQuitsEvenMidAddress(t *testing.T) {
-	m := anonymousModel{deps: deps{Ledger: testLedger(t)}, width: 80, height: 24, typed: "abc"}
+	m := model{st: newStyles(), deps: deps{Ledger: testLedger(t)}, width: 80, height: 24, typed: "abc"}
 	if _, cmd := m.onKey(tea.KeyPressMsg(tea.Key{Code: 'c', Mod: tea.ModCtrl})); cmd == nil {
 		t.Error("ctrl+c did not quit")
 	}
@@ -1060,7 +1061,7 @@ func TestCopyIsOnlyOfferedWhenThereIsSomethingToCopy(t *testing.T) {
 // because hjkl is only ever wanted by something looking at a list. An amount
 // field arrives cold, which is the whole reason it was given focus.
 func TestTabWalksTheRingAndOnlyTakesTheAmountWhenAsked(t *testing.T) {
-	m := model{st: newStyles(), view: screenHome, deps: deps{Catalogue: DefaultCatalogue(), Proven: true}, width: 100, height: 40}
+	m := model{st: newStyles(), view: screenHome, deps: deps{Address: treasuryAddress, Catalogue: DefaultCatalogue(), Proven: true}, width: 100, height: 40}
 	m.syncLists()
 
 	// From the home screen, one tab lands on the deposit screen without
@@ -1117,7 +1118,7 @@ func TestTabWalksTheRingAndOnlyTakesTheAmountWhenAsked(t *testing.T) {
 func TestEscapeBlursTheFieldRatherThanLeavingTheScreen(t *testing.T) {
 	m := model{
 		st: newStyles(), view: screenDeposit, focus: true, amount: "1.5",
-		deps: deps{Catalogue: DefaultCatalogue()}, width: 100,
+		deps: deps{Address: treasuryAddress, Catalogue: DefaultCatalogue()}, width: 100,
 	}
 	next, _ := m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
 	got := next.(model)
@@ -1143,7 +1144,7 @@ func TestEscapeBlursTheFieldRatherThanLeavingTheScreen(t *testing.T) {
 // A list arrives focused and an amount field does not, and that asymmetry is
 // the whole of the navigation model rather than an inconsistency.
 func TestArrivingAtAListFocusesItAndArrivingAtAFieldDoesNot(t *testing.T) {
-	m := model{st: newStyles(), deps: deps{Catalogue: DefaultCatalogue(), Proven: true}, width: 100, height: 40}
+	m := model{st: newStyles(), deps: deps{Address: treasuryAddress, Catalogue: DefaultCatalogue(), Proven: true}, width: 100, height: 40}
 	m.syncLists()
 
 	for _, tc := range []struct {
@@ -1202,7 +1203,7 @@ func TestTheAmountFieldLooksDifferentWhenFocused(t *testing.T) {
 func TestTheListCursorMoves(t *testing.T) {
 	m := model{
 		st: newStyles(), view: screenModels, focus: true,
-		deps: deps{Catalogue: DefaultCatalogue(), Proven: true}, width: 100, height: 40,
+		deps: deps{Address: treasuryAddress, Catalogue: DefaultCatalogue(), Proven: true}, width: 100, height: 40,
 	}
 	m.syncLists()
 	if n := len(m.routes.Items()); n < 3 {
@@ -1360,7 +1361,7 @@ func TestALocalRunIsTheSameAsAConnectionThatProvedNothing(t *testing.T) {
 	}
 
 	local := srv.modelFor(who{ctx: context.Background(), local: true})
-	if _, ok := local.(anonymousModel); !ok {
+	if _, ok := local.(model); !ok {
 		t.Fatalf("a local run opened %T, want the screen a connection with no key gets", local)
 	}
 
@@ -1413,7 +1414,7 @@ func mustEd25519(t *testing.T) gossh.PublicKey {
 // else. The bar changes width with the names in it, so this cannot be a fixed
 // map: it has to come from the frame that was actually drawn.
 func TestClickingTheBarSelectsThePageUnderneath(t *testing.T) {
-	m := model{st: newStyles(), view: screenHome, deps: deps{Catalogue: DefaultCatalogue(), Proven: true}, width: 100, height: 40}
+	m := model{st: newStyles(), view: screenHome, deps: deps{Address: treasuryAddress, Catalogue: DefaultCatalogue(), Proven: true}, width: 100, height: 40}
 	m.syncLists()
 	_, where := m.frame()
 
@@ -1423,7 +1424,7 @@ func TestClickingTheBarSelectsThePageUnderneath(t *testing.T) {
 	if where.tabs[0].view != screenHome {
 		t.Errorf("the first thing on the bar goes to %v, want home", where.tabs[0].view)
 	}
-	names := screenList()
+	names := m.screenList()
 	if len(where.tabs) != len(names) {
 		t.Fatalf("the bar offers %d links for %d pages", len(where.tabs), len(names))
 	}
@@ -1502,7 +1503,7 @@ func TestClickingTheWordmarkGoesHome(t *testing.T) {
 func TestClickingARowMovesTheCursorAndFocusesTheList(t *testing.T) {
 	m := model{
 		st: newStyles(), view: screenModels,
-		deps: deps{Catalogue: DefaultCatalogue(), Proven: true}, width: 100, height: 40,
+		deps: deps{Address: treasuryAddress, Catalogue: DefaultCatalogue(), Proven: true}, width: 100, height: 40,
 	}
 	m.syncLists()
 	m.focus = false
@@ -1568,7 +1569,7 @@ func TestClickingARowMovesTheCursorAndFocusesTheList(t *testing.T) {
 func TestAClickOnNothingInParticularSelectsNothing(t *testing.T) {
 	m := model{
 		st: newStyles(), view: screenModels,
-		deps: deps{Catalogue: DefaultCatalogue(), Proven: true}, width: 100, height: 40,
+		deps: deps{Address: treasuryAddress, Catalogue: DefaultCatalogue(), Proven: true}, width: 100, height: 40,
 	}
 	m.syncLists()
 	_, where := m.frame()
@@ -1597,7 +1598,9 @@ func TestClickingAKeyInThePickerAdoptsIt(t *testing.T) {
 		t.Fatalf("GenerateKey: %v", err)
 	}
 	sock := serveAgent(t, []ed25519.PrivateKey{priv})
-	m := anonymousModel{
+	m := model{
+		st:    newStyles(),
+		view:  screenHome,
 		deps:  deps{SockPath: sock, Ledger: testLedger(t), Catalogue: DefaultCatalogue()},
 		width: 80, height: 24,
 		keys: []*agent.Key{
@@ -1609,7 +1612,7 @@ func TestClickingAKeyInThePickerAdoptsIt(t *testing.T) {
 	// The click puts the cursor where the mouse landed; adoption is a separate
 	// step because it needs the agent to sign.
 	out, _ := m.Update(pickKeyMsg{row: 1})
-	got, ok := out.(anonymousModel)
+	got, ok := out.(model)
 	if !ok {
 		t.Fatalf("a click in the picker gave %T", out)
 	}
@@ -1651,7 +1654,8 @@ func TestEveryScreenFillsItsWindow(t *testing.T) {
 		w, h := size[0], size[1]
 
 		screens := map[string]string{}
-		for _, v := range screenList() {
+		ring := model{deps: base, account: ledger.Account(address)}
+		for _, v := range ring.screenList() {
 			m := model{
 				st: newStyles(), view: v, deps: base,
 				account: ledger.Account(address), width: w, height: h,
@@ -1660,7 +1664,10 @@ func TestEveryScreenFillsItsWindow(t *testing.T) {
 			out, _ := m.frame()
 			screens["account/"+pageName(v)] = out
 		}
-		screens["picker"] = anonymousModel{deps: base, st: newStyles(), width: w, height: h}.View().Content
+		picker := base
+		pm := model{deps: picker, st: newStyles(), view: screenHome, width: w, height: h, help: newHelp()}
+		pm.syncLists()
+		screens["picker"] = pm.View().Content
 		screens["refusal"] = refuseModel{
 			reason: reasonText("not an ed25519 key: a ssh-rsa key is not an ed25519 public key"),
 			width:  w, height: h,
@@ -1680,10 +1687,10 @@ func TestEveryScreenFillsItsWindow(t *testing.T) {
 	}
 }
 
-// The two screens with no bar have to agree with the ones that have it about
+// The refusal has no bar, and it has to agree with the account screen about
 // where the name and the address sit, or the same line is drawn by two
-// different rules and the difference is what makes a program look like two.
-func TestTheScreensWithNoBarAgreeWithTheOnesThatHaveOne(t *testing.T) {
+// different rules and the difference is what makes one program look like two.
+func TestTheScreenWithNoBarAgreesWithTheOnesThatHaveOne(t *testing.T) {
 	base := deps{
 		Catalogue: DefaultCatalogue(), Ledger: testLedger(t), Treasury: testTreasury(),
 	}
@@ -1692,7 +1699,6 @@ func TestTheScreensWithNoBarAgreeWithTheOnesThatHaveOne(t *testing.T) {
 		account := strings.Split(stripForTest(m.frameString()), "\n")[barTop+1]
 
 		for name, out := range map[string]string{
-			"picker":  anonymousModel{deps: base, st: newStyles(), width: w, height: 30}.View().Content,
 			"refusal": refuseModel{reason: reasonText("no key on this connection"), width: w, height: 30}.View().Content,
 		} {
 			brand := strings.Split(stripForTest(out), "\n")[0]
@@ -1713,6 +1719,14 @@ func TestTheScreensWithNoBarAgreeWithTheOnesThatHaveOne(t *testing.T) {
 	}
 }
 
+// pickingView is what a session that has named no account draws: the same
+// window, with one tab on the bar and the question on its first page.
+func pickingView(base deps, w, h int) string {
+	m := model{deps: base, st: newStyles(), view: screenHome, width: w, height: h, help: newHelp()}
+	m.syncLists()
+	return m.View().Content
+}
+
 // The three screens have to agree on their shape, or the fix above has only
 // stopped them overflowing.
 func TestTheThreeScreensAreTheSameShape(t *testing.T) {
@@ -1728,7 +1742,7 @@ func TestTheThreeScreensAreTheSameShape(t *testing.T) {
 	m.syncLists()
 
 	account, _ := m.frame()
-	picker := anonymousModel{deps: base, st: newStyles(), width: 100, height: 30}.View().Content
+	picker := pickingView(base, 100, 30)
 	refusal := refuseModel{reason: "no", width: 100, height: 30}.View().Content
 
 	for name, out := range map[string]string{"picker": picker, "refusal": refusal} {
@@ -1922,7 +1936,8 @@ func screenName(size [2]int, page struct {
 // place, one of them looking like a tab and one of them not.
 func TestTheNameIsATabAndTheAddressIsSetIn(t *testing.T) {
 	m := model{st: newStyles(), view: screenHome, width: 100, height: 30,
-		deps: deps{Catalogue: DefaultCatalogue(), Proven: true, Version: "0.1.6"}}
+		deps: deps{Address: treasuryAddress, Catalogue: DefaultCatalogue(), Proven: true, Version: "0.1.6"}}
+	m.syncLists()
 	labels := strings.Split(stripForTest(m.frameString()), "\n")[barTop+1]
 	if !strings.HasPrefix(labels, "  RouterCafe  \u2502 deposit \u2502") {
 		t.Errorf("the name is not the first tab, in plain text: %q", labels)
@@ -1936,7 +1951,7 @@ func TestTheNameIsATabAndTheAddressIsSetIn(t *testing.T) {
 	// And the wordmark is on the page its label opens, rather than on a
 	// splash page beside it. There is no splash page: the name, the balance
 	// and what to do next were all already on this one.
-	for _, page := range screenList() {
+	for _, page := range m.screenList() {
 		shown := m.show(page)
 		content, where := shown.frame()
 		drawn := strings.Contains(stripForTest(content), "_|")

@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"golang.org/x/crypto/ssh/agent"
 )
 
 // The session UI.
@@ -54,10 +55,7 @@ const (
 // list. It was briefly a splash screen of its own - the name and the balance
 // at a glance - with the numbers on the tab beside it, and there was no reason
 // for it to be anything but the same page twice.
-var screens = []struct {
-	view screen
-	name string
-}{
+var screens = []tab{
 	{screenHome, "RouterCafe"},
 	{screenDeposit, "deposit"},
 	{screenKeys, "api keys"},
@@ -73,14 +71,36 @@ func (v screen) widget() bool {
 	return v == screenDeposit || v == screenKeys || v == screenModels
 }
 
-// screenList is the ring in the order the bar shows it, for turning a
-// column into a page. The name at the left of the bar goes to the balance
-// screen and is not in the ring, so the bar's own order is carried by one
-// slice rather than by arithmetic over a list it no longer lines up with.
-func screenList() []screen {
-	out := make([]screen, 0, len(screens))
-	for _, s := range screens {
-		out = append(out, s.view)
+// tab is one entry on the bar: a page, and what it is called there.
+type tab struct {
+	view screen
+	name string
+}
+
+// tabs is the bar, and the ring, for this session.
+//
+// A session that has proved nothing has one of them. There is exactly one
+// thing it can do - say which account it is - and offering it four pages it
+// cannot use is a bar that lies about where you can go. It grows to all five
+// the moment an account is named, which is the whole of what "proving" means
+// here.
+func (m model) tabs() []tab {
+	if m.picking() {
+		return screens[:1]
+	}
+	return screens
+}
+
+// picking is whether this session has named no account yet, which is what the
+// first tab is for.
+func (m model) picking() bool { return strings.TrimSpace(m.deps.Address) == "" }
+
+// screenList is the ring in the order the bar shows it, for turning a column
+// into a page.
+func (m model) screenList() []screen {
+	out := make([]screen, 0, len(m.tabs()))
+	for _, t := range m.tabs() {
+		out = append(out, t.view)
 	}
 	return out
 }
@@ -90,19 +110,20 @@ func screenList() []screen {
 // Wrapping rather than stopping is deliberate: tab is a cycle here, and a
 // cycle that stalls at the last page makes the end of it feel like a dead end
 // rather than the place you came round to.
-func step(from screen, n int) screen {
+func (m model) step(from screen, n int) screen {
+	ring := m.tabs()
 	i := 0
-	for j, s := range screens {
-		if s.view == from {
+	for j, t := range ring {
+		if t.view == from {
 			i = j
 			break
 		}
 	}
-	i = (i + n) % len(screens)
+	i = (i + n) % len(ring)
 	if i < 0 {
-		i += len(screens)
+		i += len(ring)
 	}
-	return screens[i].view
+	return ring[i].view
 }
 
 type styles struct {
@@ -265,6 +286,19 @@ type model struct {
 	routes  list.Model
 	apiKeys list.Model
 
+	// keys, typed and picked are the first tab while this session has named
+	// no account: the keys a forwarded agent holds, an address being typed, and
+	// which row the cursor is on.
+	//
+	// Nil keys with an empty address is the whole of what "picking" means -
+	// there is exactly one thing such a session can do, and this is it - so
+	// picking() reads the address rather than keeping a flag beside it that
+	// could disagree.
+	keys    []*agent.Key
+	typed   string
+	picked  int
+	keysErr string
+
 	// rows is where the current page's list put its rows on screen, as the
 	// delegate drew them. Set by every frame, because a row's place on the
 	// screen is a fact about this frame: the same row sits somewhere else
@@ -330,10 +364,15 @@ type notice struct {
 }
 
 func (m model) Init() tea.Cmd {
+	// Nothing named yet: the only thing this session can do is find out what
+	// the forwarded agent holds, so it has to ask before it can offer anything.
+	if m.picking() {
+		return listKeysCmd(m.deps.SockPath)
+	}
 	// An account named by username is a view. When an agent was forwarded as
 	// well, ask it whether it holds that address's key: if it does, and it
 	// signs for it, this session owns the account and may change it.
-	if !m.deps.Proven && m.deps.SockPath != "" && m.deps.Address != "" {
+	if !m.deps.Proven && m.deps.SockPath != "" {
 		return proveCmd(m.deps.SockPath, m.deps.Address)
 	}
 	return nil
@@ -424,6 +463,40 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the component panics on.
 		m.sizeHelp()
 		return m, nil
+
+	case keysListedMsg:
+		if msg.err != nil {
+			m.keysErr = msg.err.Error()
+			return m, nil
+		}
+		m.keys = orderableKeys(msg.keys)
+		if len(m.keys) == 0 {
+			m.keysErr = "the forwarded agent holds no keys"
+		}
+		return m, nil
+
+	case nonceSignedMsg:
+		m.busy = ""
+		if msg.err != nil {
+			m.notice = notice{noticeBad, msg.err.Error()}
+			return m, nil
+		}
+		// Proved. From here this is an ordinary session, the bar grows to all
+		// of its tabs, and the page underneath is an account rather than a
+		// question about which account.
+		m.deps.Address, m.deps.Proven = msg.address, true
+		m.keys, m.typed, m.picked = nil, "", 0
+		m.account = m.deps.Ledger.Account(msg.address)
+		m.syncLists()
+		return m, nil
+
+	case pickKeyMsg:
+		if m.view != screenHome || msg.row < 0 || msg.row >= len(m.keys) {
+			return m, nil
+		}
+		m.picked = msg.row
+		m.busy = "asking the agent to sign, so this key is really yours"
+		return m, adoptCmd(m.deps, m.keys[msg.row])
 
 	case provenMsg:
 		// Silent either way. An agent that does not hold the key is the
@@ -542,6 +615,14 @@ func (m model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.retreat(), nil
 	}
 
+	// A session that has named no account is on the one page it has, and that
+	// page takes the keyboard whole. It has to: the field it is most of takes
+	// printable characters, and a `q` typed into an address is an address, not
+	// a request to leave. ctrl+c is the way out, as it is everywhere.
+	if m.picking() {
+		return m.onPickKey(msg)
+	}
+
 	// The widget on screen gets the keyboard first - and a text field gets all
 	// of it, because a field that lets a letter through to the program is a
 	// field that disconnects the session because somebody typed q into an
@@ -616,12 +697,12 @@ func (m model) onProgramKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // is simply passed through, so tab from the balance screen lands on the
 // deposit screen rather than on nothing.
 func (m model) advance() model {
-	return m.show(step(m.view, 1))
+	return m.show(m.step(m.view, 1))
 }
 
 // retreat is advance, the other way round.
 func (m model) retreat() model {
-	return m.show(step(m.view, -1))
+	return m.show(m.step(m.view, -1))
 }
 
 // show moves to a page, putting it into the state a freshly arrived session
@@ -696,6 +777,90 @@ func (m model) revokeKey(oneBased int) (tea.Model, tea.Cmd) {
 		ok, err := d.Ledger.RevokeKey(d.Address, key.Digest)
 		return keyRevokedMsg{label: key.Label, ok: ok, err: err}
 	}
+}
+
+// onPickKey is the one page a session with no account has.
+//
+// Two ways through it, and they differ in exactly one way: a key the agent
+// holds will be signed for, and an address somebody types will not. That
+// difference is the whole of read-only against not, and it is why the screen
+// offers both rather than making a person know which kind of credential they
+// turned up with.
+//
+// A printable character always goes to the address row and takes the selection
+// with it, so a person who has started typing never has to know which row they
+// were on. Which is also why `q` cannot quit from here: q is a base58
+// character and the field is most of what the page does.
+func (m model) onPickKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		if m.typed == "" {
+			return m, tea.Quit
+		}
+		m.typed, m.picked = "", m.addressRow()
+		return m, nil
+	case "up", "ctrl+p":
+		m.picked = max(0, m.picked-1)
+		return m, nil
+	case "down", "ctrl+n":
+		m.picked = min(m.picked+1, len(m.keys))
+		return m, nil
+	case "backspace":
+		if r := []rune(m.typed); len(r) > 0 {
+			m.typed = string(r[:len(r)-1])
+			m.picked = m.addressRow()
+		}
+		return m, nil
+	case "enter":
+		if m.picked == m.addressRow() {
+			return m.openAddress()
+		}
+		if m.picked < len(m.keys) {
+			m.busy = "asking the agent to sign, so this key is really yours"
+			return m, adoptCmd(m.deps, m.keys[m.picked])
+		}
+		return m, nil
+	}
+
+	// Filtered to the alphabet an address is written in rather than accepted and
+	// rejected later, so there is no state in which the field holds something
+	// ValidateAddress is about to refuse. Same rule as the deposit amount.
+	if len(msg.Text) == 1 && isBase58(msg.Text[0]) {
+		m.typed += msg.Text
+		m.picked = m.addressRow()
+	}
+	return m, nil
+}
+
+// addressRow is where the address field is: the last row whether or not there
+// are keys above it, so there is always somewhere to go on a connection that
+// forwarded no agent.
+func (m model) addressRow() int { return len(m.keys) }
+
+// openAddress takes the address the field holds and turns it into a session.
+//
+// A view and not a refusal, because that is what somebody with no key came
+// for. Proven is false here no matter how many keys are listed above: a typed
+// address has proved nothing. If a forwarded agent does hold that address's
+// key, the ordinary session proves it on open - the same upgrade
+// `ssh <address>@host` gets - and this page does not have to know.
+func (m model) openAddress() (tea.Model, tea.Cmd) {
+	address := strings.TrimSpace(m.typed)
+	if address == "" {
+		return m, nil
+	}
+	if err := ValidateAddress(address); err != nil {
+		m.notice = notice{noticeBad, reasonText(err.Error())}
+		return m, nil
+	}
+	m.notice = notice{}
+	m.deps.Address = address
+	m.keys, m.typed, m.picked = nil, "", 0
+	m.account = m.deps.Ledger.Account(address)
+	m.syncLists()
+	return m, proveCmd(m.deps.SockPath, address)
 }
 
 // onListKey is a focused list and a key it has a binding for, so the whole of
@@ -1022,10 +1187,11 @@ func (m *model) frame() (string, clicks) {
 	// The bar is three lines - the top of the box, the labels, the bottom edge
 	// - and a click on any of them is a click on the tab under it.
 	where := clicks{inside: span{x0: 1, x1: m.width - 1}}
+	views := m.screenList()
 	for i, tab := range tabs {
 		where.tabs = append(where.tabs, barTab{
 			box{x0: tab.x0, x0y: barTop, x1: tab.x1, y1: barTop + barLines - 1},
-			screens[i].view,
+			views[i],
 		})
 	}
 	// The page starts on the line after the bar's underline, and the box has no
@@ -1148,25 +1314,26 @@ func (m model) header() string {
 // is a line somebody has to look past. Which also means the name is where a
 // logo goes, and it is clickable - a logo takes you home everywhere it is.
 //
-// Returns the bar and the columns that can be clicked, which is the logo
-// followed by the tabs: both go through the same click handling, because
-// going home is what the balance tab does.
+// Returns the bar and the columns that can be clicked. The name is the first
+// of them, and a click on it goes through exactly the same handling as a click
+// on any other: going home is what the first tab does.
 func (m model) tabBar() (string, []span) {
-	// The first tab is the name, and it is the only one of the six drawn
-	// without a border: plain text on the bar's own line, set in from the
+	// The first tab is the name, and it is the only one drawn without a
+	// border: plain text on the bar's own line, set in from the
 	// edge, coloured the way a tab is coloured and behaving exactly like one -
 	// it lights up when its page is the one on screen, and a click on it opens
 	// that page. A box drawn round it would be the only tab not shaped like a
 	// tab, which is the whole of what having it in the bar is there to stop.
+	ring := m.tabs()
 	style := m.st.homeIdle
-	if m.view == screens[0].view {
+	if m.view == ring[0].view {
 		style = m.st.homeActive
 	}
-	name := "  " + style.Render(screens[0].name) + "  "
+	name := "  " + style.Render(ring[0].name) + "  "
 	left := lipgloss.Width(name)
 
-	cells := make([]string, 0, len(screens))
-	for _, page := range screens[1:] {
+	cells := make([]string, 0, len(ring))
+	for _, page := range ring[1:] {
 		s := m.st.tabIdle
 		if page.view == m.view {
 			s = m.st.tabActive
@@ -1194,6 +1361,12 @@ func (m model) tabBar() (string, []span) {
 	for len(cells) > 1 && left+tabs+barEdgeGap > m.width {
 		cells = cells[:len(cells)-1]
 		rows, tabs = run(), lipgloss.Width(run()[0])
+	}
+	// A session that has named no account has one tab and no bordered cells at
+	// all, and an empty join is one line rather than three. Padded so the bar is
+	// always the height the frame is expecting.
+	for len(rows) < barLines {
+		rows = append(rows, "")
 	}
 
 	// Shedding, widest first: the address with the version, the address alone,
@@ -1378,6 +1551,64 @@ func (m model) footer() string {
 	return strings.TrimRight(b.String(), " ")
 }
 
+// renderPick is the first tab for a session that has named no account: the
+// keys a forwarded agent holds, and the address of an account somebody would
+// rather only look at.
+//
+// It is a page rather than a screen of its own, and that is the whole point:
+// a connection that proved nothing used to be handed a different program,
+// which then handed this one over the moment it worked out who it was. One
+// window, with the question on its first page and the answer where it was
+// waiting.
+func (m model) renderPick() string {
+	st := m.st
+	var b strings.Builder
+
+	if m.busy != "" {
+		return m.wrap(st.warn.Render(m.busy), st.warn) + "\n"
+	}
+	if len(m.keys) > 0 {
+		b.WriteString("  " + st.title.Render("Which of these is yours?") + "\n\n")
+	} else if m.deps.Local {
+		b.WriteString("  " + st.title.Render("No ssh-agent, so nothing here can sign.") + "\n")
+		b.WriteString(m.wrap(st.dim.Render("An account is an ed25519 public key. Paste one to look at it:"), st.dim) + "\n\n")
+	} else {
+		b.WriteString("  " + st.title.Render("This connection proved nothing, so nothing here can sign.") + "\n")
+		b.WriteString(m.wrap(st.dim.Render("An account is an ed25519 public key. Paste one to look at it:"), st.dim) + "\n\n")
+	}
+
+	for i, k := range m.keys {
+		marker, style := "  ", st.value
+		if i == m.picked {
+			marker, style = "> ", st.accent
+		}
+		b.WriteString(marker + "  " + style.Render(labelForKey(k)) + "\n")
+	}
+	if len(m.keys) > 0 {
+		b.WriteString("\n")
+	}
+
+	// A real failure is worth a line; "you forwarded no agent" is not, because
+	// the field below is the answer to it.
+	if m.keysErr != "" && !strings.Contains(m.keysErr, "forwarded no agent") {
+		b.WriteString(m.wrap(st.warn.Render(m.keysErr+"."), st.warn) + "\n\n")
+	}
+
+	marker := "  "
+	if m.picked == m.addressRow() {
+		marker = "> "
+	}
+	b.WriteString("  " + marker + st.label.Render("address  ") +
+		st.accent.Render(m.typed) + st.dim.Render("\u2588") + "\n\n")
+
+	if len(m.keys) == 0 {
+		b.WriteString("  " + st.dim.Render("enter to open it") + "\n")
+	} else {
+		b.WriteString("  " + st.dim.Render("up/down to choose, enter to sign with a key or open an address") + "\n")
+	}
+	return b.String()
+}
+
 // renderHome is the page the name at the left of the bar opens: the wordmark,
 // the numbers, and everything that belongs with them.
 //
@@ -1385,6 +1616,9 @@ func (m model) footer() string {
 // is nothing a splash page could have said that this does not also say - the
 // name, the balance, and what to do next were already all here.
 func (m *model) renderHome() string {
+	if m.picking() {
+		return m.renderPick()
+	}
 	var b strings.Builder
 	acct := m.account
 	b.WriteString(m.wordmark())
