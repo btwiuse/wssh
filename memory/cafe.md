@@ -879,17 +879,32 @@ because they are proper nouns and because a list of lowercase words reads as a
 list of commands, which is the one thing they stopped being when the letters
 went away.
 
-A key is shown as **`rc_abcd…wxyz`** everywhere one is named - the list, the home
-page, and the notice that says which key was just revoked. **One ellipsis
-character, not three dots**: `…` is a single cell in a terminal and `...` is
-three, so a key shown with dots is three columns wider than the abbreviation it
-stands for - and `shortAddress`, `shortSig` and `fit` have always said it the
-other way. - the shape of the key rather than the
-shape of a label. Four characters of one says "here is a key"
-without saying *which*, and the eight are eight characters of a 192-bit secret,
-which narrows nothing. `Key.Prefix` is the first four, `Key.Label` the last
-four, and `Key.Hint()` puts them together; a key minted before `Prefix` existed
-falls back to `rc_...wxyz` rather than pretending to a prefix it does not have.
+A key is shown as **`rc_abcd...wxyz`** everywhere one is named - the list, the
+home page, the export line, and the notice that says which key was just
+revoked. **The prefix is `rc_` and then the random part**, so a key and the
+listing of it are the same shape. It was `rc_live_`, and a constant sitting
+between the reader and the part that differs is a constant carrying no
+information.
+
+`Key.Prefix` is the first four characters, `Key.Label` the last four, and
+`Key.Hint()` puts them together with three dots. A key somebody named shows
+the name instead.
+
+**It showed six dots for a month, and it was not a stale binary.** `labelFor`
+put its own `...` in front of the last four characters - a reasonable thing for
+a bare label to do, and exactly what `Hint` then doubled with its own
+separator - so every unnamed key on every screen read `rc_abcd......wxyz`. The
+test missed it because it built a `Key{Label: "wxyz"}` **by hand**, which is a
+shape `labelFor` never produces, and asserted about a key that could not exist.
+`TestAKeyIsAbbreviatedWithOneRunOfThreeDots` mints thirty-two keys now, which is
+the only shape that can occur. A test that builds the thing itself instead of
+the thing that makes it is a test of the shape somebody expected.
+
+**A key minted before `Prefix` existed cannot show one**, and falls back to
+`rc_...wxyz`. The digest is a hash of the key, not the key, so the first four
+cannot be recovered from a ledger that only has it - the fallback is the honest
+shape for those, not a guess at one.
+
 
 **A key minted before `Prefix` existed cannot show one**, and falls back to
 `rc_...wxyz`. The digest is a hash of the key, not the key, so the first four
