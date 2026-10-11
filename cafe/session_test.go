@@ -924,3 +924,75 @@ func TestANamedAccountCannotChangeAnything(t *testing.T) {
 		t.Error("the owner could not mint a key against their own account")
 	}
 }
+
+// The key a session just minted is the only one it will ever see: the ledger
+// kept a digest and threw the key away. So y has to work right after a mint,
+// and it has to stop working the moment the key is off the screen - which is
+// the only way "copy it" and "you can still see it" cannot drift apart.
+func TestCopyingAKeyOnlyWhileItIsOnScreen(t *testing.T) {
+	ledger := testLedger(t)
+	d := deps{
+		Address:   treasuryAddress,
+		Ledger:    ledger,
+		Treasury:  testTreasury(),
+		Catalogue: DefaultCatalogue(),
+		Proven:    true,
+		Host:      Domain,
+	}
+	m := model{deps: d, st: newStyles(), view: screenKeys, account: ledger.Account(d.Address), width: 100, height: 40}
+
+	// Minting clears any previous key, so the one on screen is always the only
+	// one on screen.
+	next, cmd := m.mintKey()
+	m = next.(model)
+	minted, ok := cmd().(keyMintedMsg)
+	if !ok || minted.err != nil {
+		t.Fatalf("mint gave %+v", minted)
+	}
+	next, _ = m.Update(minted)
+	m = next.(model)
+	if m.fresh != minted.key {
+		t.Fatalf("the minted key is not on the model: %q vs %q", m.fresh, minted.key)
+	}
+
+	// y asks for the clipboard, which is tea.SetClipboard - a command, because
+	// that is how Bubble Tea writes an escape sequence without fighting the
+	// renderer for stdout.
+	next, cmd = m.copyFreshKey()
+	if cmd == nil {
+		t.Fatal("y on a key that is on screen did nothing")
+	}
+	if msg := cmd(); msg == nil {
+		t.Error("the clipboard command produced no message")
+	}
+	if got := next.(model); got.notice.kind != noticeGood {
+		t.Errorf("copying said %+v, want a confirmation", got.notice)
+	}
+
+	// Leaving the screen takes the key with it.
+	next, _ = m.onKey(tea.KeyPressMsg(tea.Key{Code: 'b', Text: "b"}))
+	m = next.(model)
+	if m.fresh != "" {
+		t.Error("a key was still copyable after the screen that showed it was left")
+	}
+	next, cmd = m.copyFreshKey()
+	if cmd != nil {
+		t.Error("y copied a key that was never displayed again")
+	}
+	if got := next.(model); got.notice.kind != noticeBad {
+		t.Errorf("y with nothing on screen said %+v, want a refusal saying why", got.notice)
+	}
+}
+
+// The footer advertises y only when there is something to copy. A binding that
+// is always offered and usually refused is one people learn to ignore.
+func TestCopyIsOnlyOfferedWhenThereIsSomethingToCopy(t *testing.T) {
+	m := model{st: newStyles(), deps: deps{Catalogue: DefaultCatalogue()}, width: 100}
+	if strings.Contains(m.footer(), "copy key") {
+		t.Error("y is offered with no key on screen")
+	}
+	m.fresh = "rc_live_abc"
+	if !strings.Contains(m.footer(), "copy key") {
+		t.Error("y is not offered with a key on screen")
+	}
+}

@@ -143,6 +143,24 @@ type model struct {
 	// while, and a frozen screen during that reads as a hang.
 	busy   string
 	notice notice
+
+	// fresh is the key this session just minted, held only for as long as the
+	// notice displaying it is on screen.
+	//
+	// The ledger keeps a SHA-256 of every key and never the key itself, so
+	// this is the only copy that will ever exist: `y` can copy it, and once
+	// the notice is gone there is nothing left to copy. That is the whole
+	// reason copying is a keystroke on this screen rather than a column in
+	// the keys list - and also why forgetting to copy is cheap: mint another.
+	fresh string
+}
+
+// to leaves the current screen, taking the notice with it.
+//
+// fresh goes at the same time as the notice that displays it, deliberately,
+// so that "y copies it" and "you can see it" can never disagree.
+func (m *model) to(view screen) {
+	m.view, m.notice, m.fresh = view, notice{}, ""
 }
 
 type noticeKind int
@@ -254,8 +272,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = notice{noticeBad, msg.err.Error()}
 			return m, nil
 		}
+		m.fresh = msg.key
 		m.notice = notice{noticeGood, "new key: " + msg.key +
-			"  — this is the only time it is shown; put it somewhere safe"}
+			"  — this is the only time it is shown; press y to copy it, or put it somewhere safe"}
 		return m, refreshCmd(m.deps)
 
 	case keyRevokedMsg:
@@ -291,26 +310,28 @@ func (m model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q":
 		return m, tea.Quit
+	case "y":
+		return m.copyFreshKey()
 	case "b", "home":
-		m.view, m.notice = screenHome, notice{}
+		m.to(screenHome)
 	case "d":
-		m.view, m.notice = screenDeposit, notice{}
+		m.to(screenDeposit)
 	case "k":
 		if !m.deps.Proven {
 			m.notice = notice{noticeBad, notOwned}
 			return m, nil
 		}
-		m.view, m.notice = screenKeys, notice{}
+		m.to(screenKeys)
 	case "m", "p":
-		m.view, m.notice = screenModels, notice{}
+		m.to(screenModels)
 	case "?", "h":
-		m.view, m.notice = screenHelp, notice{}
+		m.to(screenHelp)
 	case "r":
 		// A reload is a key because the balance is somebody's money and
 		// they should be able to make it re-read without reconnecting.
 		return m, refreshCmd(m.deps)
 	case "esc":
-		m.view, m.notice = screenHome, notice{}
+		m.to(screenHome)
 	}
 
 	// Keys are numbered so that revoking one is a keystroke and not a
@@ -327,13 +348,40 @@ func (m model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// copyFreshKey puts the key this session just minted on the clipboard.
+//
+// OSC 52, which is what tea.SetClipboard emits and the only mechanism a
+// terminal offers for this: there is no way for a program running over SSH to
+// reach the machine's clipboard by any other route. Not every terminal honours
+// it, and a few ask permission first, so the message says what was asked for
+// rather than claiming the clipboard now holds it - the program genuinely
+// cannot tell.
+//
+// A key that was minted earlier is not copyable, because the ledger kept a
+// digest and threw the key away. That is said plainly rather than left to look
+// like a broken keystroke.
+func (m model) copyFreshKey() (tea.Model, tea.Cmd) {
+	if m.fresh == "" {
+		m.notice = notice{noticeBad, noKeyToCopy}
+		return m, nil
+	}
+	m.notice = notice{noticeGood, "sent to the clipboard as OSC 52: " + m.fresh +
+		"  — if it did not paste, this terminal does not honour OSC 52"}
+	return m, tea.SetClipboard(m.fresh)
+}
+
+const noKeyToCopy = "no key on screen to copy. One is shown once, when it is " +
+	"minted: press n on the api keys screen and press y straight away."
+
 func (m model) mintKey() (tea.Model, tea.Cmd) {
 	if !m.deps.Proven {
 		return m.refuse(notOwned)
 	}
 	d := m.deps
 	m.busy = "minting an API key"
-	m.notice = notice{}
+	// The previous key's one chance to be copied is over: minting another
+	// replaces it on screen, and the ledger never kept it either way.
+	m.notice, m.fresh = notice{}, ""
 	return m, func() tea.Msg {
 		key, err := d.Ledger.MintKey(d.Address, "")
 		return keyMintedMsg{key: key, err: err}
@@ -499,8 +547,13 @@ func (m model) footer() string {
 		m.st.key.Render("d") + m.st.dim.Render(" deposit  ") +
 		m.st.key.Render("k") + m.st.dim.Render(" api key  ") +
 		m.st.key.Render("m") + m.st.dim.Render(" models  ") +
-		m.st.key.Render("r") + m.st.dim.Render(" refresh  ") +
-		m.st.key.Render("?") + m.st.dim.Render(" help  ") +
+		m.st.key.Render("r") + m.st.dim.Render(" refresh  ")
+	// Only while there is something to copy. A y that is always offered and
+	// usually refused is a keystroke people learn to ignore.
+	if m.fresh != "" {
+		binding += m.st.key.Render("y") + m.st.dim.Render(" copy key  ")
+	}
+	binding += m.st.key.Render("?") + m.st.dim.Render(" help  ") +
 		m.st.key.Render("q") + m.st.dim.Render(" quit")
 	return "  " + binding
 }
@@ -587,6 +640,9 @@ func (m model) renderKeys() string {
 		m.st.key.Render("1") + m.st.dim.Render("…") + m.st.key.Render("9") + m.st.dim.Render(" revoke one") + "\n")
 	b.WriteString("\n  " + m.st.dim.Render("A key is shown once, when it is minted; only its fingerprint is kept.") + "\n")
 	b.WriteString("  " + m.st.dim.Render("Losing one is not a problem: mint another.") + "\n")
+	if m.fresh != "" {
+		b.WriteString("\n  " + m.st.key.Render("y") + m.st.dim.Render(" copy the key above") + "\n")
+	}
 	return b.String()
 }
 
@@ -614,6 +670,7 @@ func (m model) renderHelp() string {
 	b.WriteString("  " + m.st.label.Render("k") + m.st.dim.Render("  API keys: mint a new one, revoke an old one") + "\n")
 	b.WriteString("  " + m.st.label.Render("m") + m.st.dim.Render("  every route and what it costs") + "\n")
 	b.WriteString("  " + m.st.label.Render("r") + m.st.dim.Render("  re-read the balance") + "\n")
+	b.WriteString("  " + m.st.label.Render("y") + m.st.dim.Render("  copy a key just minted, using OSC 52") + "\n")
 	b.WriteString("  " + m.st.label.Render("q") + m.st.dim.Render("  disconnect") + "\n\n")
 
 	b.WriteString("  " + m.st.title.Render("what this is not") + "\n\n")
