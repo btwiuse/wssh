@@ -289,9 +289,44 @@ func (s *Server) modelFor(w who) tea.Model {
 	// first, so cycling forward from where you arrived is the road to the
 	// others and cycling back is the way home.
 	m.candidates = []candidate{{address: address}}
+
+	// The other half of the same connection, when there is one.
+	//
+	// A browser session that holds both a wallet and an SSH key arrives with
+	// one account, because AccountFor can only answer once and answers with
+	// the wallet - the thing that actually signed. The key was still presented
+	// by the client, still names an account, and was simply not the one that
+	// got picked. Without this the session had a single candidate and the
+	// switch between them silently did nothing.
+	//
+	// Appended rather than offered first, and unproved, because the agent has
+	// not been asked yet whether it holds this one - which is what the switch
+	// asks when it gets there.
+	if other := sshAddressOf(w.pub); other != "" && other != address {
+		m.candidates = append(m.candidates, candidate{address: other})
+	}
+
 	m.deps.Address = address
 	m.syncLists()
 	return m
+}
+
+// sshAddressOf is the account an SSH public key names, or "" for anything that
+// is not an ed25519 key - which is every other kind, and none of which is an
+// account here.
+//
+// Its own function because the answer is needed in two places that must agree:
+// refusing a connection that named no account, and offering the key as a second
+// account on one that named two.
+func sshAddressOf(pub gossh.PublicKey) string {
+	if pub == nil {
+		return ""
+	}
+	address, err := solana.AddressFor(pub)
+	if err != nil {
+		return ""
+	}
+	return address
 }
 
 // namesAnAccount reports whether a username is written as an account address,

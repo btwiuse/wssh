@@ -901,6 +901,20 @@ func (m model) onProgramKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.cycle(-1)
 	case ">", "shift+.":
 		return m.cycle(1)
+	case "left":
+		// The arrows are the same switch, on the one page where nothing else
+		// claims them. A list page binds them for paging, and it keeps them:
+		// a focused list takes them first, and an unfocused one still means
+		// "page this list" rather than "leave the account". The home page has
+		// no list and no field, so the arrows there are free to be the thing a
+		// hand goes to first.
+		if m.view == screenHome {
+			return m.cycle(-1)
+		}
+	case "right":
+		if m.view == screenHome {
+			return m.cycle(1)
+		}
 	case "?":
 		return m.show(screenFAQ), nil
 	case "q":
@@ -1711,7 +1725,7 @@ func (m model) footer() string {
 	// not a list, and offering a switch across a single entry is a hint for a
 	// control that does nothing.
 	if len(m.candidates) > 1 {
-		pairs = append(pairs, [2]string{"< >", "switch account"})
+		pairs = append(pairs, [2]string{"← →", "switch account"})
 	}
 	pairs = append(pairs, [2]string{"?", "FAQs"}, [2]string{"q", "quit"})
 

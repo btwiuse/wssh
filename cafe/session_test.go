@@ -2702,3 +2702,87 @@ func TestTheBusyLineIsDrawnOnce(t *testing.T) {
 		}
 	}
 }
+
+// A session holding both a wallet and an SSH key can get from one to the other.
+//
+// It could not, and nothing said so: AccountFor answers once and answers with
+// the wallet, because the wallet is the thing that signed. The key the client
+// also presented named a second account and was simply not the one that got
+// picked, so the session had one candidate and both switch keys were no-ops.
+//
+// The test builds both halves for real - a wallet address and an ed25519 public
+// key - and checks the switch goes both ways and comes back.
+func TestASessionWithBothAKeyAndAWalletCanSwitchBetweenThem(t *testing.T) {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	signer, err := gossh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatalf("NewSignerFromKey: %v", err)
+	}
+	wallet := "So11111111111111111111111111111111111111112"
+	keyAddr, err := AddressOf(signer.PublicKey())
+	if err != nil {
+		t.Fatalf("AddressOf: %v", err)
+	}
+	if keyAddr == wallet {
+		t.Fatal("the two accounts are the same; the test would pass on anything")
+	}
+
+	srv := &Server{opts: Options{Ledger: testLedger(t), Treasury: testTreasury()}}
+	m, ok := srv.modelFor(who{pub: signer.PublicKey(), wallet: wallet}).(model)
+	if !ok {
+		t.Fatal("modelFor did not build the session model")
+	}
+
+	if got := len(m.candidates); got != 2 {
+		t.Fatalf("a wallet and a key named %d accounts, want 2: %+v", got, m.candidates)
+	}
+	if m.deps.Address != wallet {
+		t.Errorf("the session did not start on the wallet: %q", m.deps.Address)
+	}
+
+	// Forward, to the key; back again, to the wallet.
+	next, _ := m.cycle(1)
+	m = next
+	if m.deps.Address != keyAddr {
+		t.Errorf("switching forward went to %q, want the ssh key's account %q", m.deps.Address, keyAddr)
+	}
+	if m.at != 1 {
+		t.Errorf("the cursor is on candidate %d, want 1", m.at)
+	}
+	back, _ := m.cycle(-1)
+	m = back
+	if m.deps.Address != wallet {
+		t.Errorf("switching back went to %q, want the wallet %q", m.deps.Address, wallet)
+	}
+}
+
+// And the arrows are the switch, on the page where nothing else wants them.
+func TestTheArrowsSwitchAccountOnTheHomePageOnly(t *testing.T) {
+	ledger := testLedger(t)
+	d := deps{Ledger: ledger, Treasury: testTreasury(), Catalogue: DefaultCatalogue(),
+		Proven: true, Host: Domain}
+	m := model{deps: d, st: newStyles(true), view: screenHome,
+		account: ledger.Account(treasuryAddress), width: 100, height: 40}
+	m.candidates = []candidate{
+		{address: treasuryAddress, proven: true},
+		{address: "So11111111111111111111111111111111111111112", proven: true},
+	}
+	m.syncLists()
+
+	pressed, _ := m.onProgramKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyRight}))
+	m = pressed.(model)
+	if m.deps.Address == treasuryAddress {
+		t.Error("the right arrow did not move to the other account")
+	}
+
+	// On a list page the arrows belong to the list, and are not the switch.
+	m.view = screenKeys
+	before := m.deps.Address
+	again, _ := m.onProgramKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyRight}))
+	if got := again.(model).deps.Address; got != before {
+		t.Errorf("the right arrow changed the account on the keys page (%q -> %q); it pages the list", before, got)
+	}
+}
