@@ -29,18 +29,26 @@ import (
 // nonce this server made up. Not "the client says it has this key" - the agent
 // signs, and a signature that verifies is possession.
 //
-// With no agent and nothing to adopt there is nowhere to keep a balance, so the
-// session is shown what this is and how to get in. That is a landing screen
-// rather than a refusal: the person who typed `ssh` here is a person who wants
-// to use it.
+// With no agent there is still somewhere to go, because naming an account is
+// not proof and does not need to be: it is a view, and a view is what somebody
+// who only wanted to look came for. So the same screen that offers the agent's
+// keys also takes an address, and the two differ in exactly one way - a key
+// gets signed for, an address does not - which is the difference between
+// read-only and not.
 
-// anonymousModel is the screen for a session that proved nothing: either the
-// list of keys in the forwarded agent, or the landing screen.
+// anonymousModel is the screen for a session that proved nothing: the keys the
+// agent holds, and the address of an account somebody would rather only look at.
 type anonymousModel struct {
 	deps deps
 	st   styles
 
-	keys    []*agent.Key
+	keys []*agent.Key
+
+	// typed is the address row, which is the last row of the list whether or
+	// not there are keys above it. Always present, so the screen has somewhere
+	// to go on a connection that forwarded no agent.
+	typed string
+
 	width   int
 	height  int
 	picked  int
@@ -114,37 +122,123 @@ func (m anonymousModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Proved. From here this is an ordinary session, so the screen it was
 		// refused a moment ago is what it gets.
-		m.deps.Address = msg.address
-		return model{
-			deps:    m.deps,
-			st:      newStyles(),
-			view:    screenHome,
-			account: m.deps.Ledger.Account(msg.address),
-			width:   m.width,
-			height:  m.height,
-		}, nil
+		d := m.deps
+		d.Address, d.Proven = msg.address, true
+		return intoAccount(d, m.width, m.height), nil
 
 	case tea.KeyPressMsg:
-		switch msg.String() {
-		case "ctrl+c", "q", "esc":
+		return m.onKey(msg)
+	}
+	return m, nil
+}
+
+// rows is every choice on this screen, and the address field is always the last
+// one of them so that it is always somewhere to go.
+func (m anonymousModel) rows() int       { return len(m.keys) + 1 }
+func (m anonymousModel) addressRow() int { return len(m.keys) }
+
+// onKey is one screen with two ways through it: a key the agent holds, which
+// the agent will sign for, and an address somebody types, which nothing will.
+//
+// A printable character always goes to the address row and takes the selection
+// with it, so a person who has started typing never has to know which row they
+// were on. That is also why 'q' cannot quit from this screen: q is a base58
+// character and the address row is most of what the screen does.
+func (m anonymousModel) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		if m.typed == "" {
 			return m, tea.Quit
-		case "up", "k":
-			if m.picked > 0 {
-				m.picked--
-			}
-		case "down", "j":
-			if m.picked < len(m.keys)-1 {
-				m.picked++
-			}
-		case "enter":
-			if len(m.keys) == 0 {
-				return m, nil
-			}
+		}
+		m.typed = ""
+		m.picked = m.addressRow()
+		return m, nil
+	case "up", "ctrl+p":
+		if m.picked > 0 {
+			m.picked--
+		}
+		return m, nil
+	case "down", "ctrl+n":
+		if m.picked < m.rows()-1 {
+			m.picked++
+		}
+		return m, nil
+	case "backspace":
+		if r := []rune(m.typed); len(r) > 0 {
+			m.typed = string(r[:len(r)-1])
+			m.picked = m.addressRow()
+		}
+		return m, nil
+	case "enter":
+		if m.picked == m.addressRow() {
+			return m.openAddress()
+		}
+		if m.picked < len(m.keys) {
 			m.busy = "asking the agent to sign, so this key is really yours"
 			return m, adoptCmd(m.deps, m.keys[m.picked])
 		}
+		return m, nil
+	}
+
+	// Filtered to the alphabet an address is written in rather than accepted and
+	// rejected later, so there is no state in which the row holds something
+	// ValidateAddress is about to refuse. Same rule as the deposit amount.
+	if len(msg.Text) == 1 && isBase58(msg.Text[0]) {
+		m.typed += msg.Text
+		m.picked = m.addressRow()
 	}
 	return m, nil
+}
+
+// openAddress takes the address the field holds and turns it into a session.
+//
+// It is a view and not a refusal, because that is what somebody with no key
+// came for. Proven is false here no matter how many keys are listed above: a
+// typed address has proved nothing. If a forwarded agent does hold that
+// address's key, the ordinary session proves it on open - the same upgrade
+// `ssh <address>@host` gets - and this screen does not have to know.
+func (m anonymousModel) openAddress() (tea.Model, tea.Cmd) {
+	address := strings.TrimSpace(m.typed)
+	if address == "" {
+		return m, nil
+	}
+	if err := ValidateAddress(address); err != nil {
+		m.notice = notice{noticeBad, reasonText(err.Error())}
+		return m, nil
+	}
+	m.notice = notice{}
+	d := m.deps
+	d.Address, d.Proven = address, false
+	return intoAccount(d, m.width, m.height), nil
+}
+
+// intoAccount hands the session the screen it was refused a moment ago.
+//
+// Proven is the caller's to set, and is the whole of what separates the two
+// ways in: a key the agent signed for is owned, an address somebody typed is
+// only named, and everything that changes an account reads that one field.
+func intoAccount(d deps, width, height int) model {
+	return model{
+		deps:    d,
+		st:      newStyles(),
+		view:    screenHome,
+		account: d.Ledger.Account(d.Address),
+		width:   width,
+		height:  height,
+	}
+}
+
+// isBase58 is the alphabet an address is written in. Zero, O, I and l are left
+// out because base58 leaves them out, so taking them would only build a field
+// that cannot be an address.
+func isBase58(c byte) bool {
+	switch {
+	case c >= '1' && c <= '9', c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z':
+		return c != 'l' && c != 'I' && c != 'O'
+	}
+	return false
 }
 
 func (m anonymousModel) View() tea.View {
@@ -157,49 +251,47 @@ func (m anonymousModel) View() tea.View {
 		return tea.NewView(b.String())
 	}
 
-	if len(m.keys) == 0 {
-		// A landing screen, not a wall.
-		//
-		// The useful answer to a connection that proved nothing is what this
-		// is and how to get in, not a report that there was nothing here to
-		// prove - which is a sentence about the protocol rather than about the
-		// reader's next step. And there are two next steps, not one: open your
-		// own account, or look at any account without a key at all.
-		b.WriteString(wrapText("An OpenRouter you reach with ssh.", m.width, st.title) + "\n\n")
-		b.WriteString(wrapText("One key, every model, one balance, paid for in SOL. "+
-			"An account here is an ed25519 public key.", m.width, st.dim) + "\n\n")
-
-		b.WriteString(wrapText("to open your own account:", m.width, st.title) + "\n")
-		b.WriteString(wrapText("ssh-add ~/.ssh/id_ed25519", m.width, st.accent) + "\n")
-		b.WriteString(wrapText("ssh -A -i ~/.ssh/id_ed25519 "+m.deps.host(), m.width, st.accent) + "\n\n")
-
-		b.WriteString(wrapText("to look at any account, no key needed:", m.width, st.title) + "\n")
-		b.WriteString(wrapText("ssh <address>@"+m.deps.host(), m.width, st.accent) + "\n\n")
-
-		// A real failure is worth a line; "you forwarded no agent" is not,
-		// because it is the ordinary case for somebody who only wanted to
-		// look, and the two commands above already say what to do about it.
-		if m.keysErr != "" && !strings.Contains(m.keysErr, "forwarded no agent") {
-			b.WriteString(wrapText(m.keysErr+".", m.width, st.warn) + "\n\n")
-		}
-		b.WriteString(wrapText("The -A is what carries your key: this connection proved nothing by "+
-			"itself, so a forwarded agent is what turns it into an account.", m.width, st.dim) + "\n\n")
-	} else {
+	if len(m.keys) > 0 {
 		b.WriteString(wrapText("Which of these is yours?", m.width, st.title) + "\n\n")
-		for i, k := range m.keys {
-			marker, style := "  ", st.value
-			if i == m.picked {
-				marker, style = "> ", st.accent
-			}
-			b.WriteString(wrapText(marker+labelForKey(k), m.width, style) + "\n")
+	} else {
+		b.WriteString(wrapText("This connection proved nothing, so nothing here can sign.", m.width, st.title) + "\n")
+		b.WriteString(wrapText("An account is an ed25519 public key. Paste one to look at it:", m.width, st.dim) + "\n\n")
+	}
+
+	for i, k := range m.keys {
+		marker, style := "  ", st.value
+		if i == m.picked {
+			marker, style = "> ", st.accent
 		}
-		b.WriteString("\n" + wrapText("up/down to choose, enter to sign with it", m.width, st.dim) + "\n\n")
+		b.WriteString(wrapText(marker+labelForKey(k), m.width, style) + "\n")
+	}
+	if len(m.keys) > 0 {
+		b.WriteString("\n")
+	}
+
+	// A real failure is worth a line; "you forwarded no agent" is not, because
+	// the field below is the answer to it.
+	if m.keysErr != "" && !strings.Contains(m.keysErr, "forwarded no agent") {
+		b.WriteString(wrapText(m.keysErr+".", m.width, st.warn) + "\n\n")
+	}
+
+	marker := "  "
+	if m.picked == m.addressRow() {
+		marker = "> "
+	}
+	b.WriteString("  " + marker + st.label.Render("address  ") +
+		st.accent.Render(m.typed) + st.dim.Render("█") + "\n\n")
+
+	if len(m.keys) == 0 {
+		b.WriteString(wrapText("enter to open it", m.width, st.dim) + "\n\n")
+	} else {
+		b.WriteString(wrapText("up/down to choose, enter to sign with a key or open an address", m.width, st.dim) + "\n\n")
 	}
 
 	if m.notice.kind != noticeNone {
 		b.WriteString(wrapText(m.notice.text, m.width, st.errText) + "\n\n")
 	}
-	b.WriteString(wrapText("q to disconnect", m.width, st.dim) + "\n")
+	b.WriteString(wrapText("ctrl+c to disconnect", m.width, st.dim) + "\n")
 	return tea.NewView(b.String())
 }
 

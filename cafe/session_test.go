@@ -607,6 +607,126 @@ func TestOnlyEd25519KeysAreOfferedForAdoption(t *testing.T) {
 	}
 }
 
+// A typed address opens an account read-only. This is the whole of what the
+// no-key screen is for, and the whole of what it must not do is prove it: the
+// session that opens here is the same one `ssh <address>@host` opens, which can
+// look at a balance and cannot spend one.
+func TestATypedAddressOpensAnAccountWithoutProvingIt(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	address, err := solana.AddressFor(mustPub(t, pub))
+	if err != nil {
+		t.Fatalf("AddressFor: %v", err)
+	}
+
+	m := anonymousModel{deps: deps{Ledger: testLedger(t)}, width: 80, height: 24}
+	for _, c := range address {
+		next, _ := m.onKey(tea.KeyPressMsg(tea.Key{Code: c, Text: string(c)}))
+		m = next.(anonymousModel)
+	}
+	if m.typed != address {
+		t.Fatalf("typed %q, want %q", m.typed, address)
+	}
+
+	next, _ := m.openAddress()
+	got, ok := next.(model)
+	if !ok {
+		t.Fatalf("a typed address opened %T, want the account screen", next)
+	}
+	if got.deps.Address != address {
+		t.Errorf("opened the account %q, want %q", got.deps.Address, address)
+	}
+	if got.deps.Proven {
+		t.Error("typing an address proved it; a named account is a view")
+	}
+}
+
+// An address that cannot be one is refused in place. The session stays on the
+// screen that can be typed at, because that is where the correction goes.
+func TestAnAddressThatCannotBeOneIsRefusedInPlace(t *testing.T) {
+	m := anonymousModel{
+		deps:   deps{Ledger: testLedger(t)},
+		width:  80,
+		height: 24,
+		typed:  "not-an-address",
+		notice: notice{},
+	}
+	next, _ := m.openAddress()
+	if _, ok := next.(model); ok {
+		t.Fatal("an invalid address opened an account")
+	}
+	got := next.(anonymousModel)
+	if got.notice.kind != noticeBad {
+		t.Errorf("refusing an invalid address said %+v", got.notice)
+	}
+}
+
+// The address row is always the last row and always reachable, and typing moves
+// the selection to it. A person who has started typing must not have to know
+// which row they were on, which is also why q types a q here instead of
+// quitting: it is a base58 character and the field is most of the screen.
+func TestTypingMovesTheSelectionToTheAddressRow(t *testing.T) {
+	key := &agent.Key{Format: gossh.KeyAlgoED25519, Comment: "me"}
+	m := anonymousModel{
+		deps:  deps{Ledger: testLedger(t)},
+		keys:  []*agent.Key{key},
+		width: 80, height: 24,
+	}
+	if m.rows() != 2 {
+		t.Fatalf("a screen with one key offers %d rows, want the key and the address", m.rows())
+	}
+
+	// Printable characters go to the field, wherever the selection was.
+	next, _ := m.onKey(tea.KeyPressMsg(tea.Key{Code: 'q', Text: "q"}))
+	m = next.(anonymousModel)
+	if m.typed != "q" {
+		t.Fatalf("typed %q, want q", m.typed)
+	}
+	if m.picked != m.addressRow() {
+		t.Errorf("typing left the selection on row %d, want the address row %d", m.picked, m.addressRow())
+	}
+
+	// Characters base58 leaves out never reach the field, so there is no state
+	// in which it holds something ValidateAddress is about to refuse.
+	for _, c := range []string{"0", "O", "I", "l", "-", " "} {
+		next, _ := m.onKey(tea.KeyPressMsg(tea.Key{Code: rune(c[0]), Text: c}))
+		m = next.(anonymousModel)
+		if m.typed != "q" {
+			t.Fatalf("typing %q changed the field to %q", c, m.typed)
+		}
+	}
+}
+
+// esc clears a field that has something in it and quits when it does not. The
+// asymmetry is the point: quitting by accident throws away what was typed.
+func TestEscapeClearsTheFieldBeforeItQuits(t *testing.T) {
+	esc := tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape})
+	m := anonymousModel{deps: deps{Ledger: testLedger(t)}, width: 80, height: 24, typed: "abc"}
+
+	next, cmd := m.onKey(esc)
+	if cmd != nil {
+		t.Error("escape quit a session that had an address typed into it")
+	}
+	m = next.(anonymousModel)
+	if m.typed != "" {
+		t.Errorf("escape left %q in the field", m.typed)
+	}
+	if _, cmd := m.onKey(esc); cmd == nil {
+		t.Error("escape on an empty field did not quit")
+	}
+}
+
+// ctrl+c is the only key that always quits, because on this screen almost
+// every other character is something to type.
+func TestControlCQuitsEvenMidAddress(t *testing.T) {
+	m := anonymousModel{deps: deps{Ledger: testLedger(t)}, width: 80, height: 24, typed: "abc"}
+	if _, cmd := m.onKey(tea.KeyPressMsg(tea.Key{Code: 'c', Mod: tea.ModCtrl})); cmd == nil {
+		t.Error("ctrl+c did not quit")
+	}
+}
+
 // The blob the agent protocol sends is the algorithm name and then the key
 // body, each under its own four-byte length. Reading it by hand and getting
 // that wrong means holding the wrong 32 bytes, and the failure has to be an

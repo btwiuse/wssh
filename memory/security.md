@@ -29,6 +29,31 @@ Changing it makes every client report a host key mismatch.
 appends it to `known_hosts`. `--insecure-host-key` skips this; the warning
 is real.
 
+## Every server learns which keys you have, and one flag stops it
+
+`publickey` auth puts the whole key blob in `SSH_MSG_USERAUTH_REQUEST` - type,
+bits, comment - once as a query (`have_signature=false`) and again in the signed
+offer. A server that refuses the `none` probe therefore gets every identity the
+client tries, in order, until one matches: the agent's keys and every
+`~/.ssh/id_*`. whoami.filippo.io is that, and no configuration stops it, because
+`ssh -A` was never the mechanism - `-A` moves no public key, it moves the ability
+to *sign*, which is the part actually worth protecting.
+
+The client-side lever is real and it works against any server:
+
+```
+ssh -o PubkeyAuthentication=no -o PreferredAuthentications=none host
+```
+
+Permission denied, nothing disclosed. Narrower but still authenticating:
+`-o IdentitiesOnly=yes -i ~/.ssh/one_key`. Narrowing what the agent holds
+(`ssh-add -d`) is the same lever for everything that reads the agent.
+
+There is no server-side equivalent, and that is the point to remember when
+reading a server's security notes: a server either refuses `none` and harvests
+keys, or accepts `none` and has no reason to ask for them. Those are not two
+settings, they are one.
+
 ## What keys reach the session
 
 `--agent-keys` on the server loads private keys (PEM, unencrypted) into an
