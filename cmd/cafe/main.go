@@ -112,5 +112,6 @@ private key stays on your machine and this server asks your agent to sign.`,
 	}
 
 	addServeFlags(cmd, opts)
+	cmd.AddCommand(newUpgradeCmd())
 	return cmd
 }
