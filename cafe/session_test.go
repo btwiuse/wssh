@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"charm.land/wish/v2"
 	"github.com/btwiuse/wssh"
 	"github.com/btwiuse/wssh/auth"
@@ -408,4 +410,78 @@ func TestThePackageCannotStartAProcess(t *testing.T) {
 			return true
 		})
 	}
+}
+
+// The refusal is the only thing a person sees when their key does not name an
+// account, and the two things that must survive it are the words and the
+// command. A half-printed command on a narrow terminal is the one thing this
+// screen must never do: it is what the person is about to copy.
+func TestRefusalStaysReadableAtAnyWidth(t *testing.T) {
+	const command = "ssh-keygen -t ed25519 -f ~/.ssh/routercafe -N ''"
+
+	for _, width := range []int{20, 40, 46, 60, 76, 100, 200} {
+		r := refuseModel{
+			reason: reasonText("not an ed25519 key: a ssh-rsa key is not an ed25519 public key"),
+			width:  width,
+		}
+		var screen tea.View
+		screen = r.View()
+
+		for _, line := range strings.Split(screen.Content, "\n") {
+			// A hard cut leaves no space in the tail; wrapping never does,
+			// and neither should a line that runs off the edge.
+			// A line may fill the terminal exactly; anything wider wraps.
+			if got := lipgloss.Width(stripForTest(line)); got > width {
+				t.Errorf("width %d: a line is %d columns wide: %q", width, got, line)
+			}
+		}
+
+		// Every word of the command is present, in order, once the screen's
+		// own line breaks are undone.
+		joined := strings.Join(strings.Fields(screen.Content), " ")
+		for _, word := range strings.Fields(command) {
+			if !strings.Contains(joined, word) {
+				t.Errorf("width %d: the command lost %q", width, word)
+			}
+		}
+	}
+}
+
+func TestBothRefusalsSaySomethingDifferent(t *testing.T) {
+	noKey := reasonText("no key on this connection")
+	wrongType := reasonText("not an ed25519 key: a ssh-rsa key is not an ed25519 public key")
+
+	if noKey == wrongType {
+		t.Fatal("a missing key and a key of the wrong type get the same text")
+	}
+	if !strings.Contains(noKey, "no key") {
+		t.Errorf("the missing-key text does not say what is missing: %q", noKey)
+	}
+	if !strings.Contains(wrongType, "ed25519") {
+		t.Errorf("the wrong-type text does not name what is wanted: %q", wrongType)
+	}
+	// Neither may promise something the product cannot do. A browser holding
+	// a wallet is not an SSH key and this screen is only reachable from one.
+	for _, text := range []string{noKey, wrongType} {
+		if strings.Contains(text, KeyCommand[:20]) {
+			t.Errorf("the screen is doing something unexpected: %q", text)
+		}
+	}
+}
+
+// stripForTest removes escape sequences so a width can be measured on the text.
+func stripForTest(s string) string {
+	var out strings.Builder
+	for i := 0; i < len(s); {
+		if s[i] == 0x1b {
+			for i < len(s) && s[i] != 'm' {
+				i++
+			}
+			i++
+			continue
+		}
+		out.WriteByte(s[i])
+		i++
+	}
+	return out.String()
 }

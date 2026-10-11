@@ -37,6 +37,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"charm.land/log/v2"
 	"charm.land/ssh"
 	"charm.land/wish/v2"
@@ -163,7 +164,7 @@ func (s *Server) newModel(sess ssh.Session) tea.Model {
 		// placeholder: an account is what a deposit credits and what a
 		// balance belongs to, and a session with neither must not be handed a
 		// UI showing zeros it might act on.
-		return refuseModel{refusal}
+		return refuseModel{reason: refusal, width: 80}
 	}
 
 	sockPath, _ := sess.Context().Value(agentkey.SSHAuthSockKey).(string)
@@ -217,33 +218,48 @@ func AccountFor(pub gossh.PublicKey, walletAddress string) (string, string) {
 		return wallet, ""
 	}
 	if pub == nil {
-		// No key and no wallet: the connection got through unauthenticated.
-		// That cannot happen while a key handler is installed, so it is said
-		// as what it is rather than assumed to be a key that is not there.
-		return "", "this connection did not authenticate with a key, so it names no account"
+		// No key and no wallet. This cannot happen while a key handler is
+		// installed, so it is said as what it is rather than assumed to be a
+		// key that is not there.
+		//
+		// Which is also the one case that cannot reach here at all: a
+		// connection with no key is refused during authentication, because
+		// letting it past would mean accepting everyone on every key's
+		// account. See AccountFor's caller for the reasoning.
+		return "", reasonText("no key on this connection")
 	}
 	address, err := solana.AddressFor(pub)
 	if err != nil {
-		return "", "this session has no account: " + err.Error() +
-			"\n\nRouterCafe accounts are Solana accounts, and an account address is an " +
-			"ed25519 public key. Make one with 'ssh-keygen -t ed25519' and connect with it."
+		return "", reasonText("not an ed25519 key: " + err.Error())
 	}
 	return address, ""
 }
 
-// refuseModel is what a session with no account gets: one screen, one key, and
-// an exit.
+// refuseModel is what a session with no account gets: what went wrong, the
+// command that fixes it, and a key that leaves.
 //
-// A plain program rather than a TUI, because there is nothing to browse and a
-// full-screen UI for an error is a worse way to be told something than a line
-// of text.
-type refuseModel struct{ reason string }
+// A plain program rather than the full-screen one, because there is nothing to
+// browse and a whole terminal UI for an error is a worse way to be told
+// something than a few lines of text.
+//
+// The wording is broken into short lines on purpose. A single long sentence
+// handed to a narrow terminal is hard-wrapped by the terminal itself, with no
+// indent and in the middle of words, which is indistinguishable from the UI
+// having crashed - which is the impression this screen most needs not to give.
+type refuseModel struct {
+	reason string
+	width  int
+}
 
 func (r refuseModel) Init() tea.Cmd { return nil }
 
 func (r refuseModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if key, ok := msg.(tea.KeyPressMsg); ok {
-		switch key.String() {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		r.width = msg.Width
+		return r, nil
+	case tea.KeyPressMsg:
+		switch msg.String() {
 		case "q", "ctrl+c", "esc", "enter":
 			return r, tea.Quit
 		}
@@ -253,8 +269,115 @@ func (r refuseModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (r refuseModel) View() tea.View {
 	st := newStyles()
-	return tea.NewView("\n  " + st.brand.Render("RouterCafe") + "\n\n  " +
-		st.errText.Render(r.reason) + "\n\n  " + st.dim.Render("press q to disconnect") + "\n")
+	width := r.width
+	if width <= 0 {
+		// A session that never reported a size: the common default rather
+		// than a guess, and wide enough that nothing is cut.
+		width = 80
+	}
+	var b strings.Builder
+	b.WriteString("\n  " + st.brand.Render("RouterCafe") + "\n\n")
+	b.WriteString(wrapText(r.reason, width, st.errText))
+	b.WriteString("\n")
+	b.WriteString(wrapText("make a key, then connect with it:", width, st.title))
+	b.WriteString("\n\n")
+	b.WriteString(wrapText(KeyCommand, width, st.accent))
+	b.WriteString("\n\n")
+	b.WriteString(wrapText("then:", width, st.title))
+	b.WriteString("\n\n")
+	b.WriteString(wrapText("ssh -A -i ~/.ssh/routercafe "+Domain, width, st.accent))
+	b.WriteString("\n\n")
+	b.WriteString(wrapText("press q to disconnect", width, st.dim))
+	b.WriteString("\n")
+	return tea.NewView(b.String())
+}
+
+// KeyCommand is the line that fixes it, and the line after it that uses it.
+//
+// Shown whenever a session names no account, because a person who just typed
+// ssh and got this screen wants to know what to type next rather than a
+// paragraph about why ed25519 and Solana are the same thing. Wrapped to the
+// terminal like everything else here, so a narrow window cuts nothing: a
+// half-printed command is the one thing this screen must never show.
+const KeyCommand = "ssh-keygen -t ed25519 -f ~/.ssh/routercafe -N ''"
+
+// reasonText turns a refusal into the sentence the person reads.
+//
+// Both cases are written out rather than derived, because each half of it is
+// advice and the advice differs: no key at all is a missing step, while a key
+// of the wrong type is a step that has to be redone differently. Both end on
+// the same two commands.
+func reasonText(reason string) string {
+	switch {
+	case strings.HasPrefix(reason, "no key on this connection"):
+		return "This connection carried no key.\n\n" +
+			"An account here is an ed25519 public key, so the key you connect\n" +
+			"with is the account your balance belongs to. Nothing here can\n" +
+			"guess which one you meant."
+	case strings.HasPrefix(reason, "not an ed25519 key:"):
+		return "This key does not name an account.\n\n" +
+			"An account is exactly an ed25519 public key. An RSA or ECDSA\n" +
+			"key is not one and cannot be turned into one, so this session\n" +
+			"has nothing to show you and nothing to charge."
+	default:
+		return reason
+	}
+}
+
+// wrapText breaks styled text into lines that fit width, indented to match the
+// rest of the interface, and re-styled line by line.
+//
+// Broken on a space where there is one and on a character where there is not,
+// so an address or a command survives being narrow even though a sentence
+// does not have to. The main screen wraps the same way for the same reason.
+func wrapText(s string, width int, style lipgloss.Style) string {
+	avail := width - 2
+	if avail < 12 {
+		avail = 12
+	}
+	var out strings.Builder
+	for _, paragraph := range strings.Split(s, "\n") {
+		lines := wrapWords(paragraph, avail)
+		if len(lines) == 0 {
+			out.WriteString("\n")
+			continue
+		}
+		for _, line := range lines {
+			out.WriteString("  " + style.Render(line) + "\n")
+		}
+	}
+	return strings.TrimRight(out.String(), "\n")
+}
+
+// wrapWords is a plain-text wrapper: greedy, and never losing a word.
+func wrapWords(s string, width int) []string {
+	words := strings.Fields(s)
+	if len(words) == 0 {
+		return nil
+	}
+	var out []string
+	line := ""
+	for _, word := range words {
+		switch {
+		case line == "":
+			line = word
+		case len(line)+1+len(word) <= width:
+			line += " " + word
+		default:
+			out = append(out, line)
+			line = word
+		}
+		// A single word longer than the line is cut rather than dropped, so
+		// a very narrow terminal shows a mangled path instead of none.
+		for len(line) > width {
+			out = append(out, line[:width])
+			line = line[width:]
+		}
+	}
+	if line != "" {
+		out = append(out, line)
+	}
+	return out
 }
 
 // DepositContext is the context a session's deposits run under.
