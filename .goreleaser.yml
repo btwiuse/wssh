@@ -59,16 +59,44 @@ builds:
     ldflags:
       - -s -w -X main.version={{ .Version }} -X main.commit={{ .FullCommit }}
 
+# One archive entry per build, rather than one entry naming all three.
+#
+# With a single entry naming every build, goreleaser archived one build and
+# left the other two as loose binaries on the release - the snapshots here
+# produced twelve binaries and four archives. One entry per build says which
+# archive belongs to which binary, and the name carries it either way.
+#
+# One binary per archive, at the top level inside it: that is what
+# selfupdate.UpdateTo looks for when it unpacks.
 archives:
-  - id: binaries
-    ids:
-      - wssh
-      - sol-tx
-      - sol-keys
+  - id: wssh
+    ids: [wssh]
     formats: [tar.gz]
-    # One archive, one binary at the top level inside it: that is what
-    # selfupdate.UpdateTo looks for when it unpacks.
     name_template: "{{ .Binary }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    # The binary, plus a licence if the repository ever grows one. An empty
+    # list does not mean "none" here: goreleaser falls back to its defaults,
+    # which include every README*, and the README in this repository is a
+    # note to self rather than documentation - it has no business in a
+    # published archive.
+    files:
+      - src: license*
+      - src: LICENSE*
+
+  - id: sol-tx
+    ids: [sol-tx]
+    formats: [tar.gz]
+    name_template: "{{ .Binary }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - src: license*
+      - src: LICENSE*
+
+  - id: sol-keys
+    ids: [sol-keys]
+    formats: [tar.gz]
+    name_template: "{{ .Binary }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - src: license*
+      - src: LICENSE*
 
 checksum:
   name_template: checksums.txt
