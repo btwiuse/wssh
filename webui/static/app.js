@@ -205,13 +205,18 @@ function App() {
   const [listOpen, setListOpen] = useState(false);
   const [credsOpen, setCredsOpen] = useState(false);
   const [connectOpen, setConnectOpen] = useState(false);
+  // What the credentials panel is holding, so the button that opens it can say
+  // so without opening it. A count, because every enabled key is offered rather
+  // than one being selected - naming a single key would be a claim this page
+  // does not make.
+  const [creds, setCreds] = useState({ keys: [], passwords: [] });
   const [saved, setSaved] = useState(savedEndpoints);
   const [editing, setEditing] = useState(null); // the entry being renamed
   const [editValue, setEditValue] = useState('');
 
   // Anything that opens on a click closes when the click lands somewhere else.
   //
-  // This is one listener for all three rather than three onBlur handlers,
+  // This is one listener for both rather than two onBlur handlers,
   // because onBlur answers the wrong question. Focus and the pointer are
   // different things: clicking a blank part of the page can move focus, can
   // leave it where it was, or can land on a node that was never focusable at
@@ -223,15 +228,19 @@ function App() {
   // A single document-level pointerdown, asked whether the event is inside the
   // panel, covers every one of those: anywhere outside closes, anywhere inside
   // does not, and no amount of focus trickery changes the answer.
-  const listPanel = useRef(null);
+  // Only two panels now: the address list moved inside the Connect panel, so
+  // closing that one takes the list with it and the list needs no test of its
+  // own.
   const credsPanel = useRef(null);
   const connectPanel = useRef(null);
 
   useEffect(() => {
     const dismiss = (e) => {
-      if (listPanel.current && !listPanel.current.contains(e.target)) setListOpen(false);
       if (credsPanel.current && !credsPanel.current.contains(e.target)) setCredsOpen(false);
-      if (connectPanel.current && !connectPanel.current.contains(e.target)) setConnectOpen(false);
+      if (connectPanel.current && !connectPanel.current.contains(e.target)) {
+        setConnectOpen(false);
+        setListOpen(false);
+      }
     };
     document.addEventListener('pointerdown', dismiss, true);
     return () => document.removeEventListener('pointerdown', dismiss, true);
@@ -330,6 +339,18 @@ function App() {
   const [wallet, setWallet] = useState(null);
   const walletRef = useRef(null);
   const walletBusy = useRef(false);
+
+  // What sits beside the key on the credentials button: "2 keys", or a
+  // password count as well once there is one. Empty when there is nothing,
+  // because a zero is a thing to say and a "0" on a button is noise.
+  const credsSummary = useMemo(() => {
+    const parts = [];
+    if (creds.keys.length === 1) parts.push(creds.keys[0].name || '1 key');
+    else if (creds.keys.length > 1) parts.push(`${creds.keys.length} keys`);
+    if (creds.passwords.length === 1) parts.push('1 password');
+    else if (creds.passwords.length > 1) parts.push(`${creds.passwords.length} passwords`);
+    return parts.join(' · ');
+  }, [creds]);
 
   // Agent forwarding is the browser's ssh -A: on by default, because a session
   // that cannot ask the page to sign is a session where half the tools on it
@@ -711,119 +732,39 @@ function App() {
   return html`
     <div class="h-full flex flex-col">
       <header class="flex items-center gap-2 px-4 py-2 bg-slate-900 border-b border-slate-800">
-        <span class="font-semibold tracking-tight shrink-0">wssh</span>
-        <label class="sr-only" for="endpoint">WebSocket address</label>
-        <div class="flex-1 min-w-0 flex">
-          <div
-            ref=${listPanel}
-            class="relative flex-1 min-w-0"
-          >
-            <input
-              id="endpoint"
-              class="w-full min-w-0 bg-slate-800 border border-slate-700 rounded-l px-2 py-1
-                     font-mono text-xs focus:outline-none focus:border-emerald-500
-                     disabled:opacity-50"
-              value=${endpoint}
-              spellcheck="false"
-              autocomplete="off"
-              title="WebSocket address of the wssh server to connect to"
-              disabled=${connected || status === 'connecting'}
-              onInput=${(e) => { onEndpointChange(e.target.value); setFilter(e.target.value); setListOpen(true); }}
-              onFocus=${() => { setFilter(''); setListOpen(true); }}
-              onKeyDown=${onKeyDown}
-            />
-        ${listOpen && saved.length > 0 && html`
-          <div
-            class="absolute z-20 top-full mt-1 w-full max-h-72 overflow-y-auto rounded
-                   border border-slate-700 bg-slate-900 shadow-xl"
-          >
-            ${visible.length === 0 && html`
-              <div class="px-3 py-2 text-xs text-slate-500">nothing remembered yet</div>`}
-            ${visible.map((entry) => html`
-              <div
-                key=${entry}
-                class="group flex items-center gap-1 px-1 hover:bg-slate-800"
-              >
-                ${editing === entry
-                  ? html`<input
-                      class="flex-1 min-w-0 bg-slate-950 border border-emerald-600 rounded
-                             px-2 py-1 font-mono text-xs focus:outline-none"
-                      value=${editValue}
-                      autoFocus
-                      spellcheck="false"
-                      autocomplete="off"
-                      title="Enter saves, Escape cancels"
-                      onFocus=${(e) => e.target.select()}
-                      onInput=${(e) => setEditValue(e.target.value)}
-                      onKeyDown=${(e) => {
-                        if (e.key === 'Enter') commitRename();
-                        if (e.key === 'Escape') cancelRename();
-                      }}
-                    />
-                    <button
-                      class="px-1.5 py-1 text-xs text-emerald-400 hover:text-emerald-300"
-                      title="Save this address"
-                      onClick=${commitRename}
-                    >✓</button>
-                    <button
-                      class="px-1.5 py-1 text-xs text-slate-500 hover:text-slate-200"
-                      title="Cancel"
-                      onClick=${cancelRename}
-                    >✗</button>`
-                  : html`<button
-                      class="flex-1 min-w-0 text-left px-2 py-1 font-mono text-xs
-                             truncate text-slate-300 hover:text-emerald-300"
-                      title=${entry}
-                      onClick=${() => chooseEndpoint(entry)}
-                    >${entry}</button>
-                    <button
-                      class="px-1.5 py-1 text-xs text-slate-500 hover:text-emerald-300"
-                      title="Rename"
-                      onClick=${() => { setEditing(entry); setEditValue(entry); }}
-                    >✎</button>
-                    <button
-                      class="px-1.5 py-1 text-xs text-slate-500 hover:text-red-400"
-                      title="Forget"
-                      onClick=${() => {
-                        forgetEndpoint(entry);
-                        refresh(store.getList(ENDPOINTS_KEY));
-                      }}
-                    >✕</button>`}
-              </div>`)}
-          </div>`}
-          </div>
-          <button
-            class="shrink-0 px-2 bg-slate-800 border border-l-0 border-slate-700 rounded-r
-                   text-slate-400 hover:text-slate-200 hover:bg-slate-700 disabled:opacity-50"
-            title="Remembered addresses"
-            disabled=${connected || status === 'connecting'}
-            onMouseDown=${(e) => e.preventDefault()}
-            onClick=${() => { setFilter(''); setListOpen((open) => !open); }}
-          >▾</button>
-
-        </div>
+        <!--
+          The dot leads the bar rather than trailing it. A connection's state
+          is the one thing on this page that is true before anything is typed,
+          and the far corner is the first place the eye lands - which is the
+          opposite of where a reader looks last, among buttons that all mean
+          "set something up".
+        -->
         <button
-          class="px-2 py-1 text-xs rounded bg-slate-800 hover:bg-slate-700 text-slate-300
-                 disabled:opacity-50"
-          title="Point back at this page's own server"
-          disabled=${connected || status === 'connecting'}
-          onClick=${resetEndpoint}>reset</button>
+          type="button"
+          class="shrink-0 w-4 h-4 rounded-full ${statusInfo.dot} ${status === 'connecting' ? 'animate-pulse' : ''}
+                 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2
+                 focus:ring-offset-slate-950"
+          title=${statusInfo.label}
+          aria-label=${`Session status: ${statusInfo.label}`}
+        ></button>
+        <span class="font-semibold tracking-tight shrink-0">wssh</span>
         <div
           ref=${credsPanel}
-          class="relative shrink-0"
+          class="relative shrink-0 ml-auto"
         >
           <button
-            class="px-2 py-1 text-xs rounded bg-slate-800 hover:bg-slate-700 text-slate-300
-                   disabled:opacity-50"
+            class="flex items-center gap-1 px-2 py-1 text-xs rounded bg-slate-800
+                   hover:bg-slate-700 text-slate-300 disabled:opacity-50"
             title="Keys and passwords to authenticate with"
             disabled=${connected || status === 'connecting'}
             onMouseDown=${(e) => e.preventDefault()}
             onClick=${() => setCredsOpen((open) => !open)}
-          >🔑</button>
+          >🔑${credsSummary && html`<span class="text-slate-400">${credsSummary}</span>`}</button>
           ${credsOpen && html`
             <${CredentialsPanel}
               workerRef=${workerRef}
               onClose=${() => setCredsOpen(false)}
+              onChange=${setCreds}
             />`}
         </div>
         ${wallet
@@ -834,7 +775,7 @@ function App() {
               disabled=${connected || status === 'connecting'}
               title="Sign for this session with the connected wallet. The key stays in the extension."
               onClick=${disconnectWallet}>
-              ${wallet.address.slice(0, 4)}…${wallet.address.slice(-4)}
+              🪙<span class="font-mono text-slate-400">${wallet.address.slice(0, 4)}…${wallet.address.slice(-4)}</span>
             </button>`
           : html`<button
               class="px-2 py-1 text-xs rounded bg-slate-800 border border-slate-700
@@ -842,26 +783,8 @@ function App() {
               disabled=${connected || status === 'connecting'}
               title="Use a browser wallet's key for this session. It signs on request; the key itself never leaves the extension."
               onClick=${connectWallet}>
-              connect wallet
+              🪙
             </button>`}
-        <label
-          class="flex items-center gap-1 text-xs text-slate-400 shrink-0 select-none
-                 ${connected ? 'opacity-50' : ''}"
-          title="Let the remote side ask these keys to sign. The keys stay in this page;
-only signatures come back, and every signature asks you first."
-        >
-          <input
-            type="checkbox"
-            class="accent-emerald-500"
-            checked=${forwardAgent}
-            disabled=${connected || status === 'connecting'}
-            onChange=${(e) => {
-              setForwardAgent(e.target.checked);
-              store.set('wssh.forwardAgent', e.target.checked ? 'true' : 'false');
-            }}
-          />
-          forward agent
-        </label>
         ${connected || status === 'connecting'
           ? html`<button
               class="px-3 py-1 text-sm rounded bg-slate-700 hover:bg-slate-600 shrink-0"
@@ -885,6 +808,7 @@ only signatures come back, and every signature asks you first."
           <button
             class="px-3 py-1 text-sm rounded-l bg-emerald-600 hover:bg-emerald-500
                    text-slate-900 font-medium"
+            title=${`Connect to ${endpoint}`}
             onClick=${connect}>Connect</button>
           <button
             class="px-2 py-1 text-sm rounded-r bg-emerald-600 hover:bg-emerald-500
@@ -896,9 +820,89 @@ only signatures come back, and every signature asks you first."
           >▾</button>
           ${connectOpen && html`
             <div
-              class="absolute right-0 top-full z-20 mt-1 w-80 rounded border border-slate-700
+              class="absolute right-0 top-full z-20 mt-1 w-96 rounded border border-slate-700
                      bg-slate-900 shadow-xl p-3 space-y-3"
             >
+              <div>
+                <label class="block text-xs text-slate-400 mb-1" for="endpoint">
+                  server
+                </label>
+                <div class="flex">
+                  <input
+                    id="endpoint"
+                    class="flex-1 min-w-0 bg-slate-800 border border-slate-700 rounded-l px-2 py-1
+                           font-mono text-xs focus:outline-none focus:border-emerald-500
+                           disabled:opacity-50"
+                    value=${endpoint}
+                    spellcheck="false"
+                    autocomplete="off"
+                    title="WebSocket address of the wssh server to connect to"
+                    disabled=${connected || status === 'connecting'}
+                    onInput=${(e) => { onEndpointChange(e.target.value); setFilter(e.target.value); setListOpen(true); }}
+                    onFocus=${() => { setFilter(''); setListOpen(true); }}
+                    onKeyDown=${onKeyDown}
+                  />
+                  <button
+                    class="shrink-0 px-2 bg-slate-800 border border-l-0 border-slate-700 rounded-r
+                           text-slate-400 hover:text-slate-200 hover:bg-slate-700 disabled:opacity-50"
+                    title="Remembered addresses"
+                    disabled=${connected || status === 'connecting'}
+                    onMouseDown=${(e) => e.preventDefault()}
+                    onClick=${() => { setFilter(''); setListOpen((open) => !open); }}
+                  >▾</button>
+                </div>
+                ${listOpen && html`
+                  <div class="mt-1 max-h-48 overflow-y-auto rounded border border-slate-800 bg-slate-950">
+                    ${visible.length === 0 && html`
+                      <div class="px-3 py-2 text-xs text-slate-500">nothing remembered yet</div>`}
+                    ${visible.map((entry) => html`
+                      <div key=${entry} class="group flex items-center gap-1 px-1 hover:bg-slate-800">
+                        ${editing === entry
+                          ? html`<input
+                              class="flex-1 min-w-0 bg-slate-900 border border-emerald-600 rounded
+                                     px-2 py-1 font-mono text-xs focus:outline-none"
+                              value=${editValue}
+                              autoFocus
+                              spellcheck="false"
+                              autocomplete="off"
+                              title="Enter saves, Escape cancels"
+                              onFocus=${(e) => e.target.select()}
+                              onInput=${(e) => setEditValue(e.target.value)}
+                              onKeyDown=${(e) => {
+                                if (e.key === 'Enter') commitRename();
+                                if (e.key === 'Escape') cancelRename();
+                              }}
+                            >`
+                          : html`<button
+                              class="flex-1 min-w-0 text-left px-2 py-1 font-mono text-xs truncate
+                                     text-slate-300 hover:text-emerald-300"
+                              title=${entry}
+                              onClick=${() => chooseEndpoint(entry)}
+                            >${entry}</button>
+                            <button
+                              class="px-1.5 py-1 text-xs text-slate-500 hover:text-emerald-300"
+                              title="Rename"
+                              onClick=${() => { setEditing(entry); setEditValue(entry); }}
+                            >✎</button>
+                            <button
+                              class="px-1.5 py-1 text-xs text-slate-500 hover:text-red-400"
+                              title="Forget"
+                              onClick=${() => {
+                                forgetEndpoint(entry);
+                                refresh(store.getList(ENDPOINTS_KEY));
+                              }}
+                            >✕</button>`}
+                      </div>`)}
+                  </div>`}
+                <div class="mt-1">
+                  <button
+                    class="w-full text-left px-2 py-1 text-xs text-slate-400 hover:bg-slate-800
+                           hover:text-slate-200 disabled:opacity-50 rounded"
+                    title="Point back at this page's own server"
+                    disabled=${connected || status === 'connecting'}
+                    onClick=${resetEndpoint}>use this page's own server</button>
+                </div>
+              </div>
               <div>
                 <label class="block text-xs text-slate-400 mb-1" for="user">
                   user
@@ -936,21 +940,34 @@ only signatures come back, and every signature asks you first."
                 These are remembered for next time. The address and the keys are
                 the part that changes; these two are not.
               </p>
+              <div class="border-t border-slate-800 pt-3">
+                <label
+                  class="flex items-start gap-2 text-xs text-slate-400 select-none cursor-pointer"
+                  title="Let the remote side ask these keys to sign. The keys stay in this
+page; only signatures come back, and every signature asks you first."
+                >
+                  <input
+                    type="checkbox"
+                    class="mt-0.5 accent-emerald-500"
+                    checked=${forwardAgent}
+                    onChange=${(e) => {
+                      setForwardAgent(e.target.checked);
+                      store.set('wssh.forwardAgent', e.target.checked ? 'true' : 'false');
+                    }}
+                  />
+                  <span>
+                    forward agent
+                    <span class="block text-slate-500 leading-relaxed mt-0.5">
+                      Let the remote side ask these keys to sign. They stay in
+                      this page; only signatures come back, and every one asks
+                      you first.
+                    </span>
+                  </span>
+                </label>
+              </div>
             </div>`}
         </div>`}
-        <!--
-          The label lives in the title rather than on screen. A button with a
-          tooltip is also a button a keyboard can reach, so the state is
-          announced rather than being a picture only sighted users can read.
-        -->
-        <button
-          type="button"
-          class="shrink-0 w-4 h-4 rounded-full ${statusInfo.dot} ${status === 'connecting' ? 'animate-pulse' : ''}
-                 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2
-                 focus:ring-offset-slate-950"
-          title=${statusInfo.label}
-          aria-label=${`Session status: ${statusInfo.label}`}
-        ></button>
+
       </header>
 
       ${error && html`

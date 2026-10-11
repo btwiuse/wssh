@@ -239,7 +239,7 @@ export function credentialsForConnect(forwardAgent = false, walletPublicKey = ''
 
 // --- panel ------------------------------------------------------------------
 
-export function CredentialsPanel({ workerRef, onClose }) {
+export function CredentialsPanel({ workerRef, onClose, onChange }) {
   const [keys, setKeys] = useState(() => readKeys());
   const [passwords, setPasswords] = useState(() => readPasswords());
   const [remember, setRemember] = useState(() => isRemembering());
@@ -248,6 +248,14 @@ export function CredentialsPanel({ workerRef, onClose }) {
   const [keyType, setKeyType] = useState('ed25519');
   const [status, setStatus] = useState('');
   const pending = useRef(null);
+
+  // Tell the page what is loaded, so the button that opened this panel can say
+  // so too. An effect rather than a call at each mutation because the worker
+  // answers asynchronously and there are five places that change the list -
+  // a fifth that forgets to report is a button that lies.
+  useEffect(() => {
+    onChange?.({ keys, passwords });
+  }, [keys, passwords, onChange]);
 
   // The worker answers asynchronously, so results are matched back by hand.
   useEffect(() => {
