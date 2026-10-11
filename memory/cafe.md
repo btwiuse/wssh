@@ -442,11 +442,8 @@ bar of all five and highlights the one you are on, and `tab` walks it:
               ╭─────────╮╭──────────╮╭────────╮╭──────╮
   RouterCafe  │ deposit ││ api keys ││ models ││ help │                          router.cafe 0.1.6
 ┌─────────────┴─────────┴┴──────────┴┴────────┴┴──────┴────────────────────────────────────────────┐
-│                         ████            █             ███       ██      │
-│                         █  █  ██  █  █ ██   ███  ███ █     ██  ██   ███ │
-│                         █  █ █  █ █  █ █  █ █  █ █   █     ███ ██   █  █│
-│                         ████ █  █ █  █ █  █ ████ █   █    █  █ █    ████│
-│                        █   █  ██   ██   ██   ██  █    ███  ██  █     ██ │
+│                                          ▄▄▄   ▄▄▃   ▄▄▃                 │
+│                                       █▀▀▀▀▀▀▀▀▀▀▀▀▀▄▄▄▄▄                 │
 │  account    6YSosJgvtiXpLMyhcm7q77AngnrjxurFfyoLijAsrUKL  gear@gear.local  proven
 │  balance    $0.00                                                                                │
 │                                                                                                  │
@@ -608,7 +605,18 @@ area rather than worked out from the position - a bar whose clicks are indexed
 against `screens` navigates to the wrong page the moment anything is added to
 either side of the tabs.
 
-**The wordmark is drawn in `█` and a space, and nothing else.**
+**The mark is the cup, not the name.** The name is on the bar at the top of
+every screen, twenty-two columns above it, and a wordmark underneath is the
+same eight letters again. The cup is the thing the page is about - money, and
+what it is spent on - and it is a picture, so it reads as fast as a picture
+does.
+
+It is the favicon, `cmd/cafe/static/favicon-256.png`, **fitted by hand rather
+than sampled out of the PNG**. Sampling is the obvious way and it came out
+appalling: the grid has to be half as fine as the terminal's cells are tall,
+and at twenty-one columns what comes out is a smear rather than a cup.
+
+**The wordmark before it was drawn in `█` and a space, and nothing else.**
 
 Four versions of it came first, all of them figlet: `smshadow`, `big`, and the
 default face. Each had a byte-for-byte test behind it saying the drawn mark was
@@ -623,7 +631,7 @@ rendering problem as a typeface problem, which is what the byte test was
 specifically there to rule out and did not, because the bytes were always
 right.
 
-Blocks are two cells that tile in any monospace font there is, so the word reads
+Blocks are two cells that tile in any monospace font there is, so it reads
 everywhere. It is also how `crush` draws its own wordmark, which is where the
 idea came from, and it suits a program whose whole chrome is `─│┌┐└┘├┤` anyway.
 

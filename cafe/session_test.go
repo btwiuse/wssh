@@ -1488,7 +1488,7 @@ func TestClickingTheWordmarkGoesHome(t *testing.T) {
 	// And it is gone on a terminal with no room for it, with nothing left
 	// behind pretending otherwise.
 	small := m
-	small.width = 40
+	small.width = 24
 	_, now := small.frame()
 	if now.mark != (box{}) {
 		t.Error("a wordmark that was not drawn is still clickable")
@@ -2188,7 +2188,7 @@ func TestTheNameIsATabAndTheAddressIsSetIn(t *testing.T) {
 	for _, page := range m.screenList() {
 		shown := m.show(page)
 		content, where := shown.frame()
-		drawn := strings.Contains(stripForTest(content), "████")
+		drawn := strings.Contains(stripForTest(content), "▐█▌")
 		if drawn != (page == screenHome) {
 			t.Errorf("%s draws the wordmark: %v, want it on home only", pageName(page), drawn)
 		}
