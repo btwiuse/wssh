@@ -630,6 +630,17 @@ cup is on the one page that has something to show instead of a name, and the
 other four show their contents. A title line and its blank underneath are two
 lines of every screen spent on something the chrome is already saying.
 
+The caption under it is **centred**, and the page starts on it. The mark is
+the first thing on the page and it takes no blank above it, because a picture
+against the top of a frame is a masthead and a picture with air above it is a
+diagram - and that also gives the export lines their two lines back on a
+thirty-row terminal, which they had stopped fitting on.
+
+The caption is centred rather than set in like everything else because it
+belongs to the cup rather than to the page: cup centred, caption centred, and
+the account underneath is the first thing on the screen that is only text.
+
+
 It is the favicon, `cmd/cafe/static/favicon-256.png`, **drawn rather than
 sampled out of the PNG**. Sampling is what a person reaches for and it comes
 out appalling: the grid has to be half as fine as the terminal's cells are
