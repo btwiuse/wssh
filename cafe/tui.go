@@ -325,6 +325,11 @@ func newStyles(dark bool) styles {
 	if !dark {
 		return lightStyles()
 	}
+	// barEdge is the one colour every line of the frame is drawn in: the box's
+	// own walls, the tab run's bottom edge, and the run of edge beside it. One
+	// value rather than three, because a frame whose lid is a different colour
+	// from its sides does not read as a frame.
+	barEdge := lipgloss.Color("#94a3b8")
 	return styles{
 		brand:      lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#34d399")),
 		brandDim:   lipgloss.NewStyle().Foreground(lipgloss.Color("#94a3b8")),
@@ -341,9 +346,9 @@ func newStyles(dark bool) styles {
 		box:        lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#1e293b")).Padding(0, 1),
 		homeIdle:   lipgloss.NewStyle().Foreground(lipgloss.Color("#94a3b8")),
 		homeActive: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#34d399")),
-		tabIdle:    lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color("#94a3b8")).Border(tabBorderWithBottom("\u2534", "\u2500", "\u2534"), true),
+		tabIdle:    lipgloss.NewStyle().Padding(0, 1).Foreground(barEdge).Border(tabBorderWithBottom("\u2534", "\u2500", "\u2534"), true),
 		tabActive:  lipgloss.NewStyle().Padding(0, 1).Bold(true).Foreground(lipgloss.Color("#34d399")).Border(tabBorderWithBottom("\u2518", " ", "\u2514"), true),
-		window:     lipgloss.NewStyle().Border(lipgloss.NormalBorder(), true).UnsetBorderTop().BorderForeground(lipgloss.Color("#475569")),
+		window:     lipgloss.NewStyle().Border(lipgloss.NormalBorder(), true).UnsetBorderTop().BorderForeground(barEdge),
 		idle:       lipgloss.NewStyle().Foreground(lipgloss.Color("#cbd5e1")),
 		// The caret is reversed video on both backgrounds rather than a colour
 		// of its own: a block of inverted cells reads the same either way, and
@@ -357,6 +362,7 @@ func newStyles(dark bool) styles {
 // saturated than the dark set for the same reason: on white, a colour that
 // reads as "dim" against black reads as "invisible".
 func lightStyles() styles {
+	barEdge := lipgloss.Color("#64748b")
 	return styles{
 		brand:      lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#047857")),
 		brandDim:   lipgloss.NewStyle().Foreground(lipgloss.Color("#64748b")),
@@ -373,9 +379,9 @@ func lightStyles() styles {
 		box:        lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#cbd5e1")).Padding(0, 1),
 		homeIdle:   lipgloss.NewStyle().Foreground(lipgloss.Color("#64748b")),
 		homeActive: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#047857")),
-		tabIdle:    lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color("#64748b")).Border(tabBorderWithBottom("\u2534", "\u2500", "\u2534"), true),
+		tabIdle:    lipgloss.NewStyle().Padding(0, 1).Foreground(barEdge).Border(tabBorderWithBottom("\u2534", "\u2500", "\u2534"), true),
 		tabActive:  lipgloss.NewStyle().Padding(0, 1).Bold(true).Foreground(lipgloss.Color("#047857")).Border(tabBorderWithBottom("\u2518", " ", "\u2514"), true),
-		window:     lipgloss.NewStyle().Border(lipgloss.NormalBorder(), true).UnsetBorderTop().BorderForeground(lipgloss.Color("#94a3b8")),
+		window:     lipgloss.NewStyle().Border(lipgloss.NormalBorder(), true).UnsetBorderTop().BorderForeground(barEdge),
 		idle:       lipgloss.NewStyle().Foreground(lipgloss.Color("#475569")),
 		caret:      lipgloss.NewStyle().Bold(true).Reverse(true).Foreground(lipgloss.Color("#0f172a")).Background(lipgloss.Color("#38bdf8")),
 		dark:       false,

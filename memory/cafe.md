@@ -724,6 +724,14 @@ Two things are deliberately not per-session:
   only thing they draw that has to read either way is the cursor marker, which
   is the same on both.
 
+**One colour for the whole frame.** The lid, the sides and the foot are the
+same line of the drawing, and `barEdge` is the single value all three come from
+- the box's border foreground, the tab run's bottom edge, and the run of edge
+beside it. A lid in a different colour from its own sides reads as a rule laid
+over a box rather than as a box, and the difference is invisible on a terminal
+where the two happen to be close and glaring on one where they are not. It was
+`#475569` against the bar's `#94a3b8`.
+
 Per model rather than per process, because two sessions on two terminals with
 opposite backgrounds are two sessions with opposite palettes.
 

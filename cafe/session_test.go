@@ -1751,6 +1751,15 @@ func TestEveryColourReadsAgainstTheBackgroundItIsFor(t *testing.T) {
 				t.Errorf("%s background %s: %s is %.1f:1, want at least 4.5:1", paletteName(bg.dark), bg.name, swatch.what, got)
 			}
 		}
+		// One colour for the whole frame. The lid, the sides and the foot are
+		// the same line of the drawing, and a lid in a different colour from its
+		// own sides reads as a rule laid over a box rather than as a box - which
+		// is invisible on a terminal where the two are close and glaring on one
+		// where they are not.
+		if got := st.window.GetBorderTopForeground(); got != st.tabIdle.GetForeground() {
+			t.Errorf("%s background: the frame's edges are %v and its bar's are %v", paletteName(bg.dark), got, st.tabIdle.GetForeground())
+		}
+
 		// The frame's own edges are allowed to be quiet - they are not text -
 		// but they have to be visible, or the frame is not a frame.
 		if got := contrast(st.window.GetBorderTopForeground(), lipgloss.Color(bg.hex)); got < 1.6 {
