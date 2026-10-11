@@ -346,10 +346,20 @@ func newStyles(dark bool) styles {
 		box:        lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#1e293b")).Padding(0, 1),
 		homeIdle:   lipgloss.NewStyle().Foreground(lipgloss.Color("#94a3b8")),
 		homeActive: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#34d399")),
-		tabIdle:    lipgloss.NewStyle().Padding(0, 1).Foreground(barEdge).Border(tabBorderWithBottom("\u2534", "\u2500", "\u2534"), true),
-		tabActive:  lipgloss.NewStyle().Padding(0, 1).Bold(true).Foreground(lipgloss.Color("#34d399")).Border(tabBorderWithBottom("\u2518", " ", "\u2514"), true),
-		window:     lipgloss.NewStyle().Border(lipgloss.NormalBorder(), true).UnsetBorderTop().BorderForeground(barEdge),
-		idle:       lipgloss.NewStyle().Foreground(lipgloss.Color("#cbd5e1")),
+		// BorderForeground set on every tab, active or not, rather than left to
+		// fall back to the label's colour: a fallback is not a value, so it
+		// cannot be compared with anything, and "the frame is one colour" is a
+		// thing worth being able to check.
+		tabIdle: lipgloss.NewStyle().Padding(0, 1).Foreground(barEdge).BorderForeground(barEdge).Border(tabBorderWithBottom("\u2534", "\u2500", "\u2534"), true),
+		// The active tab's border is the frame's colour like every other tab's,
+		// even though its label is green. A border takes its colour from the
+		// style's foreground unless it is told otherwise, which left one edge on
+		// screen a different colour from the other three sides of the same box.
+		// "Which page am I on" is already said twice over and better: the label
+		// is bold and green, and the tab has no bottom edge at all.
+		tabActive: lipgloss.NewStyle().Padding(0, 1).Bold(true).Foreground(lipgloss.Color("#34d399")).BorderForeground(barEdge).Border(tabBorderWithBottom("\u2518", " ", "\u2514"), true),
+		window:    lipgloss.NewStyle().Border(lipgloss.NormalBorder(), true).UnsetBorderTop().BorderForeground(barEdge),
+		idle:      lipgloss.NewStyle().Foreground(lipgloss.Color("#cbd5e1")),
 		// The caret is reversed video on both backgrounds rather than a colour
 		// of its own: a block of inverted cells reads the same either way, and
 		// a caret that vanishes on one of them is not a caret.
@@ -379,12 +389,16 @@ func lightStyles() styles {
 		box:        lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#cbd5e1")).Padding(0, 1),
 		homeIdle:   lipgloss.NewStyle().Foreground(lipgloss.Color("#64748b")),
 		homeActive: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#047857")),
-		tabIdle:    lipgloss.NewStyle().Padding(0, 1).Foreground(barEdge).Border(tabBorderWithBottom("\u2534", "\u2500", "\u2534"), true),
-		tabActive:  lipgloss.NewStyle().Padding(0, 1).Bold(true).Foreground(lipgloss.Color("#047857")).Border(tabBorderWithBottom("\u2518", " ", "\u2514"), true),
-		window:     lipgloss.NewStyle().Border(lipgloss.NormalBorder(), true).UnsetBorderTop().BorderForeground(barEdge),
-		idle:       lipgloss.NewStyle().Foreground(lipgloss.Color("#475569")),
-		caret:      lipgloss.NewStyle().Bold(true).Reverse(true).Foreground(lipgloss.Color("#0f172a")).Background(lipgloss.Color("#38bdf8")),
-		dark:       false,
+		// BorderForeground set on every tab, active or not, rather than left to
+		// fall back to the label's colour: a fallback is not a value, so it
+		// cannot be compared with anything, and "the frame is one colour" is a
+		// thing worth being able to check.
+		tabIdle:   lipgloss.NewStyle().Padding(0, 1).Foreground(barEdge).BorderForeground(barEdge).Border(tabBorderWithBottom("\u2534", "\u2500", "\u2534"), true),
+		tabActive: lipgloss.NewStyle().Padding(0, 1).Bold(true).Foreground(lipgloss.Color("#047857")).BorderForeground(barEdge).Border(tabBorderWithBottom("\u2518", " ", "\u2514"), true),
+		window:    lipgloss.NewStyle().Border(lipgloss.NormalBorder(), true).UnsetBorderTop().BorderForeground(barEdge),
+		idle:      lipgloss.NewStyle().Foreground(lipgloss.Color("#475569")),
+		caret:     lipgloss.NewStyle().Bold(true).Reverse(true).Foreground(lipgloss.Color("#0f172a")).Background(lipgloss.Color("#38bdf8")),
+		dark:      false,
 	}
 }
 

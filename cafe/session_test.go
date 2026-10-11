@@ -1794,8 +1794,14 @@ func TestEveryColourReadsAgainstTheBackgroundItIsFor(t *testing.T) {
 		// own sides reads as a rule laid over a box rather than as a box - which
 		// is invisible on a terminal where the two are close and glaring on one
 		// where they are not.
-		if got := st.window.GetBorderTopForeground(); got != st.tabIdle.GetForeground() {
-			t.Errorf("%s background: the frame's edges are %v and its bar's are %v", paletteName(bg.dark), got, st.tabIdle.GetForeground())
+		for _, tab := range []struct {
+			what string
+			col  color.Color
+		}{{"idle", st.tabIdle.GetBorderTopForeground()}, {"active", st.tabActive.GetBorderTopForeground()}} {
+			if got := st.window.GetBorderTopForeground(); got != tab.col {
+				t.Errorf("%s background: the frame's edges are %v and the %s tab's are %v",
+					paletteName(bg.dark), got, tab.what, tab.col)
+			}
 		}
 
 		// The frame's own edges are allowed to be quiet - they are not text -
