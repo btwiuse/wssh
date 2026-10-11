@@ -1606,14 +1606,14 @@ func (m *model) wordmark() string {
 	// one column further left again, which is where the click offset comes
 	// from - a mark that is centred but not clickable is decoration.
 	inside := bodyWidth(m.width)
-	widest := 0
-	for _, line := range strings.Split(wordmark, "\n") {
+	widest, lines := 0, strings.Split(wordmark, "\n")
+	for _, line := range lines {
 		widest = max(widest, lipgloss.Width(line))
 	}
 
 	var b strings.Builder
 	b.WriteString("\n")
-	for i, line := range strings.Split(wordmark, "\n") {
+	for i, line := range lines {
 		style := m.st.brandDim
 		if i == 0 {
 			// The top line is the brand colour and the two under it are the
@@ -1630,22 +1630,30 @@ func (m *model) wordmark() string {
 	top := barLines + 1
 	m.mark = box{
 		x0: 1 + (inside-widest)/2, x0y: top,
-		x1: 1 + (inside-widest)/2 + widest, y1: top + barLines - 1,
+		x1: 1 + (inside-widest)/2 + widest, y1: top + len(lines) - 1,
 	}
 	return b.String()
 }
 
 // wordmarkWidth is how wide the name is, and how a page decides whether there
 // is room for it.
-const wordmarkWidth = 44
+const wordmarkWidth = 52
 
-// wordmark is RouterCafe, set in a fixed-width face. Generated once and
-// pasted rather than drawn: it is a piece of lettering, not a layout, and
-// nothing about it wants to be computed at runtime.
+// wordmark is RouterCafe, set in a fixed-width face. Generated once with
+// figlet and pasted in rather than drawn: it is a piece of lettering, not a
+// layout, and nothing about it wants to be computed at runtime.
+//
+// The face is `big` because the point of a wordmark is that you can read it.
+// The three-line shadow faces are narrower and they are not: at that size the
+// strokes of R and C run into the strokes beside them and it reads as a row of
+// symbols rather than as a name.
 var wordmark = strings.Join([]string{
-	" _ \\            |            __|        _|",
-	"   /  _ \\ |  |  _|  -_)  _|(     _` |  _|-_)",
-	"_|_\\\\___/\\_,_|\\__|\\___|_| \\___|\\__,_|_|\\___|",
+	" _____             _             _____       __",
+	"|  __ \\           | |           / ____|     / _|",
+	"| |__) |___  _   _| |_ ___ _ __| |     __ _| |_ ___",
+	"|  _  // _ \\ | | | | __/ _ \\ '__| |    / _` |  _/ _ \\",
+	"| | \\ \\ (_) | |_| | ||  __/ |  | |___| (_| | ||  __/",
+	"|_|  \\_\\___/ \\__,_|\\__|\\___|_|   \\_____|\\__,_|_| \\___|",
 }, "\n")
 
 func (m model) field(label, value string) string {

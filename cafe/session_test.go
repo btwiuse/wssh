@@ -1479,6 +1479,13 @@ func TestClickingTheWordmarkGoesHome(t *testing.T) {
 	if _, ok := where.link(where.mark.x0+1, where.mark.y1+1); ok {
 		t.Error("the wordmark claims the line under it")
 	}
+	// Every line of it, not the first: the mark is taller than the bar and a
+	// box sized off the bar's height leaves most of it unclickable.
+	for y := where.mark.x0y; y <= where.mark.y1; y++ {
+		if _, ok := where.link(where.mark.x0+1, y); !ok {
+			t.Errorf("the wordmark is not clickable on line %d of %d", y, where.mark.y1)
+		}
+	}
 	// And it is gone on a terminal with no room for it, with nothing left
 	// behind pretending otherwise.
 	small := m

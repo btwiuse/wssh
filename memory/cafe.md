@@ -379,9 +379,12 @@ bar of all six and highlights the one you are on, and `tab` walks it:
               ╭─────────╮╭─────────╮╭──────────╮╭────────╮╭──────╮
   RouterCafe  │ balance ││ deposit ││ api keys ││ routes ││ help │   router.cafe 0.1.6
 ┌─────────────┴─────────┴┴──────────┴┴──────────┴┴────────┴┴──────┴─────────────┐
-│                             _ \            |            __|        _|          │
-│                              /  _ \ |  |  _|  -_)  _|(     _` |  _|-_)         │
-│                           _|_\\___/\_,_|\__|\___|_| \___|\__,_|_|\___|         │
+│                          _____             _             _____       __          │
+│                         |  __ \           | |           / ____|     / _|        │
+│                       | |__) |___  _   _| |_ ___ _ __| |     __ _| |_ ___        │
+│                      |  _  // _ \ | | | | __/ _ \ '__| |    / _` |  _/ _ \      │
+│                       | | \ \ (_) | |_| | ||  __/ |  | |___| (_| | ||  __/      │
+│                      |_|  \\_\\___/ \\__,_|\\__|\\___|_|   \\_____|\\__,_|_| \\___|     │
 │                                                                        │
 │  account  6YSosJ…AsrUKL                                                 │
 │  balance  $0.00                                                         │
@@ -510,10 +513,15 @@ area rather than worked out from the position - a bar whose clicks are indexed
 against `screens` navigates to the wrong page the moment anything is added to
 either side of the tabs.
 
-**The wordmark is a wordmark, not a layout**: `RouterCafe` in a fixed-width
-face, generated once with figlet and pasted in. It is on the home page, which
-is the page the RouterCafe tab opens, and clickable - a logo you cannot click
-is a logo that is only decoration. It is left
+**The wordmark is a wordmark, not a layout**: `RouterCafe` in figlet's `big`,
+52 columns and six lines, generated once and pasted in. The face is `big`
+because the point of a wordmark is that you can read it - the three-line shadow
+faces are narrower and they are not, at that size the strokes of the R run into
+the strokes beside it and it reads as a row of symbols rather than as a name.
+It is on the home page, which is the page the RouterCafe tab opens, and
+clickable - a logo you cannot click is a logo that is only decoration. Clickable
+over **all six of its lines**, not the first: the mark is taller than the bar,
+and a box sized off the bar's height leaves most of it dead. It is left
 out entirely below 52 columns rather than shrunk or cut: a wordmark wrapped to
 two half-words is worse than none, and the balance is on the same screen
 either way. `m.mark` records where it landed, because that is a fact about what
