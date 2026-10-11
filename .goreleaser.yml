@@ -21,10 +21,15 @@ project_name: wssh
 
 before:
   hooks:
-    # go.sum is gitignored here, so a fresh checkout has no checksums and
-    # nothing compiles until the modules are resolved. This has to come
-    # before the build below, and before anything else, for the same reason.
-    - go mod download
+    # go.sum is gitignored here, so a fresh checkout has none and nothing
+    # compiles until the modules are resolved.
+    #
+    # "all", and not the bare form: without it go writes only the /go.mod
+    # hash of each module and none of the source hashes, so the build that
+    # follows fails on missing go.sum entries rather than on anything to do
+    # with the code. This has to come before the build below, and before
+    # anything else, for the same reason.
+    - go mod download all
     # The browser client is a build artefact of the wssh binary, not a
     # separate download: it is compiled into it and served from it. A release
     # without it would ship a server whose front end dies on a 404, so it is
