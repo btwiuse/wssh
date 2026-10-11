@@ -63,17 +63,6 @@ import (
 // gets signed for, an address does not - which is the difference between
 // read-only and not.
 
-// isBase58 is the alphabet an address is written in. Zero, O, I and l are left
-// out because base58 leaves them out, so taking them would only build a field
-// that cannot be an address.
-func isBase58(c byte) bool {
-	switch {
-	case c >= '1' && c <= '9', c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z':
-		return c != 'l' && c != 'I' && c != 'O'
-	}
-	return false
-}
-
 // The messages the picker sends, all handled by the session model: there is
 // one program now, so there is one place its messages arrive.
 

@@ -154,9 +154,24 @@ ring, the clicks and the bar all read from it.
 
 `picking()` is `deps.Address == ""`, deliberately not a flag beside it: a
 flag can disagree with the address, and the disagreement is a session that
-thinks it has an account and does not. The picker keeps `q` for the address
-field and `ctrl+c` as the way out, because `q` is a base58 character and the
-field is most of what the page does.
+thinks it has an account and does not.
+
+**The page has no address field, and that is a decision rather than an
+omission.** It had one, and it was `ssh <address>@router.cafe` wearing a
+costume: naming an account is something a person does on the command line,
+where writing the address says out loud that they are naming rather than
+proving. The only thing the picker can do that nothing else can is prove a key
+you hold, and that is not something typing does. The costs of the field were
+real - a person who typed their own address with one character wrong got a
+screen of zeroes saying "no API key yet", which reads as broke rather than as
+"that is not my account" - and it stopped `q` quitting from that page, which
+made it the one page in the program that did not. With no field, `q` and `esc`
+quit, `up`/`down` choose and `enter` proves, and the page is four keys.
+
+The read-only mode survives all of this. `ssh <address>@host` still produces a
+named-not-proved session, `Init` still asks a forwarded agent to upgrade it,
+and `Proven` is still read by everything that changes an account. What went is
+the only way to *reach* one from inside the TUI.
 
 **Why `none` is refused by default.** A client sends `none` first as a probe,
 so a server that accepts it ends the handshake before a public key is ever

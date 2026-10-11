@@ -286,16 +286,15 @@ type model struct {
 	routes  list.Model
 	apiKeys list.Model
 
-	// keys, typed and picked are the first tab while this session has named
-	// no account: the keys a forwarded agent holds, an address being typed, and
-	// which row the cursor is on.
+	// keys and picked are the first tab while this session has named no
+	// account: the keys a forwarded agent holds, and which one the cursor is
+	// on.
 	//
 	// Nil keys with an empty address is the whole of what "picking" means -
 	// there is exactly one thing such a session can do, and this is it - so
 	// picking() reads the address rather than keeping a flag beside it that
 	// could disagree.
 	keys    []*agent.Key
-	typed   string
 	picked  int
 	keysErr string
 
@@ -485,7 +484,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// of its tabs, and the page underneath is an account rather than a
 		// question about which account.
 		m.deps.Address, m.deps.Proven = msg.address, true
-		m.keys, m.typed, m.picked = nil, "", 0
+		m.keys, m.picked = nil, 0
 		m.account = m.deps.Ledger.Account(msg.address)
 		m.syncLists()
 		return m, nil
@@ -616,9 +615,7 @@ func (m model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// A session that has named no account is on the one page it has, and that
-	// page takes the keyboard whole. It has to: the field it is most of takes
-	// printable characters, and a `q` typed into an address is an address, not
-	// a request to leave. ctrl+c is the way out, as it is everywhere.
+	// page takes the keyboard whole.
 	if m.picking() {
 		return m.onPickKey(msg)
 	}
@@ -779,88 +776,31 @@ func (m model) revokeKey(oneBased int) (tea.Model, tea.Cmd) {
 	}
 }
 
-// onPickKey is the one page a session with no account has.
+// onPickKey is the one page a session with no account has, and the one thing
+// on it: pick a key, and the agent proves it by signing.
 //
-// Two ways through it, and they differ in exactly one way: a key the agent
-// holds will be signed for, and an address somebody types will not. That
-// difference is the whole of read-only against not, and it is why the screen
-// offers both rather than making a person know which kind of credential they
-// turned up with.
-//
-// A printable character always goes to the address row and takes the selection
-// with it, so a person who has started typing never has to know which row they
-// were on. Which is also why `q` cannot quit from here: q is a base58
-// character and the field is most of what the page does.
+// It takes the keyboard whole, which it can afford to because there is no text
+// field on it any more. A field that swallows printable characters is a field
+// that stops `q` quitting, and that was the one thing about this page that was
+// worth the cost of getting wrong.
 func (m model) onPickKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "ctrl+c":
+	case "ctrl+c", "q", "esc":
 		return m, tea.Quit
-	case "esc":
-		if m.typed == "" {
-			return m, tea.Quit
-		}
-		m.typed, m.picked = "", m.addressRow()
-		return m, nil
 	case "up", "ctrl+p":
 		m.picked = max(0, m.picked-1)
 		return m, nil
 	case "down", "ctrl+n":
-		m.picked = min(m.picked+1, len(m.keys))
-		return m, nil
-	case "backspace":
-		if r := []rune(m.typed); len(r) > 0 {
-			m.typed = string(r[:len(r)-1])
-			m.picked = m.addressRow()
-		}
+		m.picked = min(m.picked+1, len(m.keys)-1)
 		return m, nil
 	case "enter":
-		if m.picked == m.addressRow() {
-			return m.openAddress()
+		if m.picked < 0 || m.picked >= len(m.keys) {
+			return m, nil
 		}
-		if m.picked < len(m.keys) {
-			m.busy = "asking the agent to sign, so this key is really yours"
-			return m, adoptCmd(m.deps, m.keys[m.picked])
-		}
-		return m, nil
-	}
-
-	// Filtered to the alphabet an address is written in rather than accepted and
-	// rejected later, so there is no state in which the field holds something
-	// ValidateAddress is about to refuse. Same rule as the deposit amount.
-	if len(msg.Text) == 1 && isBase58(msg.Text[0]) {
-		m.typed += msg.Text
-		m.picked = m.addressRow()
+		m.busy = "asking the agent to sign, so this key is really yours"
+		return m, adoptCmd(m.deps, m.keys[m.picked])
 	}
 	return m, nil
-}
-
-// addressRow is where the address field is: the last row whether or not there
-// are keys above it, so there is always somewhere to go on a connection that
-// forwarded no agent.
-func (m model) addressRow() int { return len(m.keys) }
-
-// openAddress takes the address the field holds and turns it into a session.
-//
-// A view and not a refusal, because that is what somebody with no key came
-// for. Proven is false here no matter how many keys are listed above: a typed
-// address has proved nothing. If a forwarded agent does hold that address's
-// key, the ordinary session proves it on open - the same upgrade
-// `ssh <address>@host` gets - and this page does not have to know.
-func (m model) openAddress() (tea.Model, tea.Cmd) {
-	address := strings.TrimSpace(m.typed)
-	if address == "" {
-		return m, nil
-	}
-	if err := ValidateAddress(address); err != nil {
-		m.notice = notice{noticeBad, reasonText(err.Error())}
-		return m, nil
-	}
-	m.notice = notice{}
-	m.deps.Address = address
-	m.keys, m.typed, m.picked = nil, "", 0
-	m.account = m.deps.Ledger.Account(address)
-	m.syncLists()
-	return m, proveCmd(m.deps.SockPath, address)
 }
 
 // onListKey is a focused list and a key it has a binding for, so the whole of
@@ -1552,14 +1492,19 @@ func (m model) footer() string {
 }
 
 // renderPick is the first tab for a session that has named no account: the
-// keys a forwarded agent holds, and the address of an account somebody would
-// rather only look at.
+// keys a forwarded agent holds, and which one of them is this session.
 //
 // It is a page rather than a screen of its own, and that is the whole point:
 // a connection that proved nothing used to be handed a different program,
 // which then handed this one over the moment it worked out who it was. One
 // window, with the question on its first page and the answer where it was
 // waiting.
+//
+// There is no address field here, and there used to be. Naming an account is
+// something a person does on the command line, where writing it says out loud
+// that they are naming rather than proving: `ssh <address>@router.cafe`. The
+// only thing this page can do that nothing else can is prove a key, and that
+// is not something typing does.
 func (m model) renderPick() string {
 	st := m.st
 	var b strings.Builder
@@ -1567,16 +1512,26 @@ func (m model) renderPick() string {
 	if m.busy != "" {
 		return m.wrap(st.warn.Render(m.busy), st.warn) + "\n"
 	}
-	if len(m.keys) > 0 {
-		b.WriteString("  " + st.title.Render("Which of these is yours?") + "\n\n")
-	} else if m.deps.Local {
-		b.WriteString("  " + st.title.Render("No ssh-agent, so nothing here can sign.") + "\n")
-		b.WriteString(m.wrap(st.dim.Render("An account is an ed25519 public key. Paste one to look at it:"), st.dim) + "\n\n")
-	} else {
-		b.WriteString("  " + st.title.Render("This connection proved nothing, so nothing here can sign.") + "\n")
-		b.WriteString(m.wrap(st.dim.Render("An account is an ed25519 public key. Paste one to look at it:"), st.dim) + "\n\n")
+	if len(m.keys) == 0 {
+		// Nothing to pick from, so say what to do instead. There used to be
+		// an address field underneath this, and it was the answer to it; the
+		// answer is better on the command line, where the difference between
+		// naming an account and proving one is visible.
+		if m.deps.Local {
+			b.WriteString("  " + st.title.Render("No ssh-agent, so nothing here can sign.") + "\n")
+			b.WriteString(m.wrap(st.dim.Render("An account is an ed25519 public key. Start an agent, add a key, and come back:"), st.dim) + "\n")
+			b.WriteString("  " + st.accent.Render("eval $(ssh-agent -s) && ssh-add ~/.ssh/id_ed25519") + "\n\n")
+		} else {
+			b.WriteString("  " + st.title.Render("This connection proved nothing, so nothing here can sign.") + "\n")
+			b.WriteString(m.wrap(st.dim.Render("To look at an account instead of proving one, name it on the command line - which says out loud that it is named rather than proved:"), st.dim) + "\n")
+			b.WriteString("  " + st.accent.Render("ssh "+m.deps.host()+" <address>") + "\n")
+			b.WriteString(m.wrap(st.dim.Render("To prove one instead, reconnect with an agent holding it:"), st.dim) + "\n")
+			b.WriteString("  " + st.accent.Render("ssh -A "+m.deps.host()) + "\n")
+		}
+		return b.String()
 	}
 
+	b.WriteString("  " + st.title.Render("Which of these is yours?") + "\n\n")
 	for i, k := range m.keys {
 		marker, style := "  ", st.value
 		if i == m.picked {
@@ -1584,28 +1539,14 @@ func (m model) renderPick() string {
 		}
 		b.WriteString(marker + "  " + style.Render(labelForKey(k)) + "\n")
 	}
-	if len(m.keys) > 0 {
-		b.WriteString("\n")
-	}
+	b.WriteString("\n")
 
 	// A real failure is worth a line; "you forwarded no agent" is not, because
-	// the field below is the answer to it.
+	// the page above already says what to do about it.
 	if m.keysErr != "" && !strings.Contains(m.keysErr, "forwarded no agent") {
 		b.WriteString(m.wrap(st.warn.Render(m.keysErr+"."), st.warn) + "\n\n")
 	}
-
-	marker := "  "
-	if m.picked == m.addressRow() {
-		marker = "> "
-	}
-	b.WriteString("  " + marker + st.label.Render("address  ") +
-		st.accent.Render(m.typed) + st.dim.Render("\u2588") + "\n\n")
-
-	if len(m.keys) == 0 {
-		b.WriteString("  " + st.dim.Render("enter to open it") + "\n")
-	} else {
-		b.WriteString("  " + st.dim.Render("up/down to choose, enter to sign with a key or open an address") + "\n")
-	}
+	b.WriteString("  " + st.dim.Render("up/down to choose, enter to prove it with a signature") + "\n")
 	return b.String()
 }
 

@@ -695,124 +695,87 @@ func TestOnlyEd25519KeysAreOfferedForAdoption(t *testing.T) {
 	}
 }
 
-// A typed address opens an account read-only. This is the whole of what the
-// no-key screen is for, and the whole of what it must not do is prove it: the
-// session that opens here is the same one `ssh <address>@host` opens, which can
-// look at a balance and cannot spend one.
-func TestATypedAddressOpensAnAccountWithoutProvingIt(t *testing.T) {
-	pub, _, err := ed25519.GenerateKey(nil)
+// Naming an account is something a person does on the command line, where
+// writing it says out loud that it is named rather than proved. The picker has
+// no address field, so this is about the half it kept: adopting a key proves it
+// by signature, and the session that comes out the other side owns the account.
+func TestAdoptingAKeyProvesItAndNamingItNeverDoes(t *testing.T) {
+	_, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
 	}
-	address, err := solana.AddressFor(mustPub(t, pub))
+	address, err := solana.AddressFor(mustPub(t, priv.Public().(ed25519.PublicKey)))
 	if err != nil {
 		t.Fatalf("AddressFor: %v", err)
 	}
+	sock := serveAgent(t, []ed25519.PrivateKey{priv})
 
-	m := model{st: newStyles(), deps: deps{Ledger: testLedger(t)}, width: 80, height: 24}
-	for _, c := range address {
-		next, _ := m.onKey(tea.KeyPressMsg(tea.Key{Code: c, Text: string(c)}))
-		m = next.(model)
-	}
-	if m.typed != address {
-		t.Fatalf("typed %q, want %q", m.typed, address)
-	}
-
-	next, _ := m.openAddress()
-	got, ok := next.(model)
-	if !ok {
-		t.Fatalf("a typed address opened %T, want the account screen", next)
-	}
-	if got.deps.Address != address {
-		t.Errorf("opened the account %q, want %q", got.deps.Address, address)
-	}
-	if got.deps.Proven {
-		t.Error("typing an address proved it; a named account is a view")
-	}
-}
-
-// An address that cannot be one is refused in place. The session stays on the
-// screen that can be typed at, because that is where the correction goes.
-func TestAnAddressThatCannotBeOneIsRefusedInPlace(t *testing.T) {
 	m := model{
-		st:     newStyles(),
-		deps:   deps{Ledger: testLedger(t)},
-		width:  80,
-		height: 24,
-		typed:  "not-an-address",
-		notice: notice{},
+		st: newStyles(), view: screenHome, width: 80, height: 24,
+		deps: deps{SockPath: sock, Ledger: testLedger(t), Catalogue: DefaultCatalogue()},
+		keys: []*agent.Key{
+			{Format: gossh.KeyAlgoED25519, Blob: blobFor(t, priv.Public().(ed25519.PublicKey)), Comment: "me"},
+		},
 	}
-	next, _ := m.openAddress()
+
+	// Before: one tab, and the page asks the question.
+	if len(m.tabs()) != 1 {
+		t.Fatalf("a session with no account offers %d tabs, want only its own page", len(m.tabs()))
+	}
+	if !strings.Contains(stripForTest(m.renderPick()), "Which of these is yours?") {
+		t.Error("the first page does not ask which key is yours")
+	}
+	// And there is no field: q quits, because nothing on the page takes a q.
+	if _, cmd := m.onPickKey(tea.KeyPressMsg(tea.Key{Code: 'q', Text: "q"})); cmd == nil {
+		t.Error("q does not leave a page with no field on it")
+	}
+
+	next, cmd := m.onPickKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	got := next.(model)
-	if got.notice.kind != noticeBad {
-		t.Errorf("refusing an invalid address said %+v", got.notice)
+	if cmd == nil {
+		t.Fatal("enter did nothing")
 	}
-	if !got.picking() {
-		t.Error("an invalid address opened an account")
+	msg, ok := cmd().(nonceSignedMsg)
+	if !ok || msg.err != nil {
+		t.Fatalf("adopting the key gave %+v", msg)
+	}
+	if msg.address != address {
+		t.Errorf("adopted %q, want %q", msg.address, address)
+	}
+
+	// After: the bar is the ordinary one, and the account is owned.
+	done, _ := got.Update(msg)
+	after := done.(model)
+	if after.picking() {
+		t.Error("the session still thinks it has named no account")
+	}
+	if !after.deps.Proven {
+		t.Error("a key the agent signed for did not prove the account")
+	}
+	if after.deps.Address != address {
+		t.Errorf("the session is on %q, want %q", after.deps.Address, address)
+	}
+	if len(after.tabs()) != len(screens) {
+		t.Errorf("after proving, the bar offers %d tabs, want %d", len(after.tabs()), len(screens))
 	}
 }
 
-// The address row is always the last row and always reachable, and typing moves
-// the selection to it. A person who has started typing must not have to know
-// which row they were on, which is also why q types a q here instead of
-// quitting: it is a base58 character and the field is most of the screen.
-func TestTypingMovesTheSelectionToTheAddressRow(t *testing.T) {
-	key := &agent.Key{Format: gossh.KeyAlgoED25519, Comment: "me"}
-	m := model{
-		deps:  deps{Ledger: testLedger(t)},
-		keys:  []*agent.Key{key},
-		width: 80, height: 24,
+// A page with nothing to pick from says what to do instead. There used to be
+// an address field underneath it, which was the answer to that, and the answer
+// was better on the command line - where the difference between naming an
+// account and proving one is visible.
+func TestAPickerWithNoKeysSaysWhatToDoInstead(t *testing.T) {
+	m := model{st: newStyles(), view: screenHome, width: 100, height: 24,
+		deps: deps{Ledger: testLedger(t), Catalogue: DefaultCatalogue(), Host: Domain}}
+	got := stripForTest(m.renderPick())
+	if strings.Contains(got, "address") && strings.Contains(got, "address  ") {
+		t.Errorf("the page still offers an address field: %q", got)
 	}
-	if m.addressRow() != 1 {
-		t.Fatalf("a page with one key puts the address on row %d, want row 1", m.addressRow())
+	if !strings.Contains(got, "ssh "+Domain+" <address>") {
+		t.Errorf("the page does not say how to name an account instead: %q", got)
 	}
-
-	// Printable characters go to the field, wherever the selection was.
-	next, _ := m.onKey(tea.KeyPressMsg(tea.Key{Code: 'q', Text: "q"}))
-	m = next.(model)
-	if m.typed != "q" {
-		t.Fatalf("typed %q, want q", m.typed)
-	}
-	if m.picked != m.addressRow() {
-		t.Errorf("typing left the selection on row %d, want the address row %d", m.picked, m.addressRow())
-	}
-
-	// Characters base58 leaves out never reach the field, so there is no state
-	// in which it holds something ValidateAddress is about to refuse.
-	for _, c := range []string{"0", "O", "I", "l", "-", " "} {
-		next, _ := m.onKey(tea.KeyPressMsg(tea.Key{Code: rune(c[0]), Text: c}))
-		m = next.(model)
-		if m.typed != "q" {
-			t.Fatalf("typing %q changed the field to %q", c, m.typed)
-		}
-	}
-}
-
-// esc clears a field that has something in it and quits when it does not. The
-// asymmetry is the point: quitting by accident throws away what was typed.
-func TestEscapeClearsTheFieldBeforeItQuits(t *testing.T) {
-	esc := tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape})
-	m := model{st: newStyles(), deps: deps{Ledger: testLedger(t)}, width: 80, height: 24, typed: "abc"}
-
-	next, cmd := m.onKey(esc)
-	if cmd != nil {
-		t.Error("escape quit a session that had an address typed into it")
-	}
-	m = next.(model)
-	if m.typed != "" {
-		t.Errorf("escape left %q in the field", m.typed)
-	}
-	if _, cmd := m.onKey(esc); cmd == nil {
-		t.Error("escape on an empty field did not quit")
-	}
-}
-
-// ctrl+c is the only key that always quits, because on this screen almost
-// every other character is something to type.
-func TestControlCQuitsEvenMidAddress(t *testing.T) {
-	m := model{st: newStyles(), deps: deps{Ledger: testLedger(t)}, width: 80, height: 24, typed: "abc"}
-	if _, cmd := m.onKey(tea.KeyPressMsg(tea.Key{Code: 'c', Mod: tea.ModCtrl})); cmd == nil {
-		t.Error("ctrl+c did not quit")
+	if _, cmd := m.onPickKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})); cmd != nil {
+		t.Error("enter did something on a page with no keys")
 	}
 }
 
