@@ -377,9 +377,9 @@ bar of all five and highlights the one you are on, and `tab` walks it. **The
 name and the address are on the bar's own line**, not on one above it:
 
 ```
-            ╭─────────╮╭─────────╮╭──────────╮╭────────╮╭──────╮
-RouterCafe  │ balance ││ deposit ││ api keys ││ routes ││ help │  router.cafe 0.1.6
-            │         └┴─────────┴┴──────────┴┴────────┴┴──────┴───────────────┐
+              ╭─────────╮╭─────────╮╭──────────╮╭────────╮╭──────╮
+  RouterCafe  │ balance ││ deposit ││ api keys ││ routes ││ help │   router.cafe 0.1.6
+──────────────┘         └┴─────────┴┴──────────┴┴────────┴┴──────┴─────────────┐
 │                             _ \            |            __|        _|          │
 │                              /  _ \ |  |  _|  -_)  _|(     _` |  _|-_)         │
 │                           _|_\\___/\_,_|\__|\___|_| \___|\__,_|_|\___|         │
@@ -387,6 +387,23 @@ RouterCafe  │ balance ││ deposit ││ api keys ││ routes ││ help
 │  account    6YSosJ…AsrUKL                                                │
 │  balance    $0.00                                                        │
 ```
+
+**The bar's bottom line is the box's top edge, so it is built the whole width
+of the window** and not padded out of blocks that happen to add up. A gap in it
+is a hole in the top of the frame with the page showing through, which is the
+one thing a frame cannot have - and it is invisible to a test that only checks
+the box lines, so `TestTheBarsEdgeSpansTheWholeWindow` checks that line is
+exactly as wide as the window on every screen at every size, and that nothing
+but rule and the active tab's opening is on it. The three rows are therefore
+assembled one at a time out of the tab run's own three rows; splicing the run
+in whole brings its other two rows with it.
+
+That is also why **no corner is corrected**, which is the one thing the tabs
+example has to do. The example overrides both ends because there the page is
+exactly as wide as the bar, so the run of edge stops where the last tab stops.
+Here the rule continues either side of the tabs, and the corners the style
+gives are already the right ones for a rule that continues: `┴` where it passes
+under an inactive tab, and `┘` and `└` where the active tab opens into the page.
 
 A line of chrome that changes nothing is a line somebody has to look past, and
 the brand line above the bar was exactly that. Folding it in gives the page one
@@ -412,8 +429,7 @@ What the bar sheds when the terminal is too narrow, in order: the version, then
 the address, then **the name**, then the whole thing either side of the tabs.
 The name goes last on purpose - it is the one piece of the line that is also
 the way back to the balance screen, and a logo dropped for want of room is a
-logo nobody can get home from. `carryBarEdge` runs the bottom edge on to the
-right-hand corner afterwards, so the frame has a lid over all of its width.
+logo nobody can get home from.
 
 `shift+tab` goes back, wrapping at both ends. `esc` puts a caret down without
 leaving the page. This replaced a footer listing what `b`, `d`, `k`, `m` and
