@@ -44,3 +44,17 @@ key at all. See `agent-forwarding.md`.
 The agent channel is one more authenticated channel and inherits the
 session's authentication. It is not a way around it: a session that did not
 authenticate does not get an agent.
+
+## RouterCafe is the other way round
+
+`cafe` authenticates everybody: `--authorized-key`, `--authorized-keys` and
+`--authorized-addresses` all default to `*`, and anybody who reaches the port
+can hold an account. That is a decision, not an oversight, and it is safe only
+because a session there is a program rather than a command line: commands are
+refused by name, subsystems are refused, and `direct-tcpip` is never installed.
+
+The deposit path is the other thing worth reading before deploying it: a
+transaction is signed by the client's own agent, so it is checked against what
+was asked for before anything is broadcast. `--upstream-key` is the operator's
+provider credential and is not a secret the protocol needs anybody else to see.
+`memory/cafe.md`.

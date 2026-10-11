@@ -6,20 +6,22 @@ nothing.
 
 The build entry point is the `Makefile`. Bare `make` lists targets; name one
 explicitly. `make wssh` is the target that matters: the browser client is a
-build artefact of `cmd/wssh/static/`, and a binary built while `ssh.wasm` is
+build artefact of `webui/static/`, and a binary built while `ssh.wasm` is
 missing still compiles, still runs, and serves a page whose worker dies on a
 404. The Makefile turns that silent breakage into a build that either produces
 the wasm or fails.
 
 | Make target | What it does |
 |---|---|
-| `make wssh` | Builds `bin/wssh`, populating `cmd/wssh/static/{ssh.wasm,wasm_exec.js}` first via `client/build.sh`. |
+| `make wssh` | Builds `bin/wssh`, populating `webui/static/{ssh.wasm,wasm_exec.js}` first via `client/build.sh`. |
+| `make cafe` | Builds `bin/cafe`, same wasm prerequisite. |
+| `make serve-cafe` | Builds then runs RouterCafe; needs `ROUTERCAFE_TREASURY` or a `--treasury`. |
 | `make sol-tx` | Builds `bin/sol-tx`. |
 | `make sol-keys` | Builds `bin/sol-keys`. |
 | `make generate` | Runs every `//go:generate` directive (same effect as `go generate ./...`); `web.go` invokes `client/build.sh`. |
-| `make install` | `go install ./cmd/wssh ./cmd/sol-tx ./cmd/sol-keys` into `$GOBIN`. |
+| `make install` | `go install ./cmd/wssh ./cmd/cafe ./cmd/sol-tx ./cmd/sol-keys` into `$GOBIN`. |
 | `make serve` | `make wssh` then runs `bin/wssh web`. |
-| `make bin` | All three binaries. |
+| `make bin` | All four binaries. |
 | `make test` | `go test ./...`. |
 | `make vet` | `go vet ./...`. |
 | `make fmt` | `gofmt -w .` over the tree. |
@@ -44,9 +46,9 @@ go build -trimpath -ldflags "-X main.version=v1.2.3 -X main.commit=$(git rev-par
 ```
 
 `main.version` and `main.commit` are set with `-ldflags` (see
-`cmd/wssh/main.go`). Without them you get `"dev"` and `""`. `cmd/sol-tx` and
-`cmd/sol-keys` take the same two variables the same way, so all three binaries
-report themselves consistently.
+`cmd/wssh/main.go`). Without them you get `"dev"` and `""`. `cmd/sol-tx`, `cmd/sol-keys` and
+`cmd/cafe` take the same two variables the same way, so every binary reports
+itself consistently.
 
 ## Run the tests
 
@@ -79,7 +81,7 @@ cd scripts/sol-tx && deno task test
 ./client/build.sh
 ```
 
-Builds `client/cmd/webssh-web` to `cmd/wssh/static/ssh.wasm` and copies
+Builds `client/cmd/webssh-web` to `webui/static/ssh.wasm` and copies
 `wasm_exec.js` from the same Go toolchain (`go env GOROOT`). Both files are
 gitignored - they must come from the same Go release, otherwise the runtime
 ABI disagrees and fails in confusing ways.
@@ -227,3 +229,22 @@ linux branch in `openBrowser` (`cmd/wssh/serve.go`) runs `xdg-open`, which
 on Termux is a symlink to `termux-open` - it broadcasts an Android intent that
 the user's default browser handles. No code change is needed for Termux; the
 existing fallback path already works.
+
+## Run RouterCafe
+
+```
+./cafe --treasury 5cyy...qqq --sol-price 180 \
+       --upstream https://api.openai.com/v1 --upstream-key sk-...
+```
+
+Three things it serves on one port: `/` the landing page, `/app` the browser
+terminal, `/ws` SSH over a WebSocket. Add `--tcp-addr :22` for the command the
+landing page prints (`ssh -A router.cafe` is plain SSH, and the HTTP listener
+does not answer it).
+
+`--treasury` is required: there is nowhere to send a deposit without it.
+`--dry-run-deposits` prices one without signing or moving anything.
+
+`ssh -A -p 2222 nobody@127.0.0.1` after `--tcp-addr 127.0.0.1:2222` opens the
+session UI. `ssh ... uptime` gets the command refused with exit 1; see
+`cafe.md`.

@@ -70,7 +70,7 @@ in code no fixture touched.
 
 ## The browser selftest
 
-`cmd/wssh/static/selftest.html` checks the two things no unit test can: that
+`webui/static/selftest.html` checks the two things no unit test can: that
 the page's builder and the Go reader agree, and that the fee payer `sol-tx`
 reports is the key that actually signed. That second check caught a real bug -
 the reader had the header one byte out and returned a plausible account that

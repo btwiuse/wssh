@@ -1,7 +1,7 @@
 # Solana: signing, addresses, and the wire format
 
 Read this when touching `solana/`, `auth/agentkey/solana.go`,
-`cmd/sol-tx/`, `cmd/sol-keys/`, `cmd/wssh/static/solana.js` or
+`cmd/sol-tx/`, `cmd/sol-keys/`, `webui/static/solana.js` or
 `scripts/sol-tx/`.
 
 ## Signing a transaction from a session
@@ -178,7 +178,7 @@ signature slot in front of it.
 There are three of this logic, deliberately, and they are not redundant:
 
 - `solana/` (Go) - the real one. Builds, signs, sends, confirms.
-- `cmd/wssh/static/solana.js` (browser) - the wallet side. Builds the
+- `webui/static/solana.js` (browser) - the wallet side. Builds the
   transaction where the wallet is and shows it to a person before approving.
 - `scripts/sol-tx/` (Deno) - for reading rather than trusting. It logs every
   byte that crosses the agent socket and every RPC call. `deno task test`.

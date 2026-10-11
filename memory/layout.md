@@ -14,10 +14,12 @@ Three, and they share almost nothing:
 - **Client library** (`client/client.go`) - opens a WebSocket, runs an SSH
   client over it, exposes a `Session`. Same code is used by both the browser
   (WASM) and the CLI `client` subcommand.
-- **Front end** (`cmd/wssh/static/`, `client/wasm.go`, `client/wasmauth.go`,
+- **Front end** (`webui/static/`, `client/wasm.go`, `client/wasmauth.go`,
   `client/cmd/webssh-web/`) - a worker-hosted Go/WASM SSH client behind a React
   + xterm UI. `static/ssh.wasm` and `static/wasm_exec.js` are generated; the
-  rest is hand-written.
+  rest is hand-written. It lives in package `webui` rather than under
+  `cmd/wssh/` because two binaries embed it and `//go:embed` cannot reach
+  outside its own package; see `cafe.md`.
 
 `shell/` is the wish middleware that runs the local user's login shell. It
 manages the PTY itself rather than going through `wish.Command`, because a
@@ -35,14 +37,17 @@ browser client imports `auth/agentkey` and has no use for password files.
   mounts the server on the configured `Path`, and mounts the front end on
   `/`. The handler path `""` mounts on `/` in Go's mux (catch-all) - that is
   what makes a bare `wssh server` work for any URL.
-- `cmd/wssh/web.go` embeds the whole `static/` directory with
+- `webui/webui.go` embeds the whole `static/` directory with
   `//go:embed all:static`. The embed succeeds whether or not `ssh.wasm` is
   there, so a binary built before the wasm exists will not fail at compile
-  time. The `wasmClientMissing` check in `web.go:40-43` runs at startup and
-  warns when the wasm is absent - that warning is the only signal before
-  someone opens a terminal and watches the worker die on a 404. The same
-  file carries `//go:generate bash ../../client/build.sh`, which is what
-  `make generate` and `go generate ./...` invoke.
+  time. `webui.MissingWasm` runs at startup and warns when the wasm is absent -
+  that warning is the only signal before someone opens a terminal and watches
+  the worker die on a 404. The same file carries
+  `//go:generate bash ../client/build.sh`, which is what `make generate` and
+  `go generate ./...` invoke.
+- `webui.Handler` also owns the `__WSSH_SESSION_PATH__` substitution and the
+  no-cache wrapper, so both binaries serve the page the same way rather than
+  each keeping its own copy of the rules.
 - The default SSH channel/request/subsystem handlers must be installed by
   hand because `wish.NewServer` skips the `Serve` setup when only
   `HandleConn` is used. Without the `"session"` channel handler, every
@@ -82,7 +87,7 @@ browser client imports `auth/agentkey` and has no use for password files.
 
 ## The browser client
 
-- `cmd/wssh/static/index.html` contains the literal placeholder
+- `webui/static/index.html` contains the literal placeholder
   `__WSSH_SESSION_PATH__`, which `cmd/wssh/serve.go`'s `frontEnd` replaces
   with the configured `--path` value before serving. The page resolves it
   relative to its own URL so the same build works on localhost, behind a

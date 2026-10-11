@@ -21,16 +21,18 @@ to look more reasonable.
   Match that pattern when adding a similar fail-fast branch.
 - `make` with no target prints help and exits 0 having built nothing.
   Scripts and CI have to name a target; bare `make` is not a build alias.
-- `go build ./cmd/wssh` succeeds even when `cmd/wssh/static/ssh.wasm` is
-  absent, because the `//go:embed all:static` directive covers a directory
-  rather than a file list. That is the whole reason `make wssh` is more
-  than a convenience: it wires the wasm as a prerequisite of the binary,
-  so a build that omits it fails instead of producing a quietly broken
-  binary. The startup `wasmClientMissing` warning is the safety net for
-  anyone who skipped the Makefile.
+- `go build ./cmd/wssh` succeeds even when `webui/static/ssh.wasm` is absent,
+  because the `//go:embed all:static` directive covers a directory rather than
+  a file list. That is the whole reason `make wssh` is more than a
+  convenience: it wires the wasm as a prerequisite of the binary, so a build
+  that omits it fails instead of producing a quietly broken binary. The
+  startup `webui.MissingWasm` warning is the safety net for anyone who skipped
+  the Makefile.
 - The agent channel handler has to be installed after the default channel
   handlers map is built, by mutating it in place. Anything installed through
   a `ssh.Option` is wiped. See `agent-forwarding.md`.
+- A RouterCafe session refusing `uptime` with "does not run commands" is the
+  product working, not a broken server. See `cafe.md`.
 - A refusal raised as an error from the agent has nowhere to go: the agent
   protocol allows a failure code and nothing else, so the sentence saying why
   never reaches the caller. Every refusal in the Solana extension travels as a
