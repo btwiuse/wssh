@@ -128,11 +128,22 @@ function syncQuery(addr, command) {
   history.replaceState(null, '', url);
 }
 
+// The status is a dot rather than a word.
+//
+// Four words in a toolbar is four things to read before anything else, and the
+// only question anybody has of it is which of four states it is in - which the
+// colour already answers. The word is still there, as the title, because "why
+// is that green" is a real question and the answer should be one hover away
+// rather than a guess from a shade.
+//
+// Connecting pulses, because it is the one state that is going to change on its
+// own: a dot that stays still while something is happening is the one state a
+// user cannot tell from a hang.
 const STATUS = {
-  idle: { label: 'Disconnected', color: 'text-slate-400' },
-  connecting: { label: 'Connecting…', color: 'text-amber-300' },
-  connected: { label: 'Connected', color: 'text-emerald-400' },
-  closed: { label: 'Session ended', color: 'text-slate-400' },
+  idle: { label: 'Disconnected', dot: 'bg-slate-500' },
+  connecting: { label: 'Connecting…', dot: 'bg-amber-400' },
+  connected: { label: 'Connected', dot: 'bg-emerald-400' },
+  closed: { label: 'Session ended', dot: 'bg-slate-500' },
 };
 
 function App() {
@@ -193,9 +204,51 @@ function App() {
 
   const [listOpen, setListOpen] = useState(false);
   const [credsOpen, setCredsOpen] = useState(false);
+  const [connectOpen, setConnectOpen] = useState(false);
   const [saved, setSaved] = useState(savedEndpoints);
   const [editing, setEditing] = useState(null); // the entry being renamed
   const [editValue, setEditValue] = useState('');
+
+  // Anything that opens on a click closes when the click lands somewhere else.
+  //
+  // This is one listener for all three rather than three onBlur handlers,
+  // because onBlur answers the wrong question. Focus and the pointer are
+  // different things: clicking a blank part of the page can move focus, can
+  // leave it where it was, or can land on a node that was never focusable at
+  // all, and a blur handler sees only the first of those. Worse, the buttons
+  // that open these call preventDefault on mousedown so the field beside them
+  // does not blur - which means the very gesture that opened the popover is
+  // the one that stops the popover from ever being able to close itself.
+  //
+  // A single document-level pointerdown, asked whether the event is inside the
+  // panel, covers every one of those: anywhere outside closes, anywhere inside
+  // does not, and no amount of focus trickery changes the answer.
+  const listPanel = useRef(null);
+  const credsPanel = useRef(null);
+  const connectPanel = useRef(null);
+
+  useEffect(() => {
+    const dismiss = (e) => {
+      if (listPanel.current && !listPanel.current.contains(e.target)) setListOpen(false);
+      if (credsPanel.current && !credsPanel.current.contains(e.target)) setCredsOpen(false);
+      if (connectPanel.current && !connectPanel.current.contains(e.target)) setConnectOpen(false);
+    };
+    document.addEventListener('pointerdown', dismiss, true);
+    return () => document.removeEventListener('pointerdown', dismiss, true);
+  }, []);
+
+  // Escape closes whatever is open, from anywhere on the page rather than only
+  // from inside the field that opened it.
+  useEffect(() => {
+    const escape = (e) => {
+      if (e.key !== 'Escape') return;
+      setListOpen(false);
+      setCredsOpen(false);
+      setConnectOpen(false);
+    };
+    document.addEventListener('keydown', escape);
+    return () => document.removeEventListener('keydown', escape);
+  }, []);
 
   const refresh = useCallback((next) => {
     savedEndpoints = next;
@@ -278,12 +331,19 @@ function App() {
   const walletRef = useRef(null);
   const walletBusy = useRef(false);
 
-  // Agent forwarding is the browser's ssh -A. Off unless asked for: with it
-  // on, anything in the session can ask the page to sign, which is why every
-  // signature still stops and asks here.
+  // Agent forwarding is the browser's ssh -A: on by default, because a session
+  // that cannot ask the page to sign is a session where half the tools on it
+  // simply do not work, and the person who turned it off already knows.
+  //
+  // What forwarding actually grants is the ability to *ask* for a signature, and
+  // nothing is signed without the dialog below asking first - the checkbox
+  // decides what may be asked for, never whether to answer. That is the whole of
+  // the trade, and it is why the default can be on.
+  //
+  // Storing 'false' still wins, so somebody who turned it off keeps it off.
   const [forwardAgent, setForwardAgent] = useState(
-    () => store.get('wssh.forwardAgent') === 'true',
-  );
+      () => store.get('wssh.forwardAgent') !== 'false',
+    );
 
   const ask = useCallback((label, secret) => new Promise((resolve) => {
     const next = [...promptQueue.current, { label, secret, resolve }];
@@ -388,6 +448,11 @@ function App() {
       fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
       fontSize: 14,
       scrollback: 5000,
+      // xterm draws its own scrollbar, and so does the viewport underneath it,
+      // so the terminal ends up with two on the right edge for one scrollback.
+      // The pane scrolls on its own and there is nothing to scroll to that the
+      // user cannot already reach with the wheel or a drag.
+      scrollbar: { showScrollbar: false },
       theme: {
         background: '#0f172a',
         foreground: '#e2e8f0',
@@ -650,14 +715,8 @@ function App() {
         <label class="sr-only" for="endpoint">WebSocket address</label>
         <div class="flex-1 min-w-0 flex">
           <div
+            ref=${listPanel}
             class="relative flex-1 min-w-0"
-            onBlur=${(e) => {
-              // Close only when focus leaves the whole control, not just the
-              // text field. Renaming swaps a row for an input and focuses it,
-              // which blurs the field and would otherwise slam the list shut
-              // mid-edit.
-              if (!e.currentTarget.contains(e.relatedTarget)) setListOpen(false);
-            }}
           >
             <input
               id="endpoint"
@@ -675,7 +734,7 @@ function App() {
             />
         ${listOpen && saved.length > 0 && html`
           <div
-            class="absolute z-20 mt-1 w-full max-h-72 overflow-y-auto rounded
+            class="absolute z-20 top-full mt-1 w-full max-h-72 overflow-y-auto rounded
                    border border-slate-700 bg-slate-900 shadow-xl"
           >
             ${visible.length === 0 && html`
@@ -750,13 +809,8 @@ function App() {
           disabled=${connected || status === 'connecting'}
           onClick=${resetEndpoint}>reset</button>
         <div
+          ref=${credsPanel}
           class="relative shrink-0"
-          onBlur=${(e) => {
-            // Same rule as the address list: stay open while focus is inside,
-            // and close once it leaves, rather than covering the terminal
-            // while someone is trying to type in it.
-            if (!e.currentTarget.contains(e.relatedTarget)) setCredsOpen(false);
-          }}
         >
           <button
             class="px-2 py-1 text-xs rounded bg-slate-800 hover:bg-slate-700 text-slate-300
@@ -772,30 +826,6 @@ function App() {
               onClose=${() => setCredsOpen(false)}
             />`}
         </div>
-        <label class="sr-only" for="user">user</label>
-        <input
-          id="user"
-          class="w-24 shrink-0 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm
-                 focus:outline-none focus:border-emerald-500 disabled:opacity-50"
-          value=${user}
-          disabled=${connected || status === 'connecting'}
-          onInput=${(e) => { setUser(e.target.value); store.set('wssh.user', e.target.value); }}
-          onKeyDown=${(e) => { if (e.key === 'Enter' && !connected) connect(); }}
-        />
-        <label class="sr-only" for="command">command</label>
-        <input
-          id="command"
-          class="flex-1 min-w-32 max-w-96 bg-slate-800 border border-slate-700 rounded px-2 py-1
-                 text-sm font-mono focus:outline-none focus:border-emerald-500 disabled:opacity-50"
-          placeholder="command (optional)"
-          title="Run this command on the remote side and exit; leave blank for an interactive shell"
-          value=${command}
-          spellcheck="false"
-          autocomplete="off"
-          disabled=${connected || status === 'connecting'}
-          onInput=${(e) => setCommand(e.target.value)}
-          onKeyDown=${(e) => { if (e.key === 'Enter' && !connected) connect(); }}
-        />
         ${wallet
           ? html`<button
               class="flex items-center gap-1 text-xs rounded px-2 py-1 shrink-0
@@ -836,11 +866,91 @@ only signatures come back, and every signature asks you first."
           ? html`<button
               class="px-3 py-1 text-sm rounded bg-slate-700 hover:bg-slate-600 shrink-0"
               onClick=${disconnect}>Disconnect</button>`
-          : html`<button
-              class="px-3 py-1 text-sm rounded bg-emerald-600 hover:bg-emerald-500
-                     text-slate-900 font-medium shrink-0"
-              onClick=${connect}>Connect</button>`}
-        <span class=${`text-xs shrink-0 ${statusInfo.color}`}>${statusInfo.label}</span>
+          : html`
+        <!--
+          A split button, because the two things it does are not the same size
+          to the person using it.
+
+          "Connect" is one keystroke and is what almost everybody wants, so it
+          keeps the whole width of the left half - the half your cursor lands on
+          by default. Who to connect as, and what to run, are set once and then
+          not for months, so they go behind the ▾ on the right rather than
+          holding two text fields open in a toolbar on every single visit.
+
+          The two halves are separate buttons rather than one button with a hit
+          test inside it, so both are reachable by keyboard, both announce
+          themselves, and the divider is the only thing marking where one ends.
+        -->
+        <div ref=${connectPanel} class="relative shrink-0 flex">
+          <button
+            class="px-3 py-1 text-sm rounded-l bg-emerald-600 hover:bg-emerald-500
+                   text-slate-900 font-medium"
+            onClick=${connect}>Connect</button>
+          <button
+            class="px-2 py-1 text-sm rounded-r bg-emerald-600 hover:bg-emerald-500
+                   text-slate-900 border-l border-emerald-500/40"
+            title="Who to connect as, and what to run"
+            aria-haspopup="true"
+            aria-expanded=${connectOpen}
+            onClick=${() => setConnectOpen((open) => !open)}
+          >▾</button>
+          ${connectOpen && html`
+            <div
+              class="absolute right-0 top-full z-20 mt-1 w-80 rounded border border-slate-700
+                     bg-slate-900 shadow-xl p-3 space-y-3"
+            >
+              <div>
+                <label class="block text-xs text-slate-400 mb-1" for="user">
+                  user
+                </label>
+                <input
+                  id="user"
+                  class="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm
+                         focus:outline-none focus:border-emerald-500 disabled:opacity-50"
+                  value=${user}
+                  disabled=${connected || status === 'connecting'}
+                  onInput=${(e) => { setUser(e.target.value); store.set('wssh.user', e.target.value); }}
+                  onKeyDown=${(e) => { if (e.key === 'Enter' && !connected) { setConnectOpen(false); connect(); } }}
+                />
+              </div>
+              <div>
+                <label class="block text-xs text-slate-400 mb-1" for="command">
+                  command
+                </label>
+                <input
+                  id="command"
+                  class="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1
+                         text-sm font-mono focus:outline-none focus:border-emerald-500
+                         disabled:opacity-50"
+                  placeholder="none - an interactive shell"
+                  title="Run this command on the remote side and exit; leave blank for an interactive shell"
+                  value=${command}
+                  spellcheck="false"
+                  autocomplete="off"
+                  disabled=${connected || status === 'connecting'}
+                  onInput=${(e) => setCommand(e.target.value)}
+                  onKeyDown=${(e) => { if (e.key === 'Enter' && !connected) { setConnectOpen(false); connect(); } }}
+                />
+              </div>
+              <p class="text-xs text-slate-500 leading-relaxed">
+                These are remembered for next time. The address and the keys are
+                the part that changes; these two are not.
+              </p>
+            </div>`}
+        </div>`}
+        <!--
+          The label lives in the title rather than on screen. A button with a
+          tooltip is also a button a keyboard can reach, so the state is
+          announced rather than being a picture only sighted users can read.
+        -->
+        <button
+          type="button"
+          class="shrink-0 w-4 h-4 rounded-full ${statusInfo.dot} ${status === 'connecting' ? 'animate-pulse' : ''}
+                 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2
+                 focus:ring-offset-slate-950"
+          title=${statusInfo.label}
+          aria-label=${`Session status: ${statusInfo.label}`}
+        ></button>
       </header>
 
       ${error && html`

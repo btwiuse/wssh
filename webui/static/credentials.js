@@ -350,7 +350,7 @@ export function CredentialsPanel({ workerRef, onClose }) {
   }, [remember]);
 
   return html`
-    <div class="absolute z-30 mt-1 right-0 w-[30rem] max-w-[95vw] rounded border border-slate-700
+    <div class="absolute z-30 top-full mt-1 right-0 w-[30rem] max-w-[95vw] rounded border border-slate-700
                 bg-slate-900 shadow-2xl p-3 text-slate-200">
       <div class="flex items-center gap-2 mb-2">
         <span class="font-semibold text-sm">Credentials</span>
