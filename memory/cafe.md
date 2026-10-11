@@ -611,10 +611,30 @@ same eight letters again. The cup is the thing the page is about - money, and
 what it is spent on - and it is a picture, so it reads as fast as a picture
 does.
 
-It is the favicon, `cmd/cafe/static/favicon-256.png`, **fitted by hand rather
-than sampled out of the PNG**. Sampling is the obvious way and it came out
-appalling: the grid has to be half as fine as the terminal's cells are tall,
-and at twenty-one columns what comes out is a smear rather than a cup.
+No page titles either. The bar at the top already carries the name of the
+page you are on, twenty-two columns above a title saying the same thing; the
+cup is on the one page that has something to show instead of a name, and the
+other four show their contents. A title line and its blank underneath are two
+lines of every screen spent on something the chrome is already saying.
+
+It is the favicon, `cmd/cafe/static/favicon-256.png`, **drawn rather than
+sampled out of the PNG**. Sampling is what a person reaches for and it comes
+out appalling: the grid has to be half as fine as the terminal's cells are
+tall, and at twenty-five columns what comes out is a smear rather than a cup.
+
+**Ordinary characters, and it went the other way twice.** The three figlet
+versions wanted characters that join into strokes - `|`, `_`, `/` - because
+they were lettering. The blocks that came after wanted characters that tile,
+because those were legible. Neither is what a *picture* wants: blocks tile but
+they do not draw, and there is no rim, no handle and no saucer in a filled
+rectangle. A drawing wants `|`, `_`, `/`, `\` and `<`, which is what a cup is
+actually made of.
+
+**Every line is padded to one width before it is centred.** The drawing was
+made by hand where the lines were allowed to be different lengths, and
+centring each one on its own shifts it a column or two, which is the whole
+difference between a cup somebody drew and a cup a program drew.
+
 
 **The wordmark before it was drawn in `█` and a space, and nothing else.**
 

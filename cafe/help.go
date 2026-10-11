@@ -114,7 +114,6 @@ func (m *model) helpPager() viewport.Model {
 // helpText is the whole of the help, as prose, before the pager has had it.
 func (m model) helpText() string {
 	var b strings.Builder
-	b.WriteString("  " + m.st.title.Render("RouterCafe") + "\n\n")
 	b.WriteString("  " + m.st.value.Render("An OpenRouter you reach with ssh, paid for in SOL.") + "\n\n")
 	for _, k := range [][2]string{
 		{"tab", "next page, and into the field when a page has one"},

@@ -2215,11 +2215,16 @@ func TestTheHelpScreenScrolls(t *testing.T) {
 		t.Fatal("the help claims to fit a window it does not fit")
 	}
 	top := stripForTest(m.renderHelp())
-	if !strings.Contains(top, "RouterCafe") {
+	if !strings.Contains(top, "An OpenRouter you reach") {
 		t.Errorf("the help does not start at the top: %q", top)
 	}
 	if strings.Contains(top, "The same, more carefully") {
 		t.Error("the whole help fitted in a window it does not fit")
+	}
+	// The name is on the bar at the top of every screen, so it is not written
+	// out again at the top of this one.
+	if strings.Contains(top, "RouterCafe") {
+		t.Error("the help repeats the name the bar already carries")
 	}
 
 	// The keys that move it are the ones a list already uses, and nothing

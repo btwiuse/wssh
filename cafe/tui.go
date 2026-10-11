@@ -1843,7 +1843,6 @@ func (m *model) renderHome() string {
 
 func (m model) renderDeposit() string {
 	var b strings.Builder
-	b.WriteString("  " + m.st.title.Render("deposit") + "\n\n")
 	b.WriteString("  " + m.st.label.Render("sending to") + "  " + m.st.value.Render(m.deps.Treasury.Address) + "\n")
 	b.WriteString("  " + m.st.label.Render("rate") + "        " + m.st.value.Render(
 		FormatUSD(m.deps.Treasury.SolPriceUSD)+" of credit per SOL") + "\n\n")
@@ -1910,7 +1909,6 @@ func (m model) focusHint() string {
 // is still on the screen afterwards.
 func (m model) keysPage() (head, tail string) {
 	var h, t strings.Builder
-	h.WriteString("  " + m.st.title.Render("api keys") + "\n\n")
 
 	t.WriteString("  " + m.st.key.Render("n") + m.st.dim.Render(" mint a new key    ") +
 		m.st.key.Render("x") + m.st.dim.Render(" revoke the selected one") + "\n")
@@ -1945,7 +1943,6 @@ func (m model) keysPage() (head, tail string) {
 // modelsPage is the models screen without the list in it, for the same reason.
 func (m model) modelsPage() (head, tail string) {
 	var h, t strings.Builder
-	h.WriteString("  " + m.st.title.Render("models") + "\n\n")
 
 	t.WriteString("  " + m.st.dim.Render("ask for one by putting its name in \"model\". Prices are per million tokens,") + "\n")
 	t.WriteString("  " + m.st.dim.Render("and what they are is the rate your balance is actually billed at.") + "\n")
