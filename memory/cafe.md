@@ -764,14 +764,24 @@ sides and the foot are the same line of the drawing, and `barEdge` is the
 single value every one of them comes from. A lid in a different colour from its
 own sides reads as a rule laid over a box rather than as a box.
 
-It took two goes, because **a lipgloss border takes its colour from the
-style's foreground unless it is told otherwise** - and the active tab's label
-is green. So unifying the frame on the bar's colour left the one edge on screen
-that was a different colour from the other three sides of the same box, and it
-was the *active* edge, which is the one you are looking at. Every tab now sets
-`BorderForeground` explicitly rather than inheriting: a fallback is not a value,
-so it cannot be compared with anything, and "the frame is one colour" is a
-thing worth being able to check.
+It took three goes, and both of the last two were invisible to a test that
+looked at the styles rather than at the screen:
+
+- **A lipgloss border takes its colour from the style's foreground unless it
+  is told otherwise**, and the active tab's label is green. So unifying the
+  frame on the bar's colour left one edge a different colour from the other
+  three sides of the same box, and it was the *active* edge.
+- **A glyph written as a bare character comes out in whatever colour happens to
+  be current.** The `┌` and the run of `─` beside it were concatenated into
+  the frame as plain text, so on a dark terminal they were drawn in the
+  background colour - a corner nobody can see is the same as no corner, and the
+  test that compared `window` against `tabIdle` said everything was fine.
+
+**So it is checked on the bytes that leave**, not on the styles that were meant
+to produce them: `TestEveryLineOfTheFrameIsDrawnInOneColour` walks the drawn
+frame and asks every border glyph what colour it arrived in, and an empty
+answer is the failure. A style is an intention and a frame is a thing on a
+screen, and those two came apart twice here.
 
 Which page you are on is already said twice over and better than colour: the
 label is bold and green, and the active tab has no bottom edge at all.
