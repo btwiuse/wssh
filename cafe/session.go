@@ -248,7 +248,7 @@ func (s *Server) modelFor(w who) tea.Model {
 		// placeholder: an account is what a deposit credits and what a
 		// balance belongs to, and a session with neither must not be handed a
 		// UI showing zeros it might act on.
-		return refuseModel{reason: refusal, width: 80}
+		return refuseModel{reason: refusal, width: 80, height: 24}
 	}
 
 	m := model{
@@ -354,6 +354,7 @@ func AccountFor(pub gossh.PublicKey, walletAddress, user string) (string, string
 type refuseModel struct {
 	reason string
 	width  int
+	height int
 }
 
 func (r refuseModel) Init() tea.Cmd { return nil }
@@ -361,7 +362,7 @@ func (r refuseModel) Init() tea.Cmd { return nil }
 func (r refuseModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		r.width = msg.Width
+		r.width, r.height = msg.Width, msg.Height
 		return r, nil
 	case tea.KeyPressMsg:
 		switch msg.String() {
@@ -381,21 +382,33 @@ func (r refuseModel) View() tea.View {
 		width = 80
 	}
 	var b strings.Builder
-	b.WriteString("\n  " + st.brand.Render("RouterCafe") + "\n\n")
-	b.WriteString(wrapText(r.reason, width, st.errText))
+	b.WriteString("  " + wrapText(r.reason, bodyWidth(width), st.errText))
 	b.WriteString("\n")
-	b.WriteString(wrapText("make a key, then connect with it:", width, st.title))
+	b.WriteString(wrapText("make a key, then connect with it:", bodyWidth(width), st.title))
 	b.WriteString("\n\n")
-	b.WriteString(wrapText(KeyCommand, width, st.accent))
+	b.WriteString(wrapText(KeyCommand, bodyWidth(width), st.accent))
 	b.WriteString("\n\n")
-	b.WriteString(wrapText("then:", width, st.title))
+	b.WriteString(wrapText("then:", bodyWidth(width), st.title))
 	b.WriteString("\n\n")
-	b.WriteString(wrapText("ssh -A -i ~/.ssh/routercafe "+Domain, width, st.accent))
+	b.WriteString(wrapText("ssh -A -i ~/.ssh/routercafe "+Domain, bodyWidth(width), st.accent))
 	b.WriteString("\n\n")
-	b.WriteString(wrapText("press q to disconnect", width, st.dim))
-	b.WriteString("\n")
-	return ownedView(b.String())
+	// Same chrome as every other screen, so a refusal reads as this program
+	// refusing rather than as a different program that happens to share a name.
+	//
+	// The height falls back to a default because a refusal is the answer to a
+	// handshake and there is no reason for a size to have arrived by the time
+	// it is drawn.
+	height := r.height
+	if height <= 0 {
+		height = refusalHeight
+	}
+	return ownedView(frame(st, width, height, "",
+		strings.TrimRight(b.String(), "\n"),
+		"  "+st.dim.Render("q to disconnect")))
 }
+
+// refusalHeight is the height a refusal is drawn at when no size has arrived.
+const refusalHeight = 24
 
 // KeyCommand is the line that fixes it, and the line after it that uses it.
 //
@@ -436,7 +449,15 @@ func reasonText(reason string) string {
 // so an address or a command survives being narrow even though a sentence
 // does not have to. The main screen wraps the same way for the same reason.
 func wrapText(s string, width int, style lipgloss.Style) string {
-	avail := width - 2
+	// The two-space indent is a luxury, and it is the first thing to go: on a
+	// narrow terminal it costs a path two columns it may well need. Inside the
+	// box the width is already the inside, so giving the indent back is what
+	// lets an eighteen-character key path still fit on a twenty-column screen.
+	indent := 2
+	if width < 24 {
+		indent = 0
+	}
+	avail := width - indent
 	if avail < 12 {
 		avail = 12
 	}
@@ -448,7 +469,7 @@ func wrapText(s string, width int, style lipgloss.Style) string {
 			continue
 		}
 		for _, line := range lines {
-			out.WriteString("  " + style.Render(line) + "\n")
+			out.WriteString(strings.Repeat(" ", indent) + style.Render(line) + "\n")
 		}
 	}
 	return strings.TrimRight(out.String(), "\n")

@@ -284,6 +284,41 @@ are shared code rather than a copy.
 With no agent running it does not refuse to start: the address field works with
 nothing at all, so it warns and opens read-only.
 
+### One frame, filling the window
+
+All three screens - the account screen, the one a connection that proved
+nothing gets, and the refusal - are drawn by one `frame` in `cafe/frame.go`,
+and it fills the window rather than the contents.
+
+That is not tidiness. A frame the height of its content is a different shape
+from a frame the height of the window, so moving between a screen with a lot on
+it and one with a little changes the size of everything. The moment somebody
+notices is the moment **after signing**, when the box they were typing an
+address into is replaced by one twice as tall: it reads as the program having
+been swapped rather than the same program having changed page.
+
+Two consequences that are easy to get wrong again:
+
+- **`Height`/`Width` in lipgloss v2 are the total including the border**, so
+  `Width(m.width)` really does reach the edge. `MaxWidth`/`MaxHeight` go with
+  them: a page with more content than fits must be cut rather than be allowed
+  to push the frame off the bottom.
+- **`bodyWidth` is `width - 2`, not `width - 4`.** `wrapText` indents every
+  line by two of its own and subtracts two again, so passing `width - 4` counts
+  the indent twice and quietly cuts a token that used to fit - which is how an
+  eighteen-character key path stopped fitting on a twenty-column terminal.
+
+`wrapText` drops its own indent below 24 columns for the same reason: on a
+narrow terminal the indent is the first thing that should go, because it is the
+thing a path cannot spare.
+
+The lists are sized **from the frame constants** rather than from a constant of
+their own, so changing the chrome cannot silently leave a list scrolling off
+the bottom while its page still fits. The footer drops bindings that will not
+fit rather than wrapping, because the frame is a fixed height and a two-line
+footer would push it past the terminal. Both are discoverable losses: the help
+screen lists everything.
+
 ## Navigation: a bar, not a list of letters
 
 There are no keys that jump between pages. The top of every screen carries a

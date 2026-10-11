@@ -86,10 +86,13 @@ func (i routeItem) FilterValue() string { return i.id }
 
 func (i routeItem) lines(st *styles, sel, focused bool) (string, int) {
 	lead, trail, marker := rowStyles(st, sel, focused)
+	// Fitted rather than padded: a model name longer than its column has to
+	// stop somewhere, and running past the end of the box pushes the frame
+	// wider than the terminal rather than truncating.
 	return marker + " " +
-		pad(lead.Render(i.id), 24) +
-		pad(trail.Render(i.provider), 12) +
-		pad(trail.Render(i.in), 20) +
+		pad(lead.Render(fit(i.id, 24)), 24) +
+		pad(trail.Render(fit(i.provider, 12)), 12) +
+		pad(trail.Render(fit(i.in, 20)), 20) +
 		trail.Render(i.out+" out"), 1
 }
 
@@ -107,7 +110,7 @@ func (i keyItem) lines(st *styles, sel, focused bool) (string, int) {
 	lead, trail, marker := rowStyles(st, sel, focused)
 	return marker + " " +
 		lead.Render("rc_live_"+i.label) + "\n" +
-		"     " + trail.Render("made "+i.created+", last used "+i.touched), 2
+		"     " + trail.Render(fit("made "+i.created+", last used "+i.touched, 68)), 2
 }
 
 // rowDelegate draws the rows and knows nothing about what they mean, so both

@@ -1521,3 +1521,96 @@ func TestClickingAKeyInThePickerAdoptsIt(t *testing.T) {
 		t.Error("a clicked key did nothing when enter followed it")
 	}
 }
+
+// Every screen fills the window and none of them is allowed to overflow it.
+//
+// This is the whole point of the shared frame. A frame the height of its
+// contents is a different shape from one the height of the window, so moving
+// between a screen with a lot on it and one with a little changes the size of
+// everything - and the moment somebody notices is the moment after signing,
+// when the box they were typing an address into is replaced by one twice as
+// tall. It reads as the program having been swapped rather than the same
+// program having changed page.
+func TestEveryScreenFillsItsWindow(t *testing.T) {
+	ledger := testLedger(t)
+	for range 3 {
+		if _, err := ledger.MintKey(treasuryAddress, ""); err != nil {
+			t.Fatalf("MintKey: %v", err)
+		}
+	}
+	address := treasuryAddress
+	base := deps{
+		Catalogue: DefaultCatalogue(),
+		Ledger:    ledger,
+		Treasury:  testTreasury(),
+		Proven:    true,
+		Host:      Domain,
+	}
+
+	sizes := [][2]int{{100, 30}, {80, 24}, {140, 40}, {60, 20}, {200, 60}}
+	for _, size := range sizes {
+		w, h := size[0], size[1]
+
+		screens := map[string]string{}
+		for _, v := range []screen{screenHome, screenDeposit, screenKeys, screenModels, screenHelp} {
+			m := model{
+				st: newStyles(), view: v, deps: base,
+				account: ledger.Account(address), width: w, height: h,
+			}
+			m.syncLists()
+			out, _ := m.frame()
+			screens["account/"+pageName(v)] = out
+		}
+		screens["picker"] = anonymousModel{deps: base, st: newStyles(), width: w, height: h}.View().Content
+		screens["refusal"] = refuseModel{
+			reason: reasonText("not an ed25519 key: a ssh-rsa key is not an ed25519 public key"),
+			width:  w, height: h,
+		}.View().Content
+
+		for name, out := range screens {
+			lines := strings.Split(out, "\n")
+			if len(lines) > h {
+				t.Errorf("%s at %dx%d: %d lines tall", name, w, h, len(lines))
+			}
+			for _, l := range lines {
+				if got := lipgloss.Width(l); got > w {
+					t.Errorf("%s at %dx%d: a line is %d columns", name, w, h, got)
+				}
+			}
+		}
+	}
+}
+
+// The three screens have to agree on their shape, or the fix above has only
+// stopped them overflowing.
+func TestTheThreeScreensAreTheSameShape(t *testing.T) {
+	ledger := testLedger(t)
+	if _, err := ledger.MintKey(treasuryAddress, ""); err != nil {
+		t.Fatalf("MintKey: %v", err)
+	}
+	base := deps{Catalogue: DefaultCatalogue(), Ledger: ledger, Proven: true, Host: Domain}
+	m := model{
+		st: newStyles(), view: screenHome, deps: base,
+		account: ledger.Account(treasuryAddress), width: 100, height: 30,
+	}
+	m.syncLists()
+
+	account, _ := m.frame()
+	picker := anonymousModel{deps: base, st: newStyles(), width: 100, height: 30}.View().Content
+	refusal := refuseModel{reason: "no", width: 100, height: 30}.View().Content
+
+	for name, out := range map[string]string{"picker": picker, "refusal": refusal} {
+		if got, want := len(strings.Split(out, "\n")), len(strings.Split(account, "\n")); got != want {
+			t.Errorf("the %s is %d lines against the account screen's %d", name, got, want)
+		}
+	}
+}
+
+func pageName(v screen) string {
+	for _, s := range screens {
+		if s.view == v {
+			return s.name
+		}
+	}
+	return "?"
+}

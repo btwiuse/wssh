@@ -815,9 +815,6 @@ func (m model) addRow(at *int, page func() (string, int)) string {
 func (m model) frame() (string, clicks) {
 	bar, spans := m.tabBar()
 	page, listAt := m.renderPage()
-	window := m.st.window.
-		Width(m.contentWidth() - 2).
-		Render(page)
 
 	perRow := m.listLinesPerRow()
 	where := clicks{
@@ -832,14 +829,10 @@ func (m model) frame() (string, clicks) {
 	// there on. A list's rows therefore sit at a known absolute line without
 	// anybody having to remember what the page printed above them.
 	if listAt >= 0 {
-		where.listTop = barTop + barLines + listAt
+		where.listTop = brandLines + barLines + listAt
 	}
-	return m.header() + "\n" + bar + "\n" + window + "\n" + m.footer(), where
+	return frame(m.st, m.width, m.height, bar, page, m.footer()), where
 }
-
-// barLines is how many lines the bar occupies: the top of the first tab, the
-// labels, and the bottom edge that joins the active one to the page.
-const barLines = 3
 
 // clicks is what the last frame put on screen and where, so that a mouse
 // event carrying coordinates can be turned into an intent.
@@ -948,11 +941,11 @@ func (m model) listLinesPerRow() int {
 func (m model) header() string {
 	left := m.st.brand.Render("RouterCafe")
 	right := m.st.dim.Render(Domain)
-	gap := m.contentWidth() - lipgloss.Width(left) - lipgloss.Width(right)
+	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
 		gap = 1
 	}
-	return "  " + left + strings.Repeat(" ", gap) + right
+	return left + strings.Repeat(" ", gap) + right
 }
 
 // tabBar is where every page is, all at once.
@@ -1017,21 +1010,41 @@ func tabBorderWithBottom(left, middle, right string) lipgloss.Border {
 }
 
 func (m model) footer() string {
-	var b strings.Builder
-	b.WriteString(m.st.key.Render("tab") + m.st.dim.Render(" next page    "))
-	b.WriteString(m.st.key.Render("shift+tab") + m.st.dim.Render(" previous    "))
-	if m.view.widget() && !m.focus {
-		b.WriteString(m.st.key.Render("tab") + m.st.dim.Render(" into the field    "))
+	pairs := [][2]string{
+		{"tab", "next page"},
+		{"shift+tab", "previous"},
+		{"r", "refresh"},
 	}
-	b.WriteString(m.st.key.Render("r") + m.st.dim.Render(" refresh    "))
 	// Only while there is something to copy. A y that is always offered and
 	// usually refused is a keystroke people learn to ignore.
 	if m.fresh != "" {
-		b.WriteString(m.st.key.Render("y") + m.st.dim.Render(" copy key    "))
+		pairs = append(pairs, [2]string{"y", "copy key"})
 	}
-	b.WriteString(m.st.key.Render("?") + m.st.dim.Render(" help    "))
-	b.WriteString(m.st.key.Render("q") + m.st.dim.Render(" quit"))
-	return "  " + b.String()
+	pairs = append(pairs, [2]string{"?", "help"}, [2]string{"q", "quit"})
+
+	// Built by dropping what does not fit rather than by wrapping, because the
+	// frame is a fixed height and a footer that grew to two lines would push it
+	// past the bottom of the terminal. The help screen has the whole list, so
+	// what is lost here is discoverable rather than gone.
+	var b strings.Builder
+	b.WriteString("  ")
+	used := 2
+	for i, pair := range pairs {
+		piece := m.st.key.Render(pair[0]) + m.st.dim.Render(" "+pair[1]+"    ")
+		w := lipgloss.Width(piece)
+		if used+w > m.width && i < len(pairs)-1 {
+			continue
+		}
+		if used+w > m.width && i > 0 {
+			// The last one always goes in, even if it has to be the only thing
+			// on the line: a footer that cannot say how to leave is worse than
+			// one that overflows by a column.
+			break
+		}
+		b.WriteString(piece)
+		used += w
+	}
+	return strings.TrimRight(b.String(), " ")
 }
 
 func (m model) renderHome() string {
@@ -1185,21 +1198,28 @@ func (m model) listHint(enterMeans string) string {
 	return hint
 }
 
-// listWidth is what a list gets inside the pane: the content width less the
-// two-space indent and a column of slack.
+// listWidth is what a list gets inside the pane, which is the inside of the
+// box. The list draws its own two-space indent on each row, so this is the
+// whole inner width rather than that minus two.
 func (m model) listWidth() int {
-	w := m.contentWidth() - 4
-	if w < 20 {
-		w = 20
-	}
-	return w
+	return bodyWidth(m.width)
 }
 
 // listHeight is how many terminal lines a list may use once the title, the
 // lines of prose around it and the hint underneath have taken their share.
 // perRow is how many lines one of this list's rows occupies.
 func (m model) listHeight(perRow int) int {
-	h := m.height - 10
+	// Derived from the frame rather than a number of its own: the chrome around
+	// a list, plus the box's two horizontal borders, plus the four lines a page
+	// spends on its own title, the blank under it, its blank before the hint and
+	// the hint. Changing the frame and leaving this at a constant is how a list
+	// ends up either scrolling off the bottom or leaving a hole under it.
+	// Box, less its two horizontal borders, less the four lines a page spends
+	// on its title and the lines around its hint, less the component's own
+	// status bar. Derived from the frame rather than being a constant, because
+	// a constant here is how a list ends up scrolling off the bottom while the
+	// page it is on still fits.
+	h := m.height - brandLines - footerLines - barLines - 8
 	if h < perRow*3 {
 		h = perRow * 3
 	}
@@ -1330,6 +1350,25 @@ func shortSig(sig string) string {
 		return sig
 	}
 	return sig[:8] + "…" + sig[len(sig)-8:]
+}
+
+// fit cuts a string to n display columns, so a value too long for its column
+// stops rather than pushing the frame past the edge of the terminal.
+//
+// Measured with lipgloss.Width rather than len, because the callers pass
+// styled strings and a byte count would cut a colour escape in half.
+func fit(s string, n int) string {
+	if n <= 0 || lipgloss.Width(s) <= n {
+		return s
+	}
+	cut := 0
+	for i, r := range s {
+		if lipgloss.Width(s[:i]) > n-1 {
+			return s[:cut] + "…"
+		}
+		cut = i + len(string(r))
+	}
+	return s[:cut]
 }
 
 func pad(s string, n int) string {

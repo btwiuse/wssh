@@ -259,22 +259,21 @@ func isBase58(c byte) bool {
 func (m anonymousModel) View() tea.View {
 	st := m.st
 	var b strings.Builder
-	b.WriteString("\n  " + st.brand.Render("RouterCafe") + "  " + st.dim.Render(m.deps.host()) + "\n\n")
 
 	if m.busy != "" {
-		b.WriteString(wrapText(m.busy, m.width, st.warn) + "\n")
-		return ownedView(b.String())
+		return ownedView(frame(st, m.width, m.height, "",
+			wrapText(m.busy, bodyWidth(m.width), st.warn), ""))
 	}
 
 	if len(m.keys) > 0 {
-		b.WriteString(wrapText("Which of these is yours?", m.width, st.title) + "\n\n")
+		b.WriteString(wrapText("Which of these is yours?", bodyWidth(m.width), st.title) + "\n\n")
 	} else {
 		if m.deps.Local {
-			b.WriteString(wrapText("No ssh-agent, so nothing here can sign.", m.width, st.title) + "\n")
-			b.WriteString(wrapText("An account is an ed25519 public key. Paste one to look at it:", m.width, st.dim) + "\n\n")
+			b.WriteString(wrapText("No ssh-agent, so nothing here can sign.", bodyWidth(m.width), st.title) + "\n")
+			b.WriteString(wrapText("An account is an ed25519 public key. Paste one to look at it:", bodyWidth(m.width), st.dim) + "\n\n")
 		} else {
-			b.WriteString(wrapText("This connection proved nothing, so nothing here can sign.", m.width, st.title) + "\n")
-			b.WriteString(wrapText("An account is an ed25519 public key. Paste one to look at it:", m.width, st.dim) + "\n\n")
+			b.WriteString(wrapText("This connection proved nothing, so nothing here can sign.", bodyWidth(m.width), st.title) + "\n")
+			b.WriteString(wrapText("An account is an ed25519 public key. Paste one to look at it:", bodyWidth(m.width), st.dim) + "\n\n")
 		}
 	}
 
@@ -284,7 +283,7 @@ func (m anonymousModel) View() tea.View {
 		if i == m.picked {
 			marker, style = "> ", st.accent
 		}
-		b.WriteString(wrapText(marker+labelForKey(k), m.width, style) + "\n")
+		b.WriteString(wrapText(marker+labelForKey(k), bodyWidth(m.width), style) + "\n")
 	}
 	if len(m.keys) > 0 {
 		b.WriteString("\n")
@@ -293,7 +292,7 @@ func (m anonymousModel) View() tea.View {
 	// A real failure is worth a line; "you forwarded no agent" is not, because
 	// the field below is the answer to it.
 	if m.keysErr != "" && !strings.Contains(m.keysErr, "forwarded no agent") {
-		b.WriteString(wrapText(m.keysErr+".", m.width, st.warn) + "\n\n")
+		b.WriteString(wrapText(m.keysErr+".", bodyWidth(m.width), st.warn) + "\n\n")
 	}
 
 	marker := "  "
@@ -304,16 +303,16 @@ func (m anonymousModel) View() tea.View {
 		st.accent.Render(m.typed) + st.dim.Render("█") + "\n\n")
 
 	if len(m.keys) == 0 {
-		b.WriteString(wrapText("enter to open it", m.width, st.dim) + "\n\n")
+		b.WriteString(wrapText("enter to open it", bodyWidth(m.width), st.dim) + "\n\n")
 	} else {
-		b.WriteString(wrapText("up/down to choose, enter to sign with a key or open an address", m.width, st.dim) + "\n\n")
+		b.WriteString(wrapText("up/down to choose, enter to sign with a key or open an address", bodyWidth(m.width), st.dim) + "\n\n")
 	}
 
 	if m.notice.kind != noticeNone {
-		b.WriteString(wrapText(m.notice.text, m.width, st.errText) + "\n\n")
+		b.WriteString(wrapText(m.notice.text, bodyWidth(m.width), st.errText) + "\n\n")
 	}
-	b.WriteString(wrapText("ctrl+c to disconnect", m.width, st.dim) + "\n")
-	v := ownedView(b.String())
+	v := ownedView(frame(st, m.width, m.height, "", strings.TrimRight(b.String(), "\n"),
+		"  "+st.dim.Render("ctrl+c to disconnect")))
 	// The same mouse the rest of the program answers to. This screen is the
 	// first thing a local run shows and the first thing a connection that
 	// proved nothing shows, so a click that did nothing here would be the most
