@@ -372,3 +372,34 @@ func TestOnlyEd25519KeysAuthenticate(t *testing.T) {
 		t.Error("an rsa key was accepted as something that can name an account")
 	}
 }
+
+// The treasury used to be required, which met the common case - somebody
+// running their own instance to try it - with a flag they had to go and invent
+// an address for before anything happened. It has a default now, and the order
+// is the thing worth holding: what you typed beats what your shell exported
+// beats the built-in.
+func TestTheTreasuryHasADefaultAndTheFlagStillWins(t *testing.T) {
+	t.Setenv("ROUTERCAFE_TREASURY", "")
+
+	if got := treasuryFor(&serveOptions{}); got != DefaultTreasury {
+		t.Errorf("with nothing set the treasury is %q, want the default %q", got, DefaultTreasury)
+	}
+	// And the default has to be an address, because the whole point of having
+	// one is that a deposit can actually be signed for it.
+	if err := cafe.ValidateAddress(DefaultTreasury); err != nil {
+		t.Errorf("the built-in treasury is not a valid address: %v", err)
+	}
+
+	const mine = "So11111111111111111111111111111111111111112"
+	if got := treasuryFor(&serveOptions{Treasury: cafe.Treasury{Address: mine}}); got != mine {
+		t.Errorf("the flag was overridden: got %q, want %q", got, mine)
+	}
+
+	t.Setenv("ROUTERCAFE_TREASURY", mine)
+	if got := treasuryFor(&serveOptions{}); got != mine {
+		t.Errorf("the environment was ignored: got %q, want %q", got, mine)
+	}
+	if got := treasuryFor(&serveOptions{Treasury: cafe.Treasury{Address: DefaultTreasury}}); got != DefaultTreasury {
+		t.Errorf("the flag lost to the environment: got %q", got)
+	}
+}

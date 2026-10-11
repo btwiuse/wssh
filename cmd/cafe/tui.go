@@ -1,9 +1,7 @@
 package main
 
 import (
-	"errors"
 	"fmt"
-	"os"
 
 	"charm.land/log/v2"
 	"github.com/routercafe/routercafe/cafe"
@@ -58,7 +56,7 @@ no agent running you can still look, and not change anything.
 	cmd.Flags().StringVar(&opts.LedgerPath, "ledger", defaultLedgerPath(),
 		"the file the accounts live in; $ROUTERCAFE_LEDGER sets this")
 	cmd.Flags().StringVar(&opts.Treasury.Address, "treasury", "",
-		"where deposits go; required, as it is for the server, or set $ROUTERCAFE_TREASURY")
+		"where deposits go; defaults to RouterCafe's, or set $ROUTERCAFE_TREASURY")
 	cmd.Flags().Float64Var(&solPrice, "sol-price", solPriceFlag,
 		"what one SOL buys in USD, which is what a deposit is worth")
 	cmd.Flags().BoolVar(&opts.DryRunDeposits, "dry-run-deposits", false,
@@ -78,13 +76,7 @@ func runTUI(opts *serveOptions, solPrice float64) error {
 	opts.SolPriceMicroUSD = cafe.MicroUSD(solPrice * float64(cafe.PerMicroUSD))
 	opts.Treasury.SolPriceUSD = opts.SolPriceMicroUSD
 
-	if opts.Treasury.Address == "" {
-		opts.Treasury.Address = os.Getenv("ROUTERCAFE_TREASURY")
-	}
-	if opts.Treasury.Address == "" {
-		return errors.New("--treasury is required: an account with nowhere to send money " +
-			"cannot be funded, or set $ROUTERCAFE_TREASURY")
-	}
+	opts.Treasury.Address = treasuryFor(opts)
 	if err := cafe.ValidateAddress(opts.Treasury.Address); err != nil {
 		return fmt.Errorf("the treasury address: %w", err)
 	}

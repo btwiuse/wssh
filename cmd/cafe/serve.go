@@ -69,7 +69,40 @@ const (
 	// against; and an empty list would reject every browser while still
 	// letting ssh(1) through, which is the one setting where the two differ.
 	anyOrigin = "*"
+
+	// DefaultTreasury is where deposits go when nobody says otherwise.
+	//
+	// It used to be an error to leave it out, on the reasoning that an account
+	// with nowhere to send money cannot be funded. That was right and it made
+	// the product worse: the common case is somebody running their own
+	// instance to try it, and the first thing they met was a flag they had to
+	// go and invent an address for. A default is not a commitment - it is where
+	// a deposit goes, and an operator who means it to go somewhere else says
+	// so with --treasury or $ROUTERCAFE_TREASURY, both of which still win.
+	//
+	// It is validated like any other address, at the point it is used, so a
+	// typo in this constant fails at startup rather than at the first
+	// deposit somebody tries to make.
+	DefaultTreasury = "ALT1SYDQCygmHbXyVsLp9B72pxdXgP7ZtpuLpPXTKCHs"
 )
+
+// treasuryFor works out where deposits go: the flag, then the environment,
+// then RouterCafe's own account.
+//
+// One function because there are two callers - `serve` and `tui` - and a
+// default resolved twice is a default that will be resolved differently by
+// each of them the day one of them gains a fourth case. The order is flag,
+// environment, default, which is the order a person expects: the thing they
+// typed beats the thing their shell happens to export.
+func treasuryFor(opts *serveOptions) string {
+	if opts.Treasury.Address != "" {
+		return opts.Treasury.Address
+	}
+	if v := os.Getenv("ROUTERCAFE_TREASURY"); v != "" {
+		return v
+	}
+	return DefaultTreasury
+}
 
 type serveOptions struct {
 	// Addr is the HTTP/WebSocket address. Empty means $PORT, then :8080.
@@ -166,7 +199,7 @@ func addServeFlags(cmd *cobra.Command, opts *serveOptions) {
 		"how long live sessions get to finish after an interrupt; 0 waits forever")
 
 	cmd.Flags().StringVar(&opts.Treasury.Address, "treasury", "",
-		"the Solana account deposits are sent to; required, or $ROUTERCAFE_TREASURY")
+		"the Solana account deposits are sent to; defaults to RouterCafe's, or $ROUTERCAFE_TREASURY")
 	cmd.Flags().StringVar(&opts.Treasury.RPC, "rpc", cafe.DefaultRPC,
 		"JSON-RPC endpoint for deposits: blockhash, broadcast and confirmation")
 	cmd.Flags().Float64Var(&solPriceFlag, "sol-price", 200,
@@ -222,13 +255,7 @@ func serve(opts *serveOptions) error {
 	opts.MaxReserveMicroUSD = cafe.MicroUSD(maxReserveFlag * cafe.PerMicroUSD)
 	opts.Treasury.SolPriceUSD = opts.SolPriceMicroUSD
 
-	if opts.Treasury.Address == "" {
-		opts.Treasury.Address = os.Getenv("ROUTERCAFE_TREASURY")
-	}
-	if opts.Treasury.Address == "" {
-		return errors.New("--treasury is required: there is nowhere to send deposits without it, " +
-			"or set $ROUTERCAFE_TREASURY")
-	}
+	opts.Treasury.Address = treasuryFor(opts)
 	if opts.DryRunDeposits {
 		// The address still has to parse, because the point of a dry run is
 		// to walk the flow that a real one takes; a treasury that is not an
