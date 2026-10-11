@@ -856,7 +856,14 @@ only signatures come back, and every signature asks you first."
 
       ${signature && html`
         <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-          <div class="w-[26rem] rounded border border-amber-600 bg-slate-900 p-4 shadow-2xl">
+          <!--
+            Wide, because the longest line in the summary is a key
+            fingerprint and the next ones are base58 addresses. The cap
+            against the viewport is so a narrow window shrinks the dialog
+            rather than pushing the buttons off the side.
+          -->
+          <div class="w-[42rem] max-w-[calc(100vw-2rem)] rounded border border-amber-600
+                      bg-slate-900 p-4 shadow-2xl">
             <h2 class="text-sm font-semibold text-amber-400 mb-1">Signing request</h2>
             <p class="text-xs text-slate-400 mb-2">
               Something in this session wants a signature from a key in this page.
@@ -865,10 +872,16 @@ only signatures come back, and every signature asks you first."
             <!--
               A preformatted block, not a paragraph: the summary is YAML and
               a paragraph collapses its newlines into one line, which takes
-              away the only structure it has. break-all stays for the long
-              addresses, which would otherwise overflow the box sideways.
+              away the only structure it has.
+
+              break-words, not break-all. Wrapping happens at the spaces, so a
+              base58 address stays on one line and can still be read and
+              compared; it breaks only when a single token cannot fit on a
+              line by itself. break-all splits addresses down the middle,
+              which is the one thing this box exists to prevent. The warning
+              lines are prose and wrap at their spaces like anything else.
             -->
-            <pre class="text-xs font-mono text-slate-200 break-all whitespace-pre-wrap
+            <pre class="text-xs font-mono text-slate-200 whitespace-pre-wrap break-words
                          bg-slate-950 border border-slate-700 rounded px-2 py-1 mb-3
                          overflow-x-auto">${signature.summary}</pre>
             <div class="flex justify-end gap-2">
