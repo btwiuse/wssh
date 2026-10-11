@@ -324,6 +324,8 @@ func (m *model) nav() *list.Model {
 		return &m.apiKeys
 	case screenModels:
 		return &m.routes
+	case screenFAQ:
+		return &m.faqs
 	}
 	return nil
 }
@@ -353,6 +355,10 @@ func (m *model) syncLists() {
 	idx := m.apiKeys.Index()
 	m.routes = modelsList(m.deps.catalogue(), m.listWidth(), m.focus)
 	m.apiKeys = keysList(m.account, m.listWidth(), m.focus)
+	if m.open == nil {
+		m.open = map[int]bool{}
+	}
+	m.faqs = faqsList(m.listWidth(), m.focus, m.open)
 	if n := len(m.account.Keys); n > 0 {
 		if idx >= n {
 			idx = n - 1

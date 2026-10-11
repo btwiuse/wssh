@@ -246,7 +246,6 @@ func (s *Server) modelFor(w who) tea.Model {
 			},
 			st:     newStyles(true),
 			view:   screenHome,
-			help:   newHelp(),
 			width:  80,
 			height: 24,
 		}
@@ -278,7 +277,7 @@ func (s *Server) modelFor(w who) tea.Model {
 		st:      newStyles(true),
 		view:    screenHome,
 		account: s.opts.Ledger.Account(address),
-		help:    newHelp(),
+		open:    map[int]bool{},
 		width:   80,
 		height:  24,
 	}
@@ -293,7 +292,6 @@ func (s *Server) modelFor(w who) tea.Model {
 	m.candidates = []candidate{{address: address}}
 	m.deps.Address = address
 	m.syncLists()
-	m.sizeHelp()
 	return m
 }
 

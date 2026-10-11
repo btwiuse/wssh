@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/list"
-	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -40,7 +39,7 @@ const (
 	screenDeposit
 	screenKeys
 	screenModels
-	screenHelp
+	screenFAQ
 )
 
 // screens is every place a session can be, in the order tab walks them.
@@ -60,7 +59,7 @@ var screens = []tab{
 	{screenDeposit, "deposit"},
 	{screenKeys, "api keys"},
 	{screenModels, "models"},
-	{screenHelp, "help"},
+	{screenFAQ, "FAQs"},
 }
 
 // widget is whether the current page has something on it that takes the
@@ -515,10 +514,13 @@ type model struct {
 	// same code path as the bar: a logo takes you home.
 	mark box
 
-	// help is the pager on the one page with more on it than a window shows.
-	// Held for the same reason as the lists: where in the help somebody is
-	// reading is theirs, not something to be reset every frame.
-	help viewport.Model
+	// faqs is the list of questions on the last page, and open is which of
+	// their answers are showing. Held for the same reason as the other two
+	// lists: where somebody is reading is theirs, not something to be reset
+	// every frame - and an expansion that resets when the window resizes is an
+	// expansion that closes itself.
+	faqs list.Model
+	open map[int]bool
 
 	// focus is whether a text field is taking keystrokes. Off by default,
 	// and that is the whole point: a field that swallows every key while it
@@ -661,7 +663,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// between a title and the prose under it rather than the window; and
 		// because a list that has not been built yet is a zero value, which
 		// the component panics on.
-		m.sizeHelp()
 		return m, nil
 
 	case tea.BackgroundColorMsg:
@@ -856,6 +857,10 @@ func (m model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.paintFocus()
 			return m, nil
 		case "enter":
+			if m.view == screenFAQ {
+				m.toggleFAQ()
+				return m, nil
+			}
 			return m.onListEnter()
 		case "x":
 			// Revoking on enter is a lie about what enter is for: enter is
@@ -870,9 +875,6 @@ func (m model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if listClaims(l.KeyMap, msg.String()) {
 			return m.onListKey(msg)
 		}
-	}
-	if m.view == screenHelp && helpKeys[msg.String()] {
-		return m.scrollHelp(msg), nil
 	}
 	return m.onProgramKey(msg)
 }
@@ -895,12 +897,12 @@ func (m model) onProgramKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.cycle(-1)
 	case ">", "shift+.":
 		return m.cycle(1)
+	case "?":
+		return m.show(screenFAQ), nil
 	case "q":
 		return m, tea.Quit
 	case "y":
 		return m.copyFreshKey()
-	case "?":
-		return m.show(screenHelp), nil
 	case "r":
 		// A reload is a key because the balance is somebody's money and they
 		// should be able to make it re-read without reconnecting.
@@ -1184,8 +1186,12 @@ func (m *model) renderPage() (string, int) {
 		m.routes, m.rows = l, rows
 		listTop = countLines(b.String() + head)
 		b.WriteString(head + view + "\n" + tail)
-	default:
-		b.WriteString(m.renderHelp())
+	case screenFAQ:
+		head, tail := m.faqPage()
+		l, view, rows := m.fitted(m.faqs, 1, head, tail)
+		m.faqs, m.rows = l, rows
+		listTop = countLines(b.String() + head)
+		b.WriteString(head + view + "\n" + tail)
 	}
 	if m.busy != "" {
 		b.WriteString("\n\n  " + m.st.warn.Render(m.busy) + "\n")
@@ -1679,7 +1685,7 @@ func (m model) footer() string {
 	if len(m.candidates) > 1 {
 		pairs = append(pairs, [2]string{"< >", "switch account"})
 	}
-	pairs = append(pairs, [2]string{"?", "help"}, [2]string{"q", "quit"})
+	pairs = append(pairs, [2]string{"?", "FAQs"}, [2]string{"q", "quit"})
 
 	// Built by dropping what does not fit rather than by wrapping, because the
 	// frame is a fixed height and a footer that grew to two lines would push it
@@ -1813,6 +1819,11 @@ func (m *model) renderHome() string {
 	var b strings.Builder
 	acct := m.account
 	b.WriteString(m.wordmark())
+	// The one line the landing page opens with, under the cup, on the one page
+	// somebody lands on. It is here rather than on every page because it is the
+	// thing this page is for, and because a sentence under a picture is what
+	// that combination is for.
+	b.WriteString("  " + m.st.dim.Render("A little café for every AI model, in your terminal.") + "\n")
 	b.WriteString(m.renderAccount())
 	b.WriteString(m.field("balance", m.st.money.Render(FormatUSD(acct.Balance))))
 	b.WriteString(m.field("paid in", FormatUSD(acct.Deposits)))

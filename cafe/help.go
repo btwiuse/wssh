@@ -1,145 +1,163 @@
 package cafe
 
 import (
+	"strconv"
 	"strings"
 
-	"charm.land/bubbles/v2/key"
-	"charm.land/bubbles/v2/viewport"
-	tea "charm.land/bubbletea/v2"
+	"charm.land/bubbles/v2/list"
 )
 
-// The help screen.
+// The FAQs screen.
 //
-// It is the one page in this program with more on it than a terminal shows.
-// Every other page is either short or is a list, and a list already knows how
-// to page itself; this one is prose in sentences and does not fit a laptop
-// screen at the size the sentences were written for. It was drawn in full and
-// the frame cut it, which meant the bottom of every page - including the
-// version line and the "what this is not" - was invisible on exactly the
-// terminals that had least room, and the missing text looked like the screen
-// had failed rather than like there was more of it.
+// The only page here that is a list of questions rather than of things, and the
+// only one with anything to expand. An answer is either on the screen or it is
+// not, and a page with all seven of them at once is a page of prose with a
+// scrollbar on it - so the questions are the list, the cursor moves between them
+// the way it moves between API keys, and `enter` opens the one under it.
 //
-// So it is a viewport: the same component the rest of this program's prose
-// would use if it had more of it, sized to the box, with the mouse wheel
-// working because bubbles turns that on by default.
+// The answers are the landing page's, from its "Questions people actually ask".
+// One copy of them, kept here: the same seven questions answered twice is how
+// the two stop agreeing.
+type faq struct{ q, a string }
 
-// helpKeys is what the pager is allowed to have.
-//
-// Written out rather than edited from the default, because the default is a
-// pager's keymap and this is not quite a pager: it claims `space`, `b`, `d`,
-// `f` and `u` for scrolling, and the two of those that are letters are letters
-// this program means something else by. Narrowed to the keys that cannot be
-// confused with leaving, in the same way the two lists are - see listnav.go,
-// and for the same reason: a key the component swallows is a key the person
-// pressing it is not told about anywhere else.
-var helpKeys = map[string]bool{
-	"up": true, "k": true, "down": true, "j": true,
-	"pgup": true, "pgdown": true, "home": true, "end": true, "g": true, "G": true,
+var faqs = []faq{
+	{
+		"Why not just use OpenRouter?",
+		"You may well. RouterCafe is the same shape with two differences: you pay in SOL from the " +
+			"terminal, and the front end is a terminal session rather than a dashboard. If you want " +
+			"a web console and a card, they are the better product.",
+	},
+	{
+		"What does a deposit cost?",
+		"The Solana network fee, which is a few thousand lamports, taken out of the amount you " +
+			"send. Deposits below roughly 0.00001 SOL are refused rather than spent entirely on " +
+			"the fee, and the deposit screen says so before you sign anything.",
+	},
+	{
+		"Why does it need ssh -A?",
+		"Because that is how it asks your key to sign. Without agent forwarding there is no way " +
+			"for the server to reach a key that is on your machine, and it would have to ask you " +
+			"to hand it over, which is exactly the thing it should not do. The deposit screen " +
+			"says this rather than failing quietly.",
+	},
+	{
+		"Can I use a wallet instead of an SSH key?",
+		"Yes. The browser terminal at /app signs in with a Solana wallet and shows the " +
+			"transaction for you to approve before it is sent, which is the same flow through a " +
+			"different key holder.",
+	},
+	{
+		"What happens to my key if it leaks?",
+		"Go to the api keys, press x on it, and mint another. The balance belongs to the account " +
+			"rather than to the key, so revoking one does not touch your credit. A key is shown " +
+			"once, when it is minted, and only its fingerprint is kept.",
+	},
+	{
+		"Is the rate fixed?",
+		"The SOL price is set by whoever runs this instance and recorded on every deposit, so " +
+			"what you were credited at cannot change afterwards. It is shown on the deposit " +
+			"screen before you sign anything.",
+	},
+	{
+		"Can I self-host it?",
+		"Yes. It is one binary and a few flags: cafe --treasury <address> --upstream <url> " +
+			"--upstream-key <key>. The ledger is a JSON file; back it up or do not.",
+	},
 }
 
-// newHelp is a pager with the keymap above rather than the default one.
-func newHelp() viewport.Model {
-	v := viewport.New()
-	v.KeyMap = viewport.KeyMap{
-		PageUp:       key.NewBinding(key.WithKeys("pgup")),
-		PageDown:     key.NewBinding(key.WithKeys("pgdown")),
-		HalfPageUp:   key.NewBinding(),
-		HalfPageDown: key.NewBinding(),
-		Up:           key.NewBinding(key.WithKeys("up", "k")),
-		Down:         key.NewBinding(key.WithKeys("down", "j")),
-		Left:         key.NewBinding(),
-		Right:        key.NewBinding(),
+// faqItem is one question in the list, and whether its answer is showing.
+//
+// Open on the row itself, not only by what is under the list. A page that
+// changes under the cursor and changes back when the cursor moves away is a
+// cursor, and somebody reading two answers wants to see that both are open.
+//
+// It is a field on the item rather than something the delegate looks up
+// because the delegate cannot see the model - see `navStyles` in listnav.go -
+// so the list is rebuilt when the set changes, which is seven items and a
+// keystroke.
+type faqItem struct {
+	n    int
+	open bool
+}
+
+func (i faqItem) FilterValue() string { return faqs[i.n].q }
+
+func (i faqItem) lines(st *styles, sel, focused bool) (string, int) {
+	lead, trail, marker := rowStyles(st, sel, focused)
+	if i.open {
+		return marker + " " + lead.Render("v ") + trail.Render(faqs[i.n].q), 1
 	}
-	// GoToStart and GoToEnd are not part of the viewport's keymap, so home,
-	// end, g and G are handled here rather than by the component.
-	return v
+	return marker + " " + trail.Render(faqs[i.n].q), 1
 }
 
-// scrollHelp is the whole pager: the keys it takes, plus the two a viewport
-// has no binding for.
-func (m model) scrollHelp(msg tea.KeyPressMsg) model {
-	switch msg.String() {
-	case "home", "g":
-		m.help.GotoTop()
-		return m
-	case "end", "G":
-		m.help.GotoBottom()
-		return m
+// faqsList builds the list of questions.
+func faqsList(width int, focused bool, open map[int]bool) list.Model {
+	items := make([]list.Item, 0, len(faqs))
+	for i := range faqs {
+		items = append(items, faqItem{n: i, open: open[i]})
 	}
-	m.help, _ = m.help.Update(msg)
-	return m
+	return newNavList(items, width, focused, "question", "questions", 1)
 }
 
-// helpOverflows is whether there is anything below the fold, which is what the
-// footer says. Without it the hint claims the page scrolls on a terminal
-// where it does not.
-func (m model) helpOverflows() bool {
-	return strings.Count(m.help.GetContent(), "\n")+1 > m.help.Height()
-}
-
-// renderHelp is the page inside the pager, which is otherwise just a window
-// onto the help: the text and the size are set by sizeHelp, on a resize.
-func (m model) renderHelp() string {
-	m.help = m.helpPager()
-	return m.help.View()
-}
-
-// sizeHelp fits the pager to the box, when the window changes.
+// faqPage is the page: the questions as a list, and under it the answers of
+// whichever ones are open.
 //
-// Not in renderHelp, which draws it: this program's View is a value receiver
-// and everything it touches inside a render is thrown away when the frame is
-// printed. A pager sized and filled during the draw is a pager of height zero
-// with no content in it by the time the next keystroke arrives, and a pager
-// that believes it has no room does not scroll. Same trap the two lists were
-// nearly caught by, and the reason they are sized by the page rather than by
-// the component.
-func (m *model) sizeHelp() { m.help = m.helpPager() }
-
-// helpPager is the pager as this window wants it: the right size, and filled
-// with the help laid out at the width it will be read at.
-//
-// One definition used from two places on purpose. sizeHelp keeps the model
-// carrying a pager that scrolls, because a pager that only knows its size
-// during the frame it was drawn in is a pager of height zero by the time the
-// next keystroke arrives. renderHelp sets it up on its own copy, because a
-// model built by hand in a test never went near a window size and would
-// otherwise draw an empty box.
-func (m *model) helpPager() viewport.Model {
-	m.help.SetWidth(bodyWidth(m.width))
-	m.help.SetHeight(m.pageRoom())
-	m.help.SetContent(m.helpText())
-	return m.help
+// Split that way because an answer is not one line, and a row that grew to hold
+// one would push the rest of the page off the bottom every time somebody
+// opened a long question.
+func (m model) faqPage() (head, tail string) {
+	// Nothing above the list: the questions are the page, and the answers
+	// belong under the thing they answer rather than over it.
+	var t strings.Builder
+	if n := len(m.open); n == 0 {
+		t.WriteString("  " + m.st.dim.Render("enter on a question to open its answer") + "\n")
+	} else {
+		t.WriteString("  " + m.st.dim.Render(strconv.Itoa(n)+" open") +
+			m.st.dim.Render(", enter on another to open it too") + "\n")
+	}
+	t.WriteString("\n  " + m.st.dim.Render("the same questions as "+Domain+"'s landing page") + "\n")
+	return "", m.openAnswers() + "\n" + t.String()
 }
 
-// helpText is the whole of the help, as prose, before the pager has had it.
-func (m model) helpText() string {
+// openAnswers is the block under the list: the answer of every question that is
+// open, each under its own question so that it is answerable on its own.
+func (m model) openAnswers() string {
 	var b strings.Builder
-	b.WriteString("  " + m.st.value.Render("An OpenRouter you reach with ssh, paid for in SOL.") + "\n\n")
-	for _, k := range [][2]string{
-		{"tab", "next page, and into the field when a page has one"},
-		{"shift+tab", "previous page"},
-		{"hjkl", "move through a list, and page it with h and l"},
-		{"enter", "act on where the cursor is, or on the field"},
-		{"esc", "put the caret down without leaving the page"},
-		{"r", "re-read the balance"},
-		{"y", "copy a key just minted, using OSC 52"},
-		{"n", "mint a new API key"},
-		{"q", "disconnect"},
-	} {
-		b.WriteString("  " + m.st.label.Render(pad(k[0], 10)) + m.st.dim.Render(k[1]) + "\n")
+	for _, n := range sortedKeys(m.open) {
+		b.WriteString("\n  " + m.st.title.Render(faqs[n].q) + "\n")
+		b.WriteString(m.wrap(m.st.dim.Render(faqs[n].a), m.st.dim) + "\n")
 	}
-	b.WriteString("\n")
-	wide := m.wrapWidth()
-	b.WriteString(m.wrapTo("There are no letters that jump between pages. The bar at the top is the whole of "+"the navigation, so nothing has to be remembered and nothing can mean two things on the same screen.", m.st.dim, wide) + "\n\n")
-
-	b.WriteString("  " + m.st.title.Render("what this is not") + "\n\n")
-	b.WriteString(m.wrapTo("There is no shell here. Nothing you type is run on this machine, because there is no way to ask it to: the session is a program, not a command line, and a command sent instead of a shell is ignored.", m.st.dim, wide) + "\n\n")
-	b.WriteString(m.wrapTo("Your private key never leaves your machine. This server asks the agent you forwarded with ssh -A, and checks the transaction it gets back. The same, more carefully, is at "+Domain+".", m.st.dim, wide) + "\n")
 	return b.String()
 }
 
-// wrapWidth is how wide the help's sentences are laid out: the inside of the
-// pager, less the indent wrapTo puts on every line.
-func (m model) wrapWidth() int {
-	return bodyWidth(m.width) - 2
+// sortedKeys is a map's keys in order, because the answers come out in the
+// order the questions are asked in rather than in Go's map order, which is not
+// an order at all.
+func sortedKeys(m map[int]bool) []int {
+	out := make([]int, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && out[j-1] > out[j]; j-- {
+			out[j-1], out[j] = out[j], out[j-1]
+		}
+	}
+	return out
+}
+
+// toggleFAQ opens the question under the cursor, or closes it if it is open.
+func (m *model) toggleFAQ() {
+	i := m.faqs.Index()
+	if i < 0 || i >= len(faqs) {
+		return
+	}
+	if m.open[i] {
+		delete(m.open, i)
+	} else {
+		m.open[i] = true
+	}
+	m.faqs = faqsList(m.listWidth(), m.focus, m.open)
+	m.faqs.Select(i)
+	m.paintFocus()
 }

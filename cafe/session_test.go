@@ -419,11 +419,14 @@ func TestTheBarSaysWhichServerThisIs(t *testing.T) {
 	if got := stripForTest(m.frameString()); !strings.Contains(got, "router.cafe 0.1.0") {
 		t.Error("the version is not on the bar")
 	}
-	// Not on the help screen either: it says what this is, not what build of
-	// it, and the same line in two places is one of them going stale.
-	help := model{st: newStyles(true), width: 100, height: 40, deps: deps{Version: "0.1.0"}}.renderHelp()
-	if strings.Contains(stripForTest(help), "0.1.0") {
-		t.Error("the help screen still carries the version")
+	// Not on the FAQs either: those say what this is, not what build of it,
+	// and the same line in two places is one of them going stale.
+	faqs := model{st: newStyles(true), width: 100, height: 40,
+		deps: deps{Address: treasuryAddress, Version: "0.1.0"}}
+	faqs.syncLists()
+	shown := faqs.show(screenFAQ)
+	if page, _ := shown.renderPage(); strings.Contains(stripForTest(page), "0.1.0") {
+		t.Error("the FAQs still carry the version")
 	}
 
 	for _, none := range []string{"", "   ", "dev"} {
@@ -1105,7 +1108,7 @@ func TestTabWalksTheRingAndOnlyTakesTheAmountWhenAsked(t *testing.T) {
 	}
 	m = m.show(screenHome)
 	next, _ = m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab, Mod: tea.ModShift}))
-	if got := next.(model).view; got != screenHelp {
+	if got := next.(model).view; got != screenFAQ {
 		t.Errorf("shift+tab off the end went to %v, want it to wrap to help", got)
 	}
 }
@@ -1152,7 +1155,7 @@ func TestArrivingAtAListFocusesItAndArrivingAtAFieldDoesNot(t *testing.T) {
 		{screenModels, true},
 		{screenDeposit, false},
 		{screenHome, false},
-		{screenHelp, false},
+		{screenFAQ, false},
 	} {
 		got := m.show(tc.view)
 		if got.focus != tc.want {
@@ -1646,7 +1649,7 @@ func TestEveryScreenFillsItsWindow(t *testing.T) {
 			screens["account/"+pageName(v)] = out
 		}
 		picker := base
-		pm := model{deps: picker, st: newStyles(true), view: screenHome, width: w, height: h, help: newHelp()}
+		pm := model{deps: picker, st: newStyles(true), view: screenHome, width: w, height: h}
 		pm.syncLists()
 		screens["picker"] = pm.View().Content
 		screens["refusal"] = refuseModel{
@@ -1722,7 +1725,7 @@ func TestNoPageExplainsHjkl(t *testing.T) {
 	// program answers to, which is a different thing from explaining a
 	// convention on every screen.
 	for _, page := range m.screenList() {
-		if page == screenHelp {
+		if page == screenFAQ {
 			continue
 		}
 		if got := stripForTest(m.show(page).frameString()); strings.Contains(got, "hjkl") {
@@ -1986,7 +1989,7 @@ func TestTheScreenWithNoBarAgreesWithTheOnesThatHaveOne(t *testing.T) {
 // pickingView is what a session that has named no account draws: the same
 // window, with one tab on the bar and the question on its first page.
 func pickingView(base deps, w, h int) string {
-	m := model{deps: base, st: newStyles(true), view: screenHome, width: w, height: h, help: newHelp()}
+	m := model{deps: base, st: newStyles(true), view: screenHome, width: w, height: h}
 	m.syncLists()
 	return m.View().Content
 }
@@ -2228,55 +2231,69 @@ func TestTheNameIsATabAndTheAddressIsSetIn(t *testing.T) {
 	}
 }
 
-// The help screen is longer than most terminals, so it scrolls rather than
-// being cut. What is cut is the bottom of a page, and on this page the bottom
-// is the version line and the last paragraph.
-func TestTheHelpScreenScrolls(t *testing.T) {
-	m := model{st: newStyles(true), view: screenHelp, width: 100, height: 24,
-		deps: deps{Catalogue: DefaultCatalogue(), Proven: true, Version: "0.1.0"}}
-	next, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
-	m = next.(model)
+// The FAQs expand and collapse, and the page is sized around what is open: an
+// answer is not one line, and a page that grew a list row to hold one pushed
+// the rest of itself off the bottom every time somebody opened a long question.
+func TestTheFAQsOpenAndClose(t *testing.T) {
+	m := model{st: newStyles(true), view: screenFAQ, focus: true, width: 100, height: 30,
+		deps: deps{Address: treasuryAddress, Ledger: testLedger(t), Catalogue: DefaultCatalogue(), Proven: true}}
+	m.syncLists()
 
-	if !m.helpOverflows() {
-		t.Fatal("the help claims to fit a window it does not fit")
-	}
-	top := stripForTest(m.renderHelp())
-	if !strings.Contains(top, "An OpenRouter you reach") {
-		t.Errorf("the help does not start at the top: %q", top)
-	}
-	if strings.Contains(top, "The same, more carefully") {
-		t.Error("the whole help fitted in a window it does not fit")
-	}
-	// The name is on the bar at the top of every screen, so it is not written
-	// out again at the top of this one.
-	if strings.Contains(top, "RouterCafe") {
-		t.Error("the help repeats the name the bar already carries")
+	// The answers are wrapped into a box, so comparing one against what is on
+	// the screen means taking the box's own walls and line breaks back out
+	// again - otherwise a sentence that straddles two lines is not found on
+	// either of them.
+	shown := func() string {
+		var out []string
+		for _, line := range strings.Split(stripForTest(m.show(screenFAQ).frameString()), "\n") {
+			out = append(out, strings.Trim(line, "\u2502 "))
+		}
+		return flowed(strings.Join(out, " "))
 	}
 
-	// The keys that move it are the ones a list already uses, and nothing
-	// else: q and ? have to reach the program.
-	for range 40 {
-		m = m.scrollHelp(tea.KeyPressMsg(tea.Key{Code: 'j', Text: "j"}))
+	if strings.Contains(shown(), flowed(faqs[0].a)) {
+		t.Error("an answer is on the screen before anything was opened")
 	}
-	bottom := stripForTest(m.renderHelp())
-	if !strings.Contains(bottom, "The same, more carefully") {
-		t.Errorf("scrolling to the end did not reach the last paragraph: %q", bottom)
-	}
-	if strings.Contains(bottom, "An OpenRouter you reach") {
-		t.Error("the pager scrolled past the bottom")
-	}
-
-	// g and G are the two a viewport has no binding for.
-	m = m.scrollHelp(tea.KeyPressMsg(tea.Key{Code: 'g', Text: "g"}))
-	if !strings.Contains(stripForTest(m.renderHelp()), "An OpenRouter you reach") {
-		t.Error("g did not go back to the top")
-	}
-	for _, k := range []string{"q", "?", "r", "y", "n"} {
-		if helpKeys[k] {
-			t.Errorf("the pager claims %q", k)
+	// Every question is, because a list you cannot see the whole of is a
+	// scrollbar, and the bar already has one.
+	for _, f := range faqs {
+		if !strings.Contains(shown(), flowed(f.q)) {
+			t.Errorf("the question %q is not on the screen", f.q)
 		}
 	}
+
+	m.toggleFAQ()
+	if !strings.Contains(shown(), flowed(faqs[0].a)) {
+		t.Error("enter did not open the answer")
+	}
+	if !strings.Contains(shown(), flowed(faqs[0].q)) {
+		t.Error("an open answer lost the question it belongs to")
+	}
+
+	// A second one opens beside the first: somebody comparing two answers wants
+	// both, and a disclosure that only ever shows one is a cursor.
+	m.faqs.Select(2)
+	m.toggleFAQ()
+	if !strings.Contains(shown(), flowed(faqs[0].a)) || !strings.Contains(shown(), flowed(faqs[2].a)) {
+		t.Error("opening a second answer closed the first")
+	}
+
+	// And the page is still the height of the window with two of them open,
+	// which is what sizing it around them was for.
+	lines := strings.Split(stripForTest(m.show(screenFAQ).frameString()), "\n")
+	if len(lines) != 30 {
+		t.Errorf("with two answers open the page is %d lines, want 30", len(lines))
+	}
+
+	m.toggleFAQ()
+	if !strings.Contains(shown(), flowed(faqs[0].a)) {
+		t.Error("enter did not close the answer")
+	}
 }
+
+// flowed is a string with every run of whitespace collapsed to one space, so
+// that a sentence can be found in a screen that has wrapped it.
+func flowed(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 // A click has to land on the row that is under it. The list is laid out by a
 // component that puts a status bar above its rows and a blank between them,

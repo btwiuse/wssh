@@ -830,6 +830,34 @@ label is bold and green, and the active tab has no bottom edge at all.
 Per model rather than per process, because two sessions on two terminals with
 opposite backgrounds are two sessions with opposite palettes.
 
+## The FAQs
+
+`help` was renamed **FAQs**, and it is a list of questions rather than a page of
+prose. `cafe/help.go`.
+
+The answers are the landing page's, from its "Questions people actually ask" -
+one copy of them, kept here, because the same seven questions answered twice is
+how the two stop agreeing. **The landing page's base URL was corrected to match
+the app's at the same time** (`api.router.cafe/v1`), which is the same class of
+mistake: two copies of a fact that drift.
+
+`enter` opens the question under the cursor. **Several can be open at once**,
+because somebody comparing two answers wants both, and a disclosure that only
+ever shows one is a cursor with a slower response.
+
+The answers are drawn *under* the list rather than inside the rows: an answer is
+not one line, and the component gives every row the same height, so a row that
+grew to hold one pushed the rest of the page off the bottom every time somebody
+opened a long question. Because the answers are part of the page's tail, the
+list is sized around them automatically - opening a long answer makes the list
+shorter rather than making the answer the thing that gets cut.
+
+Whether a question is open is a field on its item rather than something the
+delegate looks up, because **the delegate cannot see the model** (see
+`navStyles` in `listnav.go`), so the list of seven is rebuilt on the keystroke
+that changes the set. That is the one place a list is rebuilt per keystroke in
+this program, and it is seven items.
+
 ## What is not built
 
 The upstream is configured with one `--upstream` and one `--upstream-key`. With
