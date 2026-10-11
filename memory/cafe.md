@@ -253,6 +253,37 @@ answer to one that proved itself.
   up/down to choose, enter to sign with a key or open an address
 ```
 
+## `cafe tui`: the same program with no SSH in it
+
+`cmd/cafe/tui.go`, over `cafe.RunLocal` in `cafe/local.go`. It builds the same
+model through the same constructor an ssh connection goes through, handed an
+empty identity.
+
+That identity is the whole design rather than an implementation detail: a local
+run has proved nothing exactly as a connection that arrived without a key has
+proved nothing, so both get `anonymousModel` and the same rules about what may
+be done with what. `who` (`cafe/session.go`) is the three facts a session
+carries - key, wallet, username - pulled out so one constructor serves both.
+`SessionAccount` went with it, since `AccountFor` already took those three
+values and a second wrapper over them was a second place for the rule to live.
+
+| | Over ssh | Locally |
+|---|---|---|
+| agent | forwarded by the client, dialed back over a channel | `$SSH_AUTH_SOCK`, already running |
+| host key | the identity you are trusting | none, so nothing to trust |
+| proving an account | the handshake key, or a nonce the agent signs | a nonce the agent signs |
+| getting in | `ssh -A router.cafe` | `cafe tui` |
+
+**The one asymmetry is the agent, and it runs in the local one's favour**: a
+deposit works here without `-A` because there is nothing to forward. That is
+also the only difference, and it is a difference in transport rather than in
+permission - `deps.Local` changes wording and nothing else. Making the local
+path *more* permissive is the one way this could go wrong, so the proof rules
+are shared code rather than a copy.
+
+With no agent running it does not refuse to start: the address field works with
+nothing at all, so it warns and opens read-only.
+
 ## Navigation: a bar, not a list of letters
 
 There are no keys that jump between pages. The top of every screen carries a

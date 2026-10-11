@@ -248,14 +248,19 @@ func (m anonymousModel) View() tea.View {
 
 	if m.busy != "" {
 		b.WriteString(wrapText(m.busy, m.width, st.warn) + "\n")
-		return tea.NewView(b.String())
+		return ownedView(b.String())
 	}
 
 	if len(m.keys) > 0 {
 		b.WriteString(wrapText("Which of these is yours?", m.width, st.title) + "\n\n")
 	} else {
-		b.WriteString(wrapText("This connection proved nothing, so nothing here can sign.", m.width, st.title) + "\n")
-		b.WriteString(wrapText("An account is an ed25519 public key. Paste one to look at it:", m.width, st.dim) + "\n\n")
+		if m.deps.Local {
+			b.WriteString(wrapText("No ssh-agent, so nothing here can sign.", m.width, st.title) + "\n")
+			b.WriteString(wrapText("An account is an ed25519 public key. Paste one to look at it:", m.width, st.dim) + "\n\n")
+		} else {
+			b.WriteString(wrapText("This connection proved nothing, so nothing here can sign.", m.width, st.title) + "\n")
+			b.WriteString(wrapText("An account is an ed25519 public key. Paste one to look at it:", m.width, st.dim) + "\n\n")
+		}
 	}
 
 	for i, k := range m.keys {
@@ -292,7 +297,7 @@ func (m anonymousModel) View() tea.View {
 		b.WriteString(wrapText(m.notice.text, m.width, st.errText) + "\n\n")
 	}
 	b.WriteString(wrapText("ctrl+c to disconnect", m.width, st.dim) + "\n")
-	return tea.NewView(b.String())
+	return ownedView(b.String())
 }
 
 // host is where to tell somebody to connect, which is this server's own name.

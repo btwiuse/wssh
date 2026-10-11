@@ -1,6 +1,7 @@
 package cafe
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
@@ -1310,4 +1311,69 @@ func TestRefreshingKeepsTheCursorOnTheSameKey(t *testing.T) {
 	if got := next.(model).apiKeys.Index(); got != before {
 		t.Errorf("a refresh moved the cursor from %d to %d", before, got)
 	}
+}
+
+// A local run has no SSH handshake and therefore no authenticated key, no
+// username and no wallet - which is the shape of a connection that proved
+// nothing. Both must be answered by the same rules and reach the same screen,
+// or "works on my machine" becomes a way to bypass the proof that gates
+// spending.
+func TestALocalRunIsTheSameAsAConnectionThatProvedNothing(t *testing.T) {
+	srv, err := New(Options{
+		Ledger:         testLedger(t),
+		Treasury:       testTreasury(),
+		AllowAnonymous: true,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	local := srv.modelFor(who{ctx: context.Background(), local: true})
+	if _, ok := local.(anonymousModel); !ok {
+		t.Fatalf("a local run opened %T, want the screen a connection with no key gets", local)
+	}
+
+	// A connection that carried a key must not land in the same place, or the
+	// local path would be a way to be nobody on purpose.
+	remote := srv.modelFor(who{pub: mustEd25519(t), user: "gear", ctx: context.Background()})
+	if _, ok := remote.(model); !ok {
+		t.Fatalf("a connection with a key opened %T, want the account screen", remote)
+	}
+
+	// And the rules are the rules: an account named rather than proved still
+	// cannot be changed, whichever way it was arrived at.
+	address, refusal, proven := AccountFor(nil, "", treasuryAddress)
+	if refusal != "" || proven {
+		t.Errorf("a named address gave %q / proven=%v", refusal, proven)
+	}
+	if address != treasuryAddress {
+		t.Errorf("a named address gave %q, want %q", address, treasuryAddress)
+	}
+}
+
+// A local run takes its agent from the environment rather than a flag: the
+// point of it is that there is nothing to set up, and a flag would have to be
+// typed by somebody who already has a working agent.
+func TestALocalRunFindsTheAgentThatIsAlreadyRunning(t *testing.T) {
+	t.Setenv("SSH_AUTH_SOCK", "/tmp/agent.sock")
+	if got := LocalAgent(); got != "/tmp/agent.sock" {
+		t.Errorf("LocalAgent gave %q, want the socket from the environment", got)
+	}
+	t.Setenv("SSH_AUTH_SOCK", "")
+	if got := LocalAgent(); got != "" {
+		t.Errorf("LocalAgent gave %q with no agent set, want empty rather than an error", got)
+	}
+}
+
+func mustEd25519(t *testing.T) gossh.PublicKey {
+	t.Helper()
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	out, err := gossh.NewPublicKey(pub)
+	if err != nil {
+		t.Fatalf("NewPublicKey: %v", err)
+	}
+	return out
 }

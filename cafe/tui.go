@@ -159,6 +159,10 @@ type deps struct {
 	// pasted into.
 	Host string
 
+	// Local says this program is running on the terminal it was started from
+	// rather than arriving over a connection. Wording only.
+	Local bool
+
 	// Version is what the help screen says this server is. Empty means the
 	// line is left off rather than printed blank: a binary built without the
 	// version ldflags has no version, and an empty one looks like something
@@ -264,11 +268,7 @@ func (m model) Init() tea.Cmd {
 }
 
 func (m model) View() tea.View {
-	var v tea.View
-	v.AltScreen = true
-	v.WindowTitle = "RouterCafe"
-	v.SetContent(m.render())
-	return v
+	return ownedView(m.render())
 }
 
 // refreshCmd reloads the account from the ledger.
@@ -777,7 +777,7 @@ func (m model) renderHome() string {
 		b.WriteString("\n\n  " + m.st.dim.Render("keys are only shown to whoever holds the account's key") + "\n")
 	} else if len(acct.Keys) == 0 {
 		b.WriteString("\n\n  " + m.st.warn.Render("no API key yet") + "\n")
-		b.WriteString("  " + m.st.dim.Render("press k to mint one, then point any OpenAI client at https://"+m.endpointHost()) + "\n")
+		b.WriteString("  " + m.st.dim.Render("tab to the api keys to mint one, then point any OpenAI client at https://"+m.endpointHost()) + "\n")
 	} else {
 		b.WriteString("\n\n  " + m.st.title.Render("api keys") + "\n")
 		for _, k := range acct.Keys {
@@ -816,12 +816,23 @@ func (m model) renderDeposit() string {
 
 	if !m.deps.Proven {
 		b.WriteString("  " + m.st.warn.Render("This address was named, not proved, so a deposit cannot be signed.") + "\n")
-		b.WriteString("  " + m.st.dim.Render("Forward an agent holding this address's key and reconnect with") + "\n")
-		b.WriteString("  " + m.st.dim.Render("the -A:") + "\n")
-		b.WriteString("  " + m.st.accent.Render("ssh-add ~/.ssh/id_ed25519 && ssh -A -i ~/.ssh/id_ed25519 "+m.endpointHost()) + "\n")
+		if m.deps.Local {
+			b.WriteString("  " + m.st.dim.Render("Add the key for it to your ssh-agent and pick it from the list:") + "\n")
+			b.WriteString("  " + m.st.accent.Render("ssh-add ~/.ssh/id_ed25519") + "\n")
+		} else {
+			b.WriteString("  " + m.st.dim.Render("Forward an agent holding this address's key and reconnect with") + "\n")
+			b.WriteString("  " + m.st.dim.Render("the -A:") + "\n")
+			b.WriteString("  " + m.st.accent.Render("ssh-add ~/.ssh/id_ed25519 && ssh -A -i ~/.ssh/id_ed25519 "+m.endpointHost()) + "\n")
+		}
 	} else if m.deps.SockPath == "" {
-		b.WriteString("  " + m.st.errText.Render("this session has no forwarded agent, so there is nothing here that can sign.") + "\n")
-		b.WriteString("  " + m.st.dim.Render("reconnect with:  ssh -A "+Domain) + "\n")
+		if m.deps.Local {
+			b.WriteString("  " + m.st.errText.Render("there is no ssh-agent here, so there is nothing that can sign.") + "\n")
+			b.WriteString("  " + m.st.dim.Render("set one up and add the key:") + "\n")
+			b.WriteString("  " + m.st.accent.Render("eval $(ssh-agent -s) && ssh-add ~/.ssh/id_ed25519") + "\n")
+		} else {
+			b.WriteString("  " + m.st.errText.Render("this session has no forwarded agent, so there is nothing here that can sign.") + "\n")
+			b.WriteString("  " + m.st.dim.Render("reconnect with:  ssh -A "+Domain) + "\n")
+		}
 	} else {
 		b.WriteString("  " + m.st.dim.Render("Your key stays on your machine. This server asks your agent to sign and") + "\n")
 		b.WriteString("  " + m.st.dim.Render("never sees it. The transfer is checked against what was asked for") + "\n")

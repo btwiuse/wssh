@@ -170,9 +170,49 @@ func (s *Server) handler() wishtea.Handler {
 	}
 }
 
+// who is the identity a session arrived with, taken apart so the UI can be
+// built without one.
+//
+// A local run has no SSH handshake and therefore no authenticated key, no
+// username and no wallet - which is exactly the shape of a connection that
+// proved nothing. Pulling these apart is what lets one constructor serve both
+// rather than there being a second copy of the rules that decides which
+// account somebody is looking at.
+type who struct {
+	pub    gossh.PublicKey
+	wallet string
+	user   string
+
+	// sock is the agent this session may ask to sign, and empty means it has
+	// none. Over SSH it is the socket the client forwarded; locally it is the
+	// agent already running on the machine.
+	sock string
+
+	// local says there is no other end: this program was started on the
+	// terminal it is drawing on, rather than arriving over a connection. It
+	// changes wording, not behaviour - the rules about proof are the same
+	// either way, and making them different would be the one place where
+	// running locally could be more permissive than running for real.
+	local bool
+
+	ctx context.Context
+}
+
 // newModel works out which account this session is and builds its UI.
 func (s *Server) newModel(sess ssh.Session) tea.Model {
 	sockPath, _ := sess.Context().Value(agentkey.SSHAuthSockKey).(string)
+	return s.modelFor(who{
+		pub:    sess.PublicKey(),
+		wallet: wssh.WalletAddress(sess.Context()),
+		user:   sess.User(),
+		sock:   sockPath,
+		ctx:    sess.Context(),
+	})
+}
+
+// modelFor builds the UI for an identity, with no session involved.
+func (s *Server) modelFor(w who) tea.Model {
+	sockPath := w.sock
 
 	// A connection that arrived with no key at all, checked first because
 	// it is the one case where there is nothing to refuse: there was no
@@ -183,12 +223,13 @@ func (s *Server) newModel(sess ssh.Session) tea.Model {
 	// branch. It has proved it holds something, and telling that person to go
 	// and make a different key is the answer; anonymous access is for people
 	// who arrived with nothing, not with the wrong thing.
-	if s.opts.AllowAnonymous && sess.PublicKey() == nil &&
-		wssh.WalletAddress(sess.Context()) == "" && !namesAnAccount(sess.User()) {
+	if s.opts.AllowAnonymous && w.pub == nil &&
+		w.wallet == "" && !namesAnAccount(w.user) {
 		return anonymousModel{
 			deps: deps{
 				SockPath:  sockPath,
-				Ctx:       sess.Context(),
+				Local:     w.local,
+				Ctx:       w.ctx,
 				Ledger:    s.opts.Ledger,
 				Treasury:  s.opts.Treasury,
 				Catalogue: s.opts.Catalogue,
@@ -201,7 +242,7 @@ func (s *Server) newModel(sess ssh.Session) tea.Model {
 		}
 	}
 
-	address, refusal, proven := SessionAccount(sess)
+	address, refusal, proven := AccountFor(w.pub, w.wallet, w.user)
 	if refusal != "" {
 		// No account, no session. Not a degraded mode to paper over with a
 		// placeholder: an account is what a deposit credits and what a
@@ -215,7 +256,8 @@ func (s *Server) newModel(sess ssh.Session) tea.Model {
 			Address:   address,
 			Proven:    proven,
 			SockPath:  sockPath,
-			Ctx:       sess.Context(),
+			Local:     w.local,
+			Ctx:       w.ctx,
 			Ledger:    s.opts.Ledger,
 			Treasury:  s.opts.Treasury,
 			Catalogue: s.opts.Catalogue,
@@ -261,10 +303,6 @@ func namesAnAccount(user string) bool {
 // So "proved" is not decoration. Anything that changes an account - spending
 // its balance, minting a key against it - requires it, or `ssh
 // <someone-else's-address>@host` would hand that person a key to spend with.
-func SessionAccount(sess ssh.Session) (address, refusal string, proven bool) {
-	return AccountFor(sess.PublicKey(), wssh.WalletAddress(sess.Context()), sess.User())
-}
-
 // AccountFor is the naming rule on its own, without a session.
 //
 // Split out so it can be exercised directly: whether a given connection names
@@ -356,7 +394,7 @@ func (r refuseModel) View() tea.View {
 	b.WriteString("\n\n")
 	b.WriteString(wrapText("press q to disconnect", width, st.dim))
 	b.WriteString("\n")
-	return tea.NewView(b.String())
+	return ownedView(b.String())
 }
 
 // KeyCommand is the line that fixes it, and the line after it that uses it.
