@@ -695,87 +695,117 @@ func TestOnlyEd25519KeysAreOfferedForAdoption(t *testing.T) {
 	}
 }
 
-// Naming an account is something a person does on the command line, where
-// writing it says out loud that it is named rather than proved. The picker has
-// no address field, so this is about the half it kept: adopting a key proves it
-// by signature, and the session that comes out the other side owns the account.
-func TestAdoptingAKeyProvesItAndNamingItNeverDoes(t *testing.T) {
+// Switching accounts is two keys and no screen. Arriving somewhere and
+// finding the balance you recognise is choosing it, so the candidates are on
+// the first page and `<` and `>` move between them.
+//
+// Proving follows the selection rather than preceding it: a candidate that
+// came out of the agent is proved by asking the agent to sign, and one that was
+// merely named on the command line is a view and stays one.
+func TestCyclingAccountsProvesTheOnesTheAgentHolds(t *testing.T) {
 	_, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
 	}
-	address, err := solana.AddressFor(mustPub(t, priv.Public().(ed25519.PublicKey)))
+	mine, err := solana.AddressFor(mustPub(t, priv.Public().(ed25519.PublicKey)))
 	if err != nil {
 		t.Fatalf("AddressFor: %v", err)
 	}
+	other := "9qQdGopaETkDi9sFiWTF1K9jrcyHdWHFt76NJ1Jo1KbZ"
 	sock := serveAgent(t, []ed25519.PrivateKey{priv})
 
 	m := model{
-		st: newStyles(), view: screenHome, width: 80, height: 24,
-		deps: deps{SockPath: sock, Ledger: testLedger(t), Catalogue: DefaultCatalogue()},
-		keys: []*agent.Key{
-			{Format: gossh.KeyAlgoED25519, Blob: blobFor(t, priv.Public().(ed25519.PublicKey)), Comment: "me"},
+		st: newStyles(), view: screenHome, width: 100, height: 30,
+		deps: deps{SockPath: sock, Ledger: testLedger(t), Catalogue: DefaultCatalogue(), Host: Domain},
+		candidates: []candidate{
+			{address: other}, // named on the command line, nothing proves it
+			{address: mine, key: &agent.Key{Format: gossh.KeyAlgoED25519, Blob: blobFor(t, priv.Public().(ed25519.PublicKey)), Comment: "mine"}},
 		},
 	}
+	m.at = 1
+	m.deps.Address, m.deps.Proven = mine, false
+	m.syncLists()
 
-	// Before: one tab, and the page asks the question.
-	if len(m.tabs()) != 1 {
-		t.Fatalf("a session with no account offers %d tabs, want only its own page", len(m.tabs()))
-	}
-	if !strings.Contains(stripForTest(m.renderPick()), "Which of these is yours?") {
-		t.Error("the first page does not ask which key is yours")
-	}
-	// And there is no field: q quits, because nothing on the page takes a q.
-	if _, cmd := m.onPickKey(tea.KeyPressMsg(tea.Key{Code: 'q', Text: "q"})); cmd == nil {
-		t.Error("q does not leave a page with no field on it")
+	// The first page says which account, in full, with the agent's own label.
+	got := stripForTest(m.renderHome())
+	if !strings.Contains(got, mine) {
+		t.Errorf("the page does not print the whole address: %q", got)
 	}
 
-	next, cmd := m.onPickKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
-	got := next.(model)
+	// Onto a candidate the agent holds: the page becomes provable and says so.
+	after, cmd := m.cycle(1)
+	if after.deps.Address != other {
+		t.Fatalf("cycling forward went to %q, want %q", after.deps.Address, other)
+	}
+	if cmd != nil {
+		t.Error("a candidate with no key asked to be proved")
+	}
+	if after.deps.Proven {
+		t.Error("a named account was treated as owned")
+	}
+
+	// Back to the one the agent holds: proved, by the agent signing.
+	proved, cmd := after.cycle(-1)
+	if proved.deps.Address != mine {
+		t.Fatalf("cycling back went to %q, want %q", proved.deps.Address, mine)
+	}
 	if cmd == nil {
-		t.Fatal("enter did nothing")
+		t.Fatal("a candidate the agent holds was not put to the agent")
 	}
-	msg, ok := cmd().(nonceSignedMsg)
-	if !ok || msg.err != nil {
-		t.Fatalf("adopting the key gave %+v", msg)
+	done, _ := proved.Update(cmd())
+	owned := done.(model)
+	if !owned.deps.Proven {
+		t.Error("the agent signed and the account is still not owned")
 	}
-	if msg.address != address {
-		t.Errorf("adopted %q, want %q", msg.address, address)
+	if !owned.candidates[owned.at].proven {
+		t.Error("the candidate itself was not marked proved, so the next visit re-asks")
+	}
+	if got := stripForTest(owned.renderHome()); !strings.Contains(got, "proven") {
+		t.Errorf("the page does not say the account is proved: %q", got)
 	}
 
-	// After: the bar is the ordinary one, and the account is owned.
-	done, _ := got.Update(msg)
-	after := done.(model)
-	if after.picking() {
-		t.Error("the session still thinks it has named no account")
-	}
-	if !after.deps.Proven {
-		t.Error("a key the agent signed for did not prove the account")
-	}
-	if after.deps.Address != address {
-		t.Errorf("the session is on %q, want %q", after.deps.Address, address)
-	}
-	if len(after.tabs()) != len(screens) {
-		t.Errorf("after proving, the bar offers %d tabs, want %d", len(after.tabs()), len(screens))
+	// Wrapping both ways, because a cycle that stops at the end is a list.
+	// Three accounts, so forward and back are different moves.
+	three := owned
+	third := "9QdGopaETkDi9sFiWTF1K9jrcyHdWHFt76NJ1Jo1KbZ"
+	three.candidates = append(three.candidates, candidate{address: third})
+	three.deps.Address, three.at = third, 2
+	for _, step := range []struct {
+		n    int
+		want string
+	}{{1, other}, {1, mine}, {1, third}, {-1, mine}} {
+		var cmd tea.Cmd
+		three, cmd = three.cycle(step.n)
+		if three.deps.Address != step.want {
+			t.Errorf("cycling %d went to %q, want %q", step.n, three.deps.Address, step.want)
+		}
+		if cmd != nil {
+			t.Errorf("cycling %d asked to prove %q, which was named rather than held", step.n, step.want)
+		}
 	}
 }
 
-// A page with nothing to pick from says what to do instead. There used to be
-// an address field underneath it, which was the answer to that, and the answer
-// was better on the command line - where the difference between naming an
-// account and proving one is visible.
-func TestAPickerWithNoKeysSaysWhatToDoInstead(t *testing.T) {
-	m := model{st: newStyles(), view: screenHome, width: 100, height: 24,
+// A session with nothing to look at says what to do instead, and the bar is
+// one tab on it: offering four pages it cannot use is a bar that lies about
+// where you can go.
+func TestASessionWithNothingToLookAtSaysWhatToDo(t *testing.T) {
+	m := model{st: newStyles(), view: screenHome, width: 100, height: 30,
 		deps: deps{Ledger: testLedger(t), Catalogue: DefaultCatalogue(), Host: Domain}}
-	got := stripForTest(m.renderPick())
-	if strings.Contains(got, "address") && strings.Contains(got, "address  ") {
-		t.Errorf("the page still offers an address field: %q", got)
+	if !m.picking() {
+		t.Fatal("a session with no candidates is not picking")
+	}
+	if len(m.tabs()) != 1 {
+		t.Errorf("the bar offers %d tabs, want only its own page", len(m.tabs()))
+	}
+	got := stripForTest(m.renderHome())
+	if strings.Contains(got, "Which of these is yours") {
+		t.Errorf("the page still asks the question: %q", got)
 	}
 	if !strings.Contains(got, "ssh "+Domain+" <address>") {
 		t.Errorf("the page does not say how to name an account instead: %q", got)
 	}
-	if _, cmd := m.onPickKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})); cmd != nil {
-		t.Error("enter did something on a page with no keys")
+	if _, cmd := m.cycle(1); cmd != nil {
+		t.Error("cycling with no candidates did something")
 	}
 }
 
@@ -1552,38 +1582,20 @@ func TestAClickOnNothingInParticularSelectsNothing(t *testing.T) {
 	}
 }
 
-// The picker is the first thing a local run shows and the first thing a
-// connection that proved nothing shows, so a click that did nothing here would
-// be the most visible one that does nothing.
-func TestClickingAKeyInThePickerAdoptsIt(t *testing.T) {
-	_, priv, err := ed25519.GenerateKey(nil)
-	if err != nil {
-		t.Fatalf("GenerateKey: %v", err)
-	}
-	sock := serveAgent(t, []ed25519.PrivateKey{priv})
+// A click on the account line picks that account. It is the same act as
+// pressing `<` or `>`, and it goes through the same code, because a mouse is
+// another way of moving along a list.
+func TestClickingAnAccountSelectsIt(t *testing.T) {
 	m := model{
-		st:    newStyles(),
-		view:  screenHome,
-		deps:  deps{SockPath: sock, Ledger: testLedger(t), Catalogue: DefaultCatalogue()},
-		width: 80, height: 24,
-		keys: []*agent.Key{
-			{Format: gossh.KeyAlgoED25519, Blob: blobFor(t, priv.Public().(ed25519.PublicKey)), Comment: "one"},
-			{Format: gossh.KeyAlgoED25519, Blob: blobFor(t, priv.Public().(ed25519.PublicKey)), Comment: "two"},
-		},
+		st: newStyles(), view: screenHome, width: 100, height: 30,
+		deps:       deps{Ledger: testLedger(t), Catalogue: DefaultCatalogue(), Host: Domain},
+		candidates: []candidate{{address: "one"}, {address: "two"}, {address: "three"}},
 	}
-
-	// The click puts the cursor where the mouse landed; adoption is a separate
-	// step because it needs the agent to sign.
-	out, _ := m.Update(pickKeyMsg{row: 1})
-	got, ok := out.(model)
-	if !ok {
-		t.Fatalf("a click in the picker gave %T", out)
-	}
-	if got.picked != 1 {
-		t.Errorf("the click left the cursor on row %d, want 1", got.picked)
-	}
-	if _, cmd := got.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})); cmd == nil {
-		t.Error("a clicked key did nothing when enter followed it")
+	m.deps.Address = "one"
+	m.syncLists()
+	_, where := m.frame()
+	if where.mark == (box{}) {
+		t.Fatal("no account line was drawn to click")
 	}
 }
 

@@ -230,7 +230,10 @@ func (s *Server) modelFor(w who) tea.Model {
 		// a separate program that handed this one over the moment it worked
 		// that out, which meant the first thing a new connection saw and the
 		// second thing it saw were drawn by two different sets of rules.
-		return model{
+		// Nothing named and nothing held, so there is no account to look at
+		// and the bar has one tab on it. Everything else about this is the
+		// ordinary session.
+		m := model{
 			deps: deps{
 				SockPath:  sockPath,
 				Local:     w.local,
@@ -247,6 +250,7 @@ func (s *Server) modelFor(w who) tea.Model {
 			width:  80,
 			height: 24,
 		}
+		return m
 	}
 
 	address, refusal, proven := AccountFor(w.pub, w.wallet, w.user)
@@ -282,6 +286,12 @@ func (s *Server) modelFor(w who) tea.Model {
 	// arriving at one is not the thing that discovers there is no catalogue.
 	// The pager is sized here for the same reason it is not sized by its own
 	// draw: a View cannot keep what it measures.
+	// The account the session arrived with is the first of the accounts it may
+	// look at, and anything else a forwarded agent holds is another. It stays
+	// first, so cycling forward from where you arrived is the road to the
+	// others and cycling back is the way home.
+	m.candidates = []candidate{{address: address}}
+	m.deps.Address = address
 	m.syncLists()
 	m.sizeHelp()
 	return m

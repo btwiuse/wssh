@@ -91,9 +91,146 @@ func (m model) tabs() []tab {
 	return screens
 }
 
-// picking is whether this session has named no account yet, which is what the
-// first tab is for.
+// picking is whether this session has an account at all, which is what the
+// first tab is for. Read from the address rather than from the candidate list,
+// because the address is what everything that changes an account reads and the
+// two disagreeing is a session that thinks it owns something it does not.
 func (m model) picking() bool { return strings.TrimSpace(m.deps.Address) == "" }
+
+// current is the account this session is looking at, or nil when it has none.
+//
+// Falls back to the address on its own for a model built without a candidate
+// list - which is every session that arrived with a key and an agent that
+// answered with nothing new, and every model a test builds by hand.
+func (m model) current() *candidate {
+	if m.picking() {
+		return nil
+	}
+	if len(m.candidates) == 0 {
+		return &candidate{address: m.deps.Address, proven: m.deps.Proven}
+	}
+	return &m.candidates[m.at]
+}
+
+// cycle moves n accounts along the list and makes that one the session's.
+//
+// Which is the whole of what the picker used to be for, done with two keys
+// instead of a screen: arriving somewhere and finding the balance you
+// recognise *is* choosing it, and a question asked before anything is shown
+// is a question answered before there is anything to answer it with.
+//
+// Proving follows the selection rather than preceding it. A candidate that
+// came out of the agent is proved by asking the agent to sign, which happens
+// as soon as it is the one on screen; one that was merely named on the
+// command line is a view, and stays one.
+func (m model) cycle(n int) (model, tea.Cmd) {
+	if m.picking() || len(m.candidates) < 2 {
+		return m, nil
+	}
+	next := (m.at + n) % len(m.candidates)
+	if next < 0 {
+		next += len(m.candidates)
+	}
+	m.at = next
+	c := m.current()
+	m.deps.Address, m.deps.Proven = c.address, c.proven
+	m.view, m.notice, m.fresh, m.focus, m.amount = screenHome, notice{}, "", false, ""
+	m.account = m.deps.Ledger.Account(c.address)
+	m.paintFocus()
+	m.syncLists()
+	if c.key != nil && !c.proven {
+		return m, proveCmd(m.deps.SockPath, c.address)
+	}
+	return m, nil
+}
+
+// addCandidates folds the agent's keys into the list of accounts this session
+// may look at, without disturbing where it is or which one it is looking at.
+func (m *model) addCandidates(keys []*agent.Key) {
+	for _, k := range keys {
+		_, sshPub, ok := pubkeyOf(k)
+		if !ok {
+			continue
+		}
+		address, err := AddressOf(sshPub)
+		if err != nil || address == "" {
+			continue
+		}
+		if m.has(address) {
+			continue
+		}
+		m.candidates = append(m.candidates, candidate{
+			address: address, comment: labelForKey(k), key: k,
+		})
+	}
+}
+
+// has is whether this session is already looking at, or could look at, an
+// address. The one it arrived with is in the list before the agent's, so this
+// is what keeps `ssh <address>@host` and `ssh -A host` from offering the same
+// account twice.
+func (m model) has(address string) bool {
+	for _, c := range m.candidates {
+		if c.address == address {
+			return true
+		}
+	}
+	return false
+}
+
+// proveCurrent asks the agent to sign for the account on screen, which is what
+// turns a view into something that can be changed. Asked whenever the account
+// on screen came out of the agent and has not been proved yet - including when
+// it was just arrived at by cycling.
+func (m model) proveCurrent() tea.Cmd {
+	c := m.current()
+	if c == nil || c.key == nil || c.proven || m.deps.SockPath == "" {
+		return nil
+	}
+	return proveCmd(m.deps.SockPath, c.address)
+}
+
+// adopt puts the session on an account that is not in its list yet, which is
+// the shape `ssh <address>@host` arrives in: named, not proved.
+func (m model) adopt(address string) (model, tea.Cmd) {
+	if !m.has(address) {
+		m.candidates = append([]candidate{{address: address}}, m.candidates...)
+	}
+	m.deps.Address, m.deps.Proven = address, false
+	m.at = 0
+	for i, c := range m.candidates {
+		if c.address == address {
+			m.at = i
+			break
+		}
+	}
+	m.view, m.notice, m.fresh, m.focus, m.amount = screenHome, notice{}, "", false, ""
+	m.account = m.deps.Ledger.Account(address)
+	m.paintFocus()
+	m.syncLists()
+	return m, m.proveCurrent()
+}
+
+// candidate is one account this session could be looking at.
+type candidate struct {
+	address string
+
+	// comment is the agent's own label for the key, which is ssh-add's
+	// "user@host" for a key it loaded from a file. Shown beside the address,
+	// because an address is a string of base58 and a comment is a name somebody
+	// chose, and the name is what makes a list of them readable.
+	comment string
+
+	// key is the agent key this account came from, and nil for one that was
+	// named on the command line. It is what tells "prove this" from "this is a
+	// view of it".
+	key *agent.Key
+
+	// proven is whether an agent has been asked and answered. Not a guess: a
+	// session that assumed it owned every account it could name would hand the
+	// balance of somebody else's to anybody who typed the address.
+	proven bool
+}
 
 // screenList is the ring in the order the bar shows it, for turning a column
 // into a page.
@@ -286,17 +423,12 @@ type model struct {
 	routes  list.Model
 	apiKeys list.Model
 
-	// keys and picked are the first tab while this session has named no
-	// account: the keys a forwarded agent holds, and which one the cursor is
-	// on.
-	//
-	// Nil keys with an empty address is the whole of what "picking" means -
-	// there is exactly one thing such a session can do, and this is it - so
-	// picking() reads the address rather than keeping a flag beside it that
-	// could disagree.
-	keys    []*agent.Key
-	picked  int
-	keysErr string
+	// candidates and at are the accounts this session may be looking at and
+	// which one it is. Empty candidates is the whole of what "picking" means -
+	// there is nothing to show anybody - so picking() counts them rather than
+	// keeping a flag beside them that could disagree with the address.
+	candidates []candidate
+	at         int
 
 	// rows is where the current page's list put its rows on screen, as the
 	// delegate drew them. Set by every frame, because a row's place on the
@@ -363,18 +495,14 @@ type notice struct {
 }
 
 func (m model) Init() tea.Cmd {
-	// Nothing named yet: the only thing this session can do is find out what
-	// the forwarded agent holds, so it has to ask before it can offer anything.
-	if m.picking() {
-		return listKeysCmd(m.deps.SockPath)
+	// What a forwarded agent holds, asked for whatever this session arrived
+	// with. A session that named an account needs to know whether it owns it,
+	// and either way the other keys in that agent are accounts it could be
+	// looking at instead - which is what `<` and `>` move between.
+	if m.deps.SockPath == "" {
+		return nil
 	}
-	// An account named by username is a view. When an agent was forwarded as
-	// well, ask it whether it holds that address's key: if it does, and it
-	// signs for it, this session owns the account and may change it.
-	if !m.deps.Proven && m.deps.SockPath != "" {
-		return proveCmd(m.deps.SockPath, m.deps.Address)
-	}
-	return nil
+	return listKeysCmd(m.deps.SockPath)
 }
 
 func (m model) View() tea.View {
@@ -464,15 +592,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case keysListedMsg:
-		if msg.err != nil {
-			m.keysErr = msg.err.Error()
-			return m, nil
+		// The agent's keys join the accounts this session may look at. The one
+		// it came in with stays first, so cycling forward from where you
+		// started is the road to the others and cycling back is the way home.
+		m.addCandidates(orderableKeys(msg.keys))
+
+		// A session that named nothing at all lands on the first of them. Not
+		// because somebody chose it - there was nobody to choose - but because
+		// showing the first one and letting `<` and `>` move off it is the same
+		// as choosing it, and asking first was the thing this replaced.
+		if m.picking() {
+			if len(m.candidates) == 0 {
+				return m, nil
+			}
+			next, cmd := m.adopt(m.candidates[0].address)
+			return next, cmd
 		}
-		m.keys = orderableKeys(msg.keys)
-		if len(m.keys) == 0 {
-			m.keysErr = "the forwarded agent holds no keys"
+		// An account that was named rather than proved is proved now, if this
+		// agent turns out to hold it: that is the upgrade
+		// `ssh <address>@host` has always got, and it is silent when the agent
+		// does not, because somebody reading somebody else's balance is the
+		// ordinary case rather than an error.
+		if len(m.candidates) > 0 {
+			m.candidates[m.at].proven = m.deps.Proven
 		}
-		return m, nil
+		return m, m.proveCurrent()
 
 	case nonceSignedMsg:
 		m.busy = ""
@@ -480,28 +624,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = notice{noticeBad, msg.err.Error()}
 			return m, nil
 		}
-		// Proved. From here this is an ordinary session, the bar grows to all
-		// of its tabs, and the page underneath is an account rather than a
-		// question about which account.
-		m.deps.Address, m.deps.Proven = msg.address, true
-		m.keys, m.picked = nil, 0
-		m.account = m.deps.Ledger.Account(msg.address)
-		m.syncLists()
-		return m, nil
+		return m.adopt(msg.address)
 
 	case pickKeyMsg:
-		if m.view != screenHome || msg.row < 0 || msg.row >= len(m.keys) {
+		if m.view != screenHome || msg.row < 0 || msg.row >= len(m.candidates) {
 			return m, nil
 		}
-		m.picked = msg.row
-		m.busy = "asking the agent to sign, so this key is really yours"
-		return m, adoptCmd(m.deps, m.keys[msg.row])
+		m.at = msg.row
+		next, cmd := m.cycle(0)
+		return next, cmd
 
 	case provenMsg:
 		// Silent either way. An agent that does not hold the key is the
 		// ordinary case for somebody looking at someone else's balance, and
 		// saying so on a screen they are only reading would be noise.
-		if msg.proven {
+		// Silent either way. An agent that does not hold the key is the
+		// ordinary case for somebody looking at someone else's balance, and
+		// saying so on a screen they are only reading would be noise.
+		if msg.proven && !m.picking() {
+			m.candidates[m.at].proven = true
 			m.deps.Proven = true
 		}
 		return m, nil
@@ -614,12 +755,6 @@ func (m model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.retreat(), nil
 	}
 
-	// A session that has named no account is on the one page it has, and that
-	// page takes the keyboard whole.
-	if m.picking() {
-		return m.onPickKey(msg)
-	}
-
 	// The widget on screen gets the keyboard first - and a text field gets all
 	// of it, because a field that lets a letter through to the program is a
 	// field that disconnects the session because somebody typed q into an
@@ -664,6 +799,10 @@ func (m model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // `n` went into the list and did nothing.
 func (m model) onProgramKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
+	case "<", "shift+,":
+		return m.cycle(-1)
+	case ">", "shift+.":
+		return m.cycle(1)
 	case "q":
 		return m, tea.Quit
 	case "y":
@@ -774,33 +913,6 @@ func (m model) revokeKey(oneBased int) (tea.Model, tea.Cmd) {
 		ok, err := d.Ledger.RevokeKey(d.Address, key.Digest)
 		return keyRevokedMsg{label: key.Label, ok: ok, err: err}
 	}
-}
-
-// onPickKey is the one page a session with no account has, and the one thing
-// on it: pick a key, and the agent proves it by signing.
-//
-// It takes the keyboard whole, which it can afford to because there is no text
-// field on it any more. A field that swallows printable characters is a field
-// that stops `q` quitting, and that was the one thing about this page that was
-// worth the cost of getting wrong.
-func (m model) onPickKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "ctrl+c", "q", "esc":
-		return m, tea.Quit
-	case "up", "ctrl+p":
-		m.picked = max(0, m.picked-1)
-		return m, nil
-	case "down", "ctrl+n":
-		m.picked = min(m.picked+1, len(m.keys)-1)
-		return m, nil
-	case "enter":
-		if m.picked < 0 || m.picked >= len(m.keys) {
-			return m, nil
-		}
-		m.busy = "asking the agent to sign, so this key is really yours"
-		return m, adoptCmd(m.deps, m.keys[m.picked])
-	}
-	return m, nil
 }
 
 // onListKey is a focused list and a key it has a binding for, so the whole of
@@ -1457,6 +1569,12 @@ func (m model) footer() string {
 	if m.fresh != "" {
 		pairs = append(pairs, [2]string{"y", "copy key"})
 	}
+	// Only when there is more than one account to be between: one candidate is
+	// not a list, and offering a switch across a single entry is a hint for a
+	// control that does nothing.
+	if len(m.candidates) > 1 {
+		pairs = append(pairs, [2]string{"< >", "switch account"})
+	}
 	// The help screen scrolls when it has more on it than fits, and only then:
 	// a hint that claims a page scrolls on a terminal where it does not is
 	// worse than no hint, because the person presses j and then wonders why
@@ -1491,63 +1609,98 @@ func (m model) footer() string {
 	return strings.TrimRight(b.String(), " ")
 }
 
-// renderPick is the first tab for a session that has named no account: the
-// keys a forwarded agent holds, and which one of them is this session.
+// renderEmpty is the first tab for a session with nothing to look at: no
+// account named and no agent holding one.
 //
-// It is a page rather than a screen of its own, and that is the whole point:
-// a connection that proved nothing used to be handed a different program,
-// which then handed this one over the moment it worked out who it was. One
-// window, with the question on its first page and the answer where it was
-// waiting.
+// It is a page rather than a screen of its own, and that is the whole point: a
+// connection that proved nothing used to be handed a different program, which
+// then handed this one over the moment it worked out who it was. One window,
+// with the question on its first page and the answer where it was waiting.
 //
 // There is no address field here, and there used to be. Naming an account is
 // something a person does on the command line, where writing it says out loud
 // that they are naming rather than proving: `ssh <address>@router.cafe`. The
-// only thing this page can do that nothing else can is prove a key, and that
-// is not something typing does.
-func (m model) renderPick() string {
+// only thing a session in this state can do that nothing else can is look at
+// an account its agent holds, and that is not something typing does.
+func (m model) renderEmpty() string {
 	st := m.st
 	var b strings.Builder
-
 	if m.busy != "" {
 		return m.wrap(st.warn.Render(m.busy), st.warn) + "\n"
 	}
-	if len(m.keys) == 0 {
-		// Nothing to pick from, so say what to do instead. There used to be
-		// an address field underneath this, and it was the answer to it; the
-		// answer is better on the command line, where the difference between
-		// naming an account and proving one is visible.
-		if m.deps.Local {
-			b.WriteString("  " + st.title.Render("No ssh-agent, so nothing here can sign.") + "\n")
-			b.WriteString(m.wrap(st.dim.Render("An account is an ed25519 public key. Start an agent, add a key, and come back:"), st.dim) + "\n")
-			b.WriteString("  " + st.accent.Render("eval $(ssh-agent -s) && ssh-add ~/.ssh/id_ed25519") + "\n\n")
-		} else {
-			b.WriteString("  " + st.title.Render("This connection proved nothing, so nothing here can sign.") + "\n")
-			b.WriteString(m.wrap(st.dim.Render("To look at an account instead of proving one, name it on the command line - which says out loud that it is named rather than proved:"), st.dim) + "\n")
-			b.WriteString("  " + st.accent.Render("ssh "+m.deps.host()+" <address>") + "\n")
-			b.WriteString(m.wrap(st.dim.Render("To prove one instead, reconnect with an agent holding it:"), st.dim) + "\n")
-			b.WriteString("  " + st.accent.Render("ssh -A "+m.deps.host()) + "\n")
-		}
+	if m.deps.Local {
+		b.WriteString("  " + st.title.Render("No ssh-agent, so nothing here can sign.") + "\n")
+		b.WriteString(m.wrap(st.dim.Render("An account is an ed25519 public key. Start an agent, add a key, and come back:"), st.dim) + "\n")
+		b.WriteString("  " + st.accent.Render("eval $(ssh-agent -s) && ssh-add ~/.ssh/id_ed25519") + "\n")
 		return b.String()
 	}
-
-	b.WriteString("  " + st.title.Render("Which of these is yours?") + "\n\n")
-	for i, k := range m.keys {
-		marker, style := "  ", st.value
-		if i == m.picked {
-			marker, style = "> ", st.accent
-		}
-		b.WriteString(marker + "  " + style.Render(labelForKey(k)) + "\n")
-	}
-	b.WriteString("\n")
-
-	// A real failure is worth a line; "you forwarded no agent" is not, because
-	// the page above already says what to do about it.
-	if m.keysErr != "" && !strings.Contains(m.keysErr, "forwarded no agent") {
-		b.WriteString(m.wrap(st.warn.Render(m.keysErr+"."), st.warn) + "\n\n")
-	}
-	b.WriteString("  " + st.dim.Render("up/down to choose, enter to prove it with a signature") + "\n")
+	b.WriteString("  " + st.title.Render("This connection proved nothing, so nothing here can sign.") + "\n")
+	b.WriteString(m.wrap(st.dim.Render("To look at an account instead of proving one, name it on the command line - which says out loud that it is named rather than proved:"), st.dim) + "\n")
+	b.WriteString("  " + st.accent.Render("ssh "+m.deps.host()+" <address>") + "\n")
+	b.WriteString(m.wrap(st.dim.Render("To prove one instead, reconnect with an agent holding it:"), st.dim) + "\n")
+	b.WriteString("  " + st.accent.Render("ssh -A "+m.deps.host()) + "\n")
 	return b.String()
+}
+
+// renderAccount is which account this session is looking at, in full, with the
+// agent's own name for the key beside it when there is one.
+//
+// In full, not shortened: an address is the thing a person pastes into
+// `ssh-keygen` and into `sol-keys`, and a page that will not print all of it
+// is a page that makes them go and look it up somewhere else. It is also the
+// one thing on this screen that tells two candidates apart - two 44-character
+// strings that share a prefix are the same account, and two that share
+// nothing are two accounts, which is the whole of what choosing is.
+//
+// The comment is the agent's label for the key, which is ssh-add's "user@host"
+// for one it loaded from a file. A name somebody chose next to a string nobody
+// can read is what makes a list of candidates pickable.
+func (m model) renderAccount() string {
+	c := m.current()
+	if c == nil {
+		return ""
+	}
+	// The label is padded to the same column every other field uses, so the
+	// address below it lines up with the numbers underneath it however long it
+	// is.
+	lead := "  " + m.st.label.Render(pad("account", 11))
+	whole := c.address
+	if lipgloss.Width(lead)+len(whole) > bodyWidth(m.width) {
+		whole = m.shortAddress(whole)
+	}
+	out := lead + m.st.value.Render(whole)
+
+	// Proven or not is said here rather than as a banner on every page of the
+	// session: it is the difference between a balance you may spend and one you
+	// may only read, and it belongs next to the number.
+	detail := strings.TrimSpace(c.comment)
+	if c.proven {
+		if detail == "" {
+			detail = "proven"
+		} else {
+			detail += "  proven"
+		}
+	}
+	if detail == "" {
+		return out + "\n"
+	}
+	// Beside the address where it fits, under it where it does not - a comment
+	// that pushed the address off the edge would be worse than a second line.
+	if lipgloss.Width(out)+2+lipgloss.Width(detail) <= bodyWidth(m.width) {
+		return out + "  " + m.st.dim.Render(detail) + "\n"
+	}
+	return out + "\n" + "  " + pad("", 11) + m.st.dim.Render(detail) + "\n"
+}
+
+// switchHint is what `<` and `>` do, offered only when there is more than one
+// account to switch between. One candidate is not a list.
+func (m model) switchHint() string {
+	if len(m.candidates) < 2 {
+		return ""
+	}
+	return "  " + m.st.key.Render("<") + m.st.dim.Render(" ") + m.st.key.Render(">") +
+		m.st.dim.Render(" to switch between the "+strconv.Itoa(len(m.candidates))+
+			" accounts your agent holds") + "\n"
 }
 
 // renderHome is the page the name at the left of the bar opens: the wordmark,
@@ -1558,12 +1711,12 @@ func (m model) renderPick() string {
 // name, the balance, and what to do next were already all here.
 func (m *model) renderHome() string {
 	if m.picking() {
-		return m.renderPick()
+		return m.renderEmpty()
 	}
 	var b strings.Builder
 	acct := m.account
 	b.WriteString(m.wordmark())
-	b.WriteString(m.field("account", m.shortAddress(acct.Address)))
+	b.WriteString(m.renderAccount())
 	b.WriteString(m.field("balance", m.st.money.Render(FormatUSD(acct.Balance))))
 	b.WriteString(m.field("paid in", FormatUSD(acct.Deposits)))
 	b.WriteString(m.field("spent", FormatUSD(acct.Spent)))

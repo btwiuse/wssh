@@ -141,16 +141,41 @@ account. With no agent there is nothing to prove and nowhere to keep a balance,
 so the session is shown the first page of the ordinary window: that same list,
 plus an address field underneath.
 
-**It is a page and not a screen.** A connection that proved nothing used to be
-handed `anonymousModel` - a whole other program, with its own frame, no bar, its
-own brand line and its own footer - which handed the ordinary session over the
-moment it worked out who it was. So the first thing a new connection saw and the
-second thing it saw were drawn by two sets of rules, and the second one was a
-different shape. Now it is `renderPick` / `onPickKey` on `model`, and the bar
-has **one tab** until an account is named: there is exactly one thing such a
-session can do, and offering it four pages it cannot use is a bar that lies
-about where you can go. `m.tabs()` is the single place that decides, and the
-ring, the clicks and the bar all read from it.
+**There is no picker at all.** It went through three shapes and this is the
+third. It was a whole other program - its own frame, no bar, its own brand line
+and its own footer - which handed the ordinary session over the moment it worked
+out who it was. Then it was a page asking "which of these is yours?" with a
+cursor to move down a list of keys. Now it is nothing: **the accounts a
+forwarded agent holds are on the home page and `<` and `>` move between them.**
+
+Arriving somewhere and finding the balance you recognise *is* choosing it. A
+question asked before anything is shown is a question answered before there is
+anything to answer it with, and the whole of what it was for - proving a key -
+is something a signature does rather than a cursor does.
+
+```
+  account    6YSosJgvtiXpLMyhcm7q77AngnrjxurFfyoLijAsrUKL  gear@gear.local  proven
+  balance    $0.00
+```
+
+The address is printed **in full**, not shortened: it is the thing a person
+pastes into `ssh-keygen` and into `sol-keys`, and it is the one thing on the
+page that tells two candidates apart. The comment is the agent's own label for
+the key - ssh-add's `user@host` for one it loaded from a file - and a name
+somebody chose next to a string nobody can read is what makes a list of them
+pickable. `proven` says the difference between a balance you may spend and one
+you may only read, next to the number rather than as a banner on every page.
+
+**Proving follows the selection rather than preceding it.** A candidate that
+came out of the agent is put to the agent as soon as it is the one on screen;
+one that was merely named on the command line is a view and stays one. That is
+the same upgrade `ssh <address>@host` has always got, except it now happens
+when you arrive on an account rather than when you are told which one.
+
+A session with nothing at all - no account named, no agent holding one - still
+has **one tab**: there is nothing to show anybody, and offering four pages it
+cannot use is a bar that lies about where you can go. `m.tabs()` is the single
+place that decides, and the ring, the clicks and the bar all read from it.
 
 `picking()` is `deps.Address == ""`, deliberately not a flag beside it: a
 flag can disagree with the address, and the disagreement is a session that
