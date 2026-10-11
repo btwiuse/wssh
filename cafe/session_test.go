@@ -1774,6 +1774,40 @@ func TestTheTwoLinesOfAKeyRowLineUp(t *testing.T) {
 	}
 }
 
+// The page dots are in the same place on every page of a list. A pager that
+// moves as you page it is not a pager, it is something to look for again on each
+// turn - and the lists here are all built by the same component and all go
+// through the same sizing, so there is one place for it to go wrong.
+func TestThePaginationDoesNotMoveBetweenPages(t *testing.T) {
+	for _, page := range []screen{screenFAQ, screenModels, screenKeys} {
+		var where string
+		for at := range 3 {
+			m := model{st: newStyles(true), view: page, focus: true, width: 100, height: 30,
+				deps: deps{Address: treasuryAddress, Ledger: testLedger(t), Catalogue: DefaultCatalogue(), Proven: true},
+				account: Account{Address: treasuryAddress, Keys: []Key{
+					{Label: "aaaa", Prefix: "bcde"}, {Label: "bbbb", Prefix: "ef01"}}}}
+			m.syncLists()
+			if l := m.nav(); l != nil {
+				l.Select(at % max(1, len(l.Items())))
+			}
+			lines := strings.Split(stripForTest(m.frameString()), "\n")
+			got := "none"
+			for i, line := range lines {
+				if strings.Contains(line, "\u2022") {
+					got = fmt.Sprintf("line %d column %d", i, strings.Index(line, "\u2022"))
+				}
+			}
+			if at == 0 {
+				where = got
+				continue
+			}
+			if got != where {
+				t.Errorf("%s: the page dots moved to %s, they were %s", pageName(page), got, where)
+			}
+		}
+	}
+}
+
 // A key is abbreviated with **one** run of three dots.
 //
 // It was six, on every screen, for every key, and the test missed it for a

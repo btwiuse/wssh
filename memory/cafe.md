@@ -852,7 +852,12 @@ how the two stop agreeing. **The landing page's base URL was corrected to match
 the app's at the same time** (`api.router.cafe/v1`), which is the same class of
 mistake: two copies of a fact that drift.
 
-**Every question carries its answer, and the answer is under the question.**
+**There is no caption saying where they came from.** Every question on the
+page is one somebody asked, and saying they are the same as the landing page's
+tells a reader something they cannot act on while taking two lines the list
+would rather have had.
+
+**Every question carries its answer**, and the answer is under the question.**
 It was a disclosure - `enter` to open one - and it was wrong twice over: the
 answers came out below the whole list rather than under the question they
 belonged to, and a row that grew to hold one pushed the rest of the page off

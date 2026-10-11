@@ -147,10 +147,11 @@ func wrapPlain(s string, n int) []string {
 	return append(out, line)
 }
 
-// faqPage is the page: the questions, with their answers, as a list.
-func (m model) faqPage() (head, tail string) { return "", m.faqTail() }
-
-// faqTail is the line under the list.
-func (m model) faqTail() string {
-	return "  " + m.st.dim.Render("the same questions as "+Domain+"'s landing page") + "\n"
-}
+// faqPage is the page: the questions, with their answers, as a list, and
+// nothing else.
+//
+// There is no caption saying where they came from. Every question on this page
+// is one somebody asked, and telling a reader that they are the same as the
+// ones on the landing page is telling them something they cannot act on -
+// while taking the two lines the list would rather have had.
+func (m model) faqPage() (head, tail string) { return "", "" }
