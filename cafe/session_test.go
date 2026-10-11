@@ -976,7 +976,11 @@ func TestCopyingAKeyOnlyWhileItIsOnScreen(t *testing.T) {
 		Proven:    true,
 		Host:      Domain,
 	}
-	m := model{deps: d, st: newStyles(), view: screenKeys, account: ledger.Account(d.Address), width: 100, height: 40}
+	// focus is set because a list arrives focused; this test wants to leave
+	// the page in one press, not two.
+	m := model{deps: d, st: newStyles(), view: screenKeys, focus: true,
+		account: ledger.Account(d.Address), width: 100, height: 40}
+	m.syncLists()
 
 	// Minting clears any previous key, so the one on screen is always the only
 	// one on screen.
@@ -1007,7 +1011,7 @@ func TestCopyingAKeyOnlyWhileItIsOnScreen(t *testing.T) {
 	}
 
 	// Leaving the screen takes the key with it.
-	next, _ = m.onKey(tea.KeyPressMsg(tea.Key{Code: 'b', Text: "b"}))
+	next, _ = m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
 	m = next.(model)
 	if m.fresh != "" {
 		t.Error("a key was still copyable after the screen that showed it was left")
@@ -1034,49 +1038,60 @@ func TestCopyIsOnlyOfferedWhenThereIsSomethingToCopy(t *testing.T) {
 	}
 }
 
-// The deposit screen used to be a trap: every key on it went to the amount
-// field, so b, k and m did nothing and the only way out was esc. Focus is what
-// makes it an ordinary page again - and the half that matters is that a page
-// shortcut pressed with the field unfocused reaches the page, not the field.
-func TestPageShortcutsWorkOnTheDepositScreenUntilTheFieldIsFocused(t *testing.T) {
-	m := model{st: newStyles(), view: screenDeposit, deps: deps{Catalogue: DefaultCatalogue(), Proven: true}, width: 100}
+// Tab is the navigation, and it walks a ring rather than a list of shortcuts:
+// this page's widget, then the next page. A list arrives already focused,
+// because hjkl is only ever wanted by something looking at a list. An amount
+// field arrives cold, which is the whole reason it was given focus.
+func TestTabWalksTheRingAndOnlyTakesTheAmountWhenAsked(t *testing.T) {
+	m := model{st: newStyles(), view: screenHome, deps: deps{Catalogue: DefaultCatalogue(), Proven: true}, width: 100, height: 40}
+	m.syncLists()
 
-	// Unfocused, the shortcuts land where they always landed.
-	next, _ := m.onKey(tea.KeyPressMsg(tea.Key{Code: 'k', Text: "k"}))
-	if got := next.(model).view; got != screenKeys {
-		t.Errorf("k on the deposit screen went to %v, want the api keys screen", got)
+	// From the balance screen, one tab lands on the deposit screen without
+	// touching the amount: there is no widget to take yet.
+	next, _ := m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	m = next.(model)
+	if m.view != screenDeposit {
+		t.Fatalf("tab from balance went to %v, want deposit", m.view)
 	}
-	next, _ = m.onKey(tea.KeyPressMsg(tea.Key{Code: 'm', Text: "m"}))
-	if got := next.(model).view; got != screenModels {
-		t.Errorf("m on the deposit screen went to %v", got)
+	if m.focus {
+		t.Error("arriving at the deposit screen focused the amount; it eats keystrokes")
 	}
 
-	// Tab puts the caret in the field, and then a digit types rather than
-	// switching pages.
+	// The next tab takes the caret, and only then do digits type.
 	next, _ = m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
-	focused := next.(model)
-	if !focused.focus {
-		t.Fatal("tab did not focus the amount field")
+	m = next.(model)
+	if !m.focus {
+		t.Fatal("tab did not put the caret in the amount")
 	}
-	next, _ = focused.onKey(tea.KeyPressMsg(tea.Key{Code: '3', Text: "3"}))
-	typed := next.(model)
-	if typed.amount != "3" {
-		t.Errorf("typed %q into the field, want 3", typed.amount)
-	}
-	if typed.view != screenDeposit {
-		t.Errorf("typing left the deposit screen for %v", typed.view)
+	next, _ = m.onKey(tea.KeyPressMsg(tea.Key{Code: '3', Text: "3"}))
+	m = next.(model)
+	if m.amount != "3" {
+		t.Errorf("typed %q into the amount, want 3", m.amount)
 	}
 
-	// Tab again takes it back out, and the shortcuts work again. This is the
-	// pair that means esc is no longer the only exit.
-	next, _ = typed.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
-	back := next.(model)
-	if back.focus {
-		t.Error("tab did not take the focus back out")
+	// A third tab leaves the page entirely, and the amount goes with it.
+	next, _ = m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	m = next.(model)
+	if m.view != screenKeys || m.amount != "" {
+		t.Errorf("tab landed on %v with amount %q, want the api keys and nothing typed", m.view, m.amount)
 	}
-	next, _ = back.onKey(tea.KeyPressMsg(tea.Key{Code: 'b', Text: "b"}))
-	if got := next.(model).view; got != screenHome {
-		t.Errorf("b with the field unfocused went to %v, want home", got)
+
+	// And a list arrives live, so hjkl works with no press at all.
+	next, _ = m.onKey(tea.KeyPressMsg(tea.Key{Code: 'j', Text: "j"}))
+	if got := next.(model).routes.Index(); got != 0 {
+		t.Errorf("the routes list arrived with the cursor on row %d, want the first", got)
+	}
+
+	// shift+tab goes back the way it came, around the end included.
+	next, _ = m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab, Mod: tea.ModShift}))
+	m = next.(model)
+	if m.view != screenDeposit {
+		t.Errorf("shift+tab went to %v, want back to deposit", m.view)
+	}
+	m = m.show(screenHome)
+	next, _ = m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab, Mod: tea.ModShift}))
+	if got := next.(model).view; got != screenHelp {
+		t.Errorf("shift+tab off the end went to %v, want it to wrap to help", got)
 	}
 }
 
@@ -1099,40 +1114,41 @@ func TestEscapeBlursTheFieldRatherThanLeavingTheScreen(t *testing.T) {
 		t.Errorf("escape cleared the amount to %q", got.amount)
 	}
 
-	// Unfocused, esc is the page-level escape again.
+	// With nothing focused, escape has nothing to undo: there are no page
+	// shortcuts left to back out of, and leaving is ctrl+c or q.
 	next, _ = got.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
-	if v := next.(model).view; v != screenHome {
-		t.Errorf("escape with nothing focused went to %v, want home", v)
+	after := next.(model)
+	if after.view != screenDeposit {
+		t.Errorf("escape with nothing focused left the screen for %v", after.view)
 	}
 }
 
-// Focus does not survive leaving the screen, or arriving back on it would put
-// the caret in a field nobody asked to type into.
-func TestLeavingAScreenDropsTheFocus(t *testing.T) {
-	m := model{
-		st: newStyles(), view: screenDeposit,
-		deps: deps{Catalogue: DefaultCatalogue(), Proven: true}, width: 100,
-	}
-	next, _ := m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
-	focused := next.(model)
-	if !focused.focus {
-		t.Fatal("tab did not focus the field")
+// A list arrives focused and an amount field does not, and that asymmetry is
+// the whole of the navigation model rather than an inconsistency.
+func TestArrivingAtAListFocusesItAndArrivingAtAFieldDoesNot(t *testing.T) {
+	m := model{st: newStyles(), deps: deps{Catalogue: DefaultCatalogue(), Proven: true}, width: 100, height: 40}
+	m.syncLists()
+
+	for _, tc := range []struct {
+		view screen
+		want bool
+	}{
+		{screenKeys, true},
+		{screenModels, true},
+		{screenDeposit, false},
+		{screenHome, false},
+		{screenHelp, false},
+	} {
+		got := m.show(tc.view)
+		if got.focus != tc.want {
+			t.Errorf("arriving at %v focused=%v, want %v", tc.view, got.focus, tc.want)
+		}
 	}
 
-	// A focused field owns the keyboard, so leaving means putting it down
-	// first. This is the whole of the trap the focus was meant to remove: the
-	// way off the screen is still two presses, but the first one now means
-	// something other than "escape".
-	next, _ = focused.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
-	next, _ = next.(model).onKey(tea.KeyPressMsg(tea.Key{Code: 'b', Text: "b"}))
-	home := next.(model)
-	if home.focus || home.view != screenHome {
-		t.Fatalf("left the screen as %v focused=%v", home.view, home.focus)
-	}
-
-	next, _ = home.onKey(tea.KeyPressMsg(tea.Key{Code: 'd', Text: "d"}))
-	if next.(model).focus {
-		t.Error("coming back to the deposit screen found the field already focused")
+	// Going back to the balance screen drops the focus, so nothing is left
+	// lit that the next tab will not light again.
+	if m.show(screenKeys).show(screenHome).focus {
+		t.Error("the focus outlived the page that had it")
 	}
 }
 
@@ -1223,26 +1239,30 @@ func TestAListCannotTakeAPageShortcut(t *testing.T) {
 	}
 }
 
-// An unfocused list is a page. That is what keeps the footer true, and it is
-// what stops a list from swallowing a letter on its way to another screen.
-func TestAnUnfocusedListStillLetsThePageShortcutsThrough(t *testing.T) {
-	for _, tc := range []struct {
-		key  string
-		want screen
-	}{
-		{"b", screenHome},
-		{"m", screenModels},
-		{"k", screenKeys},
-		{"d", screenDeposit},
-	} {
-		m := model{
-			st: newStyles(), view: screenModels,
-			deps: deps{Catalogue: DefaultCatalogue(), Proven: true}, width: 100, height: 40,
-		}
-		m.syncLists()
-		next, _ := m.onKey(tea.KeyPressMsg(tea.Key{Code: rune(tc.key[0]), Text: tc.key}))
-		if got := next.(model).view; got != tc.want {
-			t.Errorf("%q on an unfocused routes list went to %v, want %v", tc.key, got, tc.want)
+// A list may not answer to q or ?: those belong to the program rather than to
+// a widget, and a list that swallowed them would make q stop disconnecting
+// and ? stop opening the help on exactly the two screens with a cursor in them.
+func TestAListCannotTakeTheProgramsKeys(t *testing.T) {
+	km := listKeyMap()
+	if got := km.Quit.Keys(); len(got) != 0 {
+		t.Errorf("the list answers to %v; q disconnects this program", got)
+	}
+	if got := km.ShowFullHelp.Keys(); len(got) != 0 {
+		t.Errorf("the list answers to %v; ? opens this program's help", got)
+	}
+	if got := km.Filter.Keys(); len(got) != 0 {
+		t.Errorf("the list answers to %v; a filter would want esc", got)
+	}
+
+	// Paging stays narrow on purpose. Nothing needs b, d, f or u any more -
+	// there are no page shortcuts - but a list that takes four ways to page is
+	// a list with four things to remember, and this is a program about money.
+	page := append(km.PrevPage.Keys(), km.NextPage.Keys()...)
+	for _, k := range []string{"b", "d", "f", "u"} {
+		for _, bound := range page {
+			if bound == k {
+				t.Errorf("paging is bound to %q, which was left out deliberately", k)
+			}
 		}
 	}
 }

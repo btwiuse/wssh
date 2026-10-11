@@ -253,6 +253,34 @@ answer to one that proved itself.
   up/down to choose, enter to sign with a key or open an address
 ```
 
+## Navigation: a bar, not a list of letters
+
+There are no keys that jump between pages. The top of every screen carries a
+bar of all five and highlights the one you are on, and `tab` walks it:
+
+```
+  balance  │  deposit  │  api keys  │  routes  │  help
+```
+
+`shift+tab` goes back, wrapping at both ends. `esc` puts a caret down without
+leaving the page. This replaced a footer listing what `b`, `d`, `k`, `m` and
+`?` did, and the reason to replace it rather than extend it is that a footer
+has to be *correct on every screen*: a list component that wanted `b`, `d`, `f`
+and `u` for paging could not coexist with a footer promising those letters were
+pages. The bar cannot go stale that way, because it is the navigation rather
+than a description of it.
+
+Inside the ring, one asymmetry that is deliberate:
+
+| Page | Arrives | Because |
+|---|---|---|
+| balance, help | nothing focused | nothing on them takes keys |
+| api keys, routes | focused | `hjkl` is only ever wanted by something already looking at a list, so arriving live saves a press |
+| deposit | **not** focused | a field that eats keystrokes the moment you look at it is the trap the focus exists to prevent |
+
+So `tab` from balance goes to deposit without touching the amount, and a second
+`tab` puts the caret in it. `enter` acts on the cursor, or sends the deposit.
+
 Two details that are decisions rather than conveniences:
 
 - **A printable character always goes to the address field and takes the

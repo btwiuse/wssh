@@ -40,6 +40,51 @@ const (
 	screenHelp
 )
 
+// screens is every place a session can be, in the order tab walks them.
+//
+// The order is the whole of the navigation: there are no page shortcuts, so
+// this slice is what "next" means. Help is last because arriving somewhere
+// and finding out how to get somewhere else should not be the default next
+// thing you do.
+var screens = []struct {
+	view screen
+	name string
+}{
+	{screenHome, "balance"},
+	{screenDeposit, "deposit"},
+	{screenKeys, "api keys"},
+	{screenModels, "routes"},
+	{screenHelp, "help"},
+}
+
+// widget is whether the current page has something on it that takes the
+// keyboard once focused. A list always does and arrives focused; a text field
+// does and arrives not, because a field that eats keystrokes the moment you
+// look at it is the trap the focus was added to remove.
+func (v screen) widget() bool {
+	return v == screenDeposit || v == screenKeys || v == screenModels
+}
+
+// step moves n places through the ring of screens, wrapping at both ends.
+//
+// Wrapping rather than stopping is deliberate: tab is a cycle here, and a
+// cycle that stalls at the last page makes the end of it feel like a dead end
+// rather than the place you came round to.
+func step(from screen, n int) screen {
+	i := 0
+	for j, s := range screens {
+		if s.view == from {
+			i = j
+			break
+		}
+	}
+	i = (i + n) % len(screens)
+	if i < 0 {
+		i += len(screens)
+	}
+	return screens[i].view
+}
+
 type styles struct {
 	brand    lipgloss.Style
 	brandDim lipgloss.Style
@@ -349,6 +394,25 @@ func (m model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// an ordinary page and the footer at the bottom keeps telling the truth,
 	// which is the whole reason a list here does not answer to k, d or b at
 	// any focus level.
+	// Tab and shift+tab are the navigation, and the bar at the top says where
+	// they go. Tab takes the widget first where there is one, so arriving on
+	// the deposit screen and pressing tab once puts the caret in the amount
+	// rather than skipping past it.
+	switch msg.String() {
+	case "tab":
+		if m.focus {
+			return m.advance(), nil
+		}
+		if m.view.widget() {
+			m.focus = true
+			m.paintFocus()
+			return m, nil
+		}
+		return m.advance(), nil
+	case "shift+tab":
+		return m.retreat(), nil
+	}
+
 	if m.focus {
 		switch m.view {
 		case screenDeposit:
@@ -358,42 +422,21 @@ func (m model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Tab focuses. There is nothing to focus on any other screen, so it does
-	// nothing rather than being claimed.
-	if msg.String() == "tab" {
-		switch m.view {
-		case screenDeposit, screenKeys, screenModels:
-			m.focus = true
-			m.paintFocus()
-			return m, nil
-		}
-	}
-
+	// What is left is a handful of things that are not navigation: leaving,
+	// copying a key that is on screen, reading the help, re-reading a balance.
+	// Nothing here is a page, which is what keeps the letters free for a list
+	// to use.
 	switch msg.String() {
 	case "q":
 		return m, tea.Quit
 	case "y":
 		return m.copyFreshKey()
-	case "b", "home":
-		m.to(screenHome)
-	case "d":
-		m.to(screenDeposit)
-	case "k":
-		if !m.deps.Proven {
-			m.notice = notice{noticeBad, notOwned}
-			return m, nil
-		}
-		m.to(screenKeys)
-	case "m", "p":
-		m.to(screenModels)
-	case "?", "h":
-		m.to(screenHelp)
+	case "?":
+		return m.show(screenHelp), nil
 	case "r":
-		// A reload is a key because the balance is somebody's money and
-		// they should be able to make it re-read without reconnecting.
+		// A reload is a key because the balance is somebody's money and they
+		// should be able to make it re-read without reconnecting.
 		return m, refreshCmd(m.deps)
-	case "esc":
-		m.to(screenHome)
 	}
 
 	// Minting is a keystroke rather than a sub-menu. Revoking is not, and
@@ -404,6 +447,39 @@ func (m model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.mintKey()
 	}
 	return m, nil
+}
+
+// advance walks the focus ring forwards, which is the only navigation there
+// is.
+//
+// The ring is: this page's widget, then the next page. A page with no widget
+// is simply passed through, so tab from the balance screen lands on the
+// deposit screen rather than on nothing.
+func (m model) advance() model {
+	return m.show(step(m.view, 1))
+}
+
+// retreat is advance, the other way round.
+func (m model) retreat() model {
+	return m.show(step(m.view, -1))
+}
+
+// show moves to a page, putting it into the state a freshly arrived session
+// should be in.
+//
+// Lists arrive focused: hjkl is only ever wanted by something already looking
+// at a list, and arriving live saves a keystroke on the common path. The
+// amount field arrives cold, which is the whole reason it was given focus in
+// the first place.
+func (m model) show(view screen) model {
+	m.view = view
+	m.focus = view.widget() && view != screenDeposit
+	m.notice = notice{}
+	m.amount = ""
+	m.busy = ""
+	m.fresh = ""
+	m.paintFocus()
+	return m
 }
 
 // copyFreshKey puts the key this session just minted on the clipboard.
@@ -466,7 +542,7 @@ func (m model) revokeKey(oneBased int) (tea.Model, tea.Cmd) {
 // changing anything, and everything else is the component's business.
 func (m model) onListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "esc", "tab":
+	case "esc":
 		m.focus = false
 		m.paintFocus()
 		return m, nil
@@ -506,7 +582,7 @@ func (m model) onDepositKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// the screen are two different presses with two different meanings - which
 	// they could not be when this handler caught every key on the page.
 	switch msg.String() {
-	case "esc", "tab":
+	case "esc":
 		m.focus = false
 		return m, nil
 	case "enter":
@@ -601,6 +677,7 @@ func parseSOL(text string) (uint64, error) {
 func (m model) render() string {
 	var b strings.Builder
 	b.WriteString(m.header())
+	b.WriteString("\n" + m.tabBar())
 	if !m.deps.Proven && m.deps.Address != "" {
 		b.WriteString("\n  " + m.st.warn.Render("read-only: this address was named, not proved") + "\n")
 	}
@@ -646,20 +723,46 @@ func (m model) header() string {
 	return "  " + left + strings.Repeat(" ", gap) + right
 }
 
+// tabBar is where every page is, all at once.
+//
+// It replaces the footer that used to list what each letter did. That footer
+// had to be right on every screen or it was a lie, which is why a list
+// component that wanted b, d, f and u was a problem rather than a detail: the
+// screen could not show the same letters as shortcuts and mean them. A bar
+// shows where you are and where you can go, and cannot go stale the way a
+// legend does.
+func (m model) tabBar() string {
+	var b strings.Builder
+	b.WriteString("  ")
+	for i, s := range screens {
+		if i > 0 {
+			b.WriteString("  " + m.st.dim.Render("\u2502") + "  ")
+		}
+		if s.view == m.view {
+			b.WriteString(m.st.caret.Render(" " + s.name + " "))
+		} else {
+			b.WriteString(m.st.dim.Render(" " + s.name + " "))
+		}
+	}
+	return b.String()
+}
+
 func (m model) footer() string {
-	binding := m.st.key.Render("b") + m.st.dim.Render(" balance  ") +
-		m.st.key.Render("d") + m.st.dim.Render(" deposit  ") +
-		m.st.key.Render("k") + m.st.dim.Render(" api key  ") +
-		m.st.key.Render("m") + m.st.dim.Render(" models  ") +
-		m.st.key.Render("r") + m.st.dim.Render(" refresh  ")
+	var b strings.Builder
+	b.WriteString(m.st.key.Render("tab") + m.st.dim.Render(" next page    "))
+	b.WriteString(m.st.key.Render("shift+tab") + m.st.dim.Render(" previous    "))
+	if m.view.widget() && !m.focus {
+		b.WriteString(m.st.key.Render("tab") + m.st.dim.Render(" into the field    "))
+	}
+	b.WriteString(m.st.key.Render("r") + m.st.dim.Render(" refresh    "))
 	// Only while there is something to copy. A y that is always offered and
 	// usually refused is a keystroke people learn to ignore.
 	if m.fresh != "" {
-		binding += m.st.key.Render("y") + m.st.dim.Render(" copy key  ")
+		b.WriteString(m.st.key.Render("y") + m.st.dim.Render(" copy key    "))
 	}
-	binding += m.st.key.Render("?") + m.st.dim.Render(" help  ") +
-		m.st.key.Render("q") + m.st.dim.Render(" quit")
-	return "  " + binding
+	b.WriteString(m.st.key.Render("?") + m.st.dim.Render(" help    "))
+	b.WriteString(m.st.key.Render("q") + m.st.dim.Render(" quit"))
+	return "  " + b.String()
 }
 
 func (m model) renderHome() string {
@@ -698,7 +801,7 @@ func (m model) renderHome() string {
 			m.st.dim.Render(perMTok(route.InputPerMTok)+" in, "+perMTok(route.OutputPerMTok)+" out") + "\n")
 	}
 	if len(models) > 3 {
-		b.WriteString("  " + m.st.dim.Render("press m for all "+strconv.Itoa(len(models))) + "\n")
+		b.WriteString("  " + m.st.dim.Render("tab for all "+strconv.Itoa(len(models))+" of them") + "\n")
 	}
 	return b.String()
 }
@@ -749,14 +852,10 @@ func (m model) amountField() string {
 func (m model) focusHint() string {
 	if m.focus {
 		return m.st.key.Render("enter") + m.st.dim.Render(" to send    ") +
-			m.st.key.Render("tab") + m.st.dim.Render(" to stop typing    ") +
-			m.st.key.Render("esc") + m.st.dim.Render(" to go back")
+			m.st.key.Render("tab") + m.st.dim.Render(" to the next page    ") +
+			m.st.key.Render("esc") + m.st.dim.Render(" to stop typing")
 	}
-	if m.amount == "" {
-		return m.st.key.Render("tab") + m.st.dim.Render(" to type an amount")
-	}
-	return m.st.key.Render("tab") + m.st.dim.Render(" to edit it    ") +
-		m.st.key.Render("esc") + m.st.dim.Render(" to go back")
+	return m.st.key.Render("tab") + m.st.dim.Render(" to type an amount")
 }
 
 func (m model) renderKeys() string {
@@ -764,8 +863,8 @@ func (m model) renderKeys() string {
 	b.WriteString("  " + m.st.title.Render("api keys") + "\n\n")
 	b.WriteString(m.apiKeys.View() + "\n")
 	b.WriteString("  " + m.st.key.Render("n") + m.st.dim.Render(" mint a new key    ") +
-		m.st.key.Render("enter") + m.st.dim.Render(" revoke the selected one    ") +
-		m.st.key.Render("tab") + m.st.dim.Render(" browse") + "\n")
+		m.st.key.Render("enter") + m.st.dim.Render(" revoke the selected one") + "\n")
+	b.WriteString("\n  " + m.listHint("to revoke it") + "\n")
 	b.WriteString("\n  " + m.st.dim.Render("A key is shown once, when it is minted; only its fingerprint is kept.") + "\n")
 	b.WriteString("  " + m.st.dim.Render("Losing one is not a problem: mint another.") + "\n")
 	if m.fresh != "" {
@@ -788,12 +887,17 @@ func (m model) renderModels() string {
 // whether the list has the focus. Unfocused a list takes no keys at all, and
 // saying so is the whole of why pressing b from the routes screen still opens
 // the balance screen.
-func (m model) listHint(extra string) string {
-	if m.focus {
-		return m.st.key.Render("hjkl") + m.st.dim.Render(" to move a page, ") +
-			m.st.key.Render("tab") + m.st.dim.Render(" to stop"+extra)
+// listHint is the line under a list.
+//
+// What enter means on it differs between the two, so the caller says. On the
+// routes it would be a lie to offer the binding at all: a route is named in
+// the request, not chosen by standing on it here.
+func (m model) listHint(enterMeans string) string {
+	hint := m.st.key.Render("hjkl") + m.st.dim.Render(" to move a page")
+	if enterMeans != "" {
+		hint += "    " + m.st.key.Render("enter") + m.st.dim.Render(" "+enterMeans)
 	}
-	return m.st.key.Render("tab") + m.st.dim.Render(" to browse"+extra)
+	return hint
 }
 
 // listWidth is what a list gets inside the pane: the content width less the
@@ -821,15 +925,17 @@ func (m model) renderHelp() string {
 	var b strings.Builder
 	b.WriteString("  " + m.st.title.Render("RouterCafe") + "\n\n")
 	b.WriteString("  " + m.st.value.Render("An OpenRouter you reach with ssh, paid for in SOL.") + "\n\n")
-	b.WriteString("  " + m.st.label.Render("b") + m.st.dim.Render("  balance, keys and the short version of what a key buys") + "\n")
-	b.WriteString("  " + m.st.label.Render("d") + m.st.dim.Render("  deposit SOL, signed by the agent you forwarded") + "\n")
-	b.WriteString("  " + m.st.label.Render("k") + m.st.dim.Render("  API keys: mint a new one, revoke an old one") + "\n")
-	b.WriteString("  " + m.st.label.Render("m") + m.st.dim.Render("  every route and what it costs") + "\n")
+	b.WriteString("  " + m.st.label.Render("tab") + m.st.dim.Render("  next page, and into the field when a page has one") + "\n")
+	b.WriteString("  " + m.st.label.Render("shift+tab") + m.st.dim.Render("  previous page") + "\n")
+	b.WriteString("  " + m.st.label.Render("hjkl") + m.st.dim.Render("  move through a list, and page it with h and l") + "\n")
+	b.WriteString("  " + m.st.label.Render("enter") + m.st.dim.Render("  act on where the cursor is, or on the field") + "\n")
+	b.WriteString("  " + m.st.label.Render("esc") + m.st.dim.Render("  put the caret down without leaving the page") + "\n")
 	b.WriteString("  " + m.st.label.Render("r") + m.st.dim.Render("  re-read the balance") + "\n")
 	b.WriteString("  " + m.st.label.Render("y") + m.st.dim.Render("  copy a key just minted, using OSC 52") + "\n")
-	b.WriteString("  " + m.st.label.Render("tab") + m.st.dim.Render("  put the caret in a field or a list, so it takes the keys") + "\n")
-	b.WriteString("  " + m.st.label.Render("hjkl") + m.st.dim.Render("  move through a list, and page it with h and l") + "\n")
 	b.WriteString("  " + m.st.label.Render("q") + m.st.dim.Render("  disconnect") + "\n\n")
+	b.WriteString("  " + m.st.dim.Render("There are no letters that jump between pages. The bar at the top is the") + "\n")
+	b.WriteString("  " + m.st.dim.Render("whole of the navigation, so nothing has to be remembered and nothing can") + "\n")
+	b.WriteString("  " + m.st.dim.Render("mean two things on the same screen.") + "\n\n")
 
 	b.WriteString("  " + m.st.title.Render("what this is not") + "\n\n")
 	b.WriteString("  " + m.st.dim.Render("There is no shell here. Nothing you type is run on this machine,") + "\n")
