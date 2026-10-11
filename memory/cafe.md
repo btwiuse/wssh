@@ -580,11 +580,22 @@ area rather than worked out from the position - a bar whose clicks are indexed
 against `screens` navigates to the wrong page the moment anything is added to
 either side of the tabs.
 
-**The wordmark is a wordmark, not a layout**: `RouterCafe` in figlet's `big`,
-52 columns and six lines, generated once and pasted in. The face is `big`
-because the point of a wordmark is that you can read it - the three-line shadow
-faces are narrower and they are not, at that size the strokes of the R run into
-the strokes beside it and it reads as a row of symbols rather than as a name.
+**The wordmark is a wordmark, not a layout**: `RouterCafe` in figlet's **default
+face**, 51 columns and five lines, generated once and pasted in.
+
+The face is the default one because it is the one somebody recognises. `big`
+is perfectly legible and was tried first, and it was reported back as "变形" -
+deformed - which is the right word for it: its R is `|__|` and `_|` where the
+default's is `/ ___|` and `___`, which is a different enough letter that the
+word reads as a different word. Three-line shadow faces are worse still: at
+that size the strokes of the letters run into the strokes beside them.
+
+**It is compared against the literal character for character** once it has been
+drawn, with the centring taken back off first -
+`TestTheWordmarkIsDrawnExactlyAsItIsWritten`. Every character in it is
+load-bearing: a backslash or a space turned into an escape, a line trimmed or
+re-centred one column out, and the word stops being the word - which looks like
+a font choice and is not one.
 It is on the home page, which is the page the RouterCafe tab opens, and
 clickable - a logo you cannot click is a logo that is only decoration. Clickable
 over **all six of its lines**, not the first: the mark is taller than the bar,

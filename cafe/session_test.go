@@ -1664,6 +1664,43 @@ func TestEveryScreenFillsItsWindow(t *testing.T) {
 	}
 }
 
+// The wordmark is a piece of lettering, and lettering has to come out of the
+// other end exactly as it went in. Every character in it is load-bearing: a
+// backslash or a space turned into an escape, a line trimmed or re-centred one
+// column out, and the word stops being the word - which looks like a font
+// choice and is not one.
+//
+// So the drawn mark is compared against the literal it was pasted from,
+// character for character, with the centring taken back off first.
+func TestTheWordmarkIsDrawnExactlyAsItIsWritten(t *testing.T) {
+	for _, width := range []int{120, 100, 80, 60} {
+		m := model{st: newStyles(true), view: screenHome, width: width, height: 40,
+			deps: deps{Address: treasuryAddress, Ledger: testLedger(t), Catalogue: DefaultCatalogue()}}
+		if width < wordmarkWidth+8 {
+			// Below the width it needs the mark is left off rather than cut.
+			if m.wordmark() != "" {
+				t.Errorf("width %d: a wordmark that does not fit was drawn anyway", width)
+			}
+			continue
+		}
+		inside := bodyWidth(width)
+		for i, line := range strings.Split(m.wordmark(), "\n") {
+			got := strings.TrimRight(stripForTest(line), " ")
+			if i == 0 || got == "" {
+				continue
+			}
+			want := strings.Split(wordmark, "\n")[i-1]
+			// The mark is centred per line, which is what figlet's own output
+			// needs: its lines are different lengths and the space in front of
+			// the first one is part of the lettering.
+			lead := max(0, (inside-lipgloss.Width(want))/2)
+			if got != strings.Repeat(" ", lead)+want {
+				t.Errorf("width %d line %d:\n got %q\nwant %q", width, i, got, strings.Repeat(" ", lead)+want)
+			}
+		}
+	}
+}
+
 // Every colour in this program is picked against one background or the other,
 // and the one that vanishes is always the numbers - which are the last thing
 // this program should lose. So each is checked against the background it was
