@@ -84,7 +84,7 @@ func frame(st styles, width, height int, bar, body, footer string) string {
 		// rule here is a lid that overhangs the box on each side - open
 		// underneath at the two corners, which is the shape a frame is not
 		// allowed to be.
-		b.WriteString("\n" + edge.Render(topEdge(width)))
+		b.WriteString("\n" + edge(st).Render(topEdge(width)))
 	}
 	// The page is wrapped to the inside of the box before it is counted.
 	// lipgloss wraps whatever is wider than that on its way into the border,
@@ -127,10 +127,14 @@ func topEdge(width int) string {
 	return "\u250c" + strings.Repeat("\u2500", width-2) + "\u2510"
 }
 
-// edge is the box's own border colour, for the parts of its outline that are
-// not the border: the top edge on the screens with no bar, and the run of it
-// between the end of the tab bar and the right-hand corner.
-var edge = lipgloss.NewStyle().Foreground(lipgloss.Color("#334155"))
+// edge is the box's own border colour, for the parts of its outline that the
+// border itself does not draw: the top edge on the screens with no bar.
+//
+// Taken from the box rather than written out, because a top edge in a
+// different colour from the walls either end of it is not an edge.
+func edge(st styles) lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(st.window.GetBorderTopForeground())
+}
 
 // trimLines cuts a page to the n lines it is allowed, counting the lines it
 // has rather than its bytes, so a page carrying colour escapes is not cut in

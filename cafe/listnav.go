@@ -199,6 +199,15 @@ func (d *rowDelegate) Render(w io.Writer, m list.Model, index int, it list.Item)
 // much, so this is the maximum over the items rather than each row's own.
 var maxRowHeight = 2
 
+// darkNavStyles is which background the delegates draw against.
+//
+// The delegates cannot be told: they are handed to the list by value and it
+// calls Render long after the model that built them is gone. So they draw in
+// the dark palette, which is the default one, and the one thing that has to
+// read against either background is the cursor marker - which is the same
+// reversed video on both.
+const darkNavStyles = true
+
 // navStyles is the palette the delegates draw with.
 //
 // A package variable rather than a parameter because the delegate is handed to
@@ -206,7 +215,7 @@ var maxRowHeight = 2
 // it is gone; threading the styles through every Render call would mean
 // rebuilding the delegate on every frame for no gain, since there is exactly
 // one stylesheet in this program.
-var navStyles = newStyles()
+var navStyles = newStyles(darkNavStyles)
 
 // rowStyles is how one row is drawn: the part that reads as the subject of
 // the row, the part that is detail, and the cursor marker.

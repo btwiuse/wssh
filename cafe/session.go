@@ -244,7 +244,7 @@ func (s *Server) modelFor(w who) tea.Model {
 				Host:      Domain,
 				Version:   s.opts.Version,
 			},
-			st:     newStyles(),
+			st:     newStyles(true),
 			view:   screenHome,
 			help:   newHelp(),
 			width:  80,
@@ -275,7 +275,7 @@ func (s *Server) modelFor(w who) tea.Model {
 			Host:      Domain,
 			Version:   s.opts.Version,
 		},
-		st:      newStyles(),
+		st:      newStyles(true),
 		view:    screenHome,
 		account: s.opts.Ledger.Account(address),
 		help:    newHelp(),
@@ -376,6 +376,12 @@ type refuseModel struct {
 	reason string
 	width  int
 	height int
+
+	// dark is which background to draw against, learned from the terminal when
+	// it says. A refusal is answered during the handshake and is often drawn
+	// before any message arrives, so it starts on the default and is corrected
+	// when it can be.
+	dark bool
 }
 
 func (r refuseModel) Init() tea.Cmd { return nil }
@@ -384,6 +390,9 @@ func (r refuseModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		r.width, r.height = msg.Width, msg.Height
+		return r, nil
+	case tea.BackgroundColorMsg:
+		r.dark = msg.IsDark()
 		return r, nil
 	case tea.KeyPressMsg:
 		switch msg.String() {
@@ -395,7 +404,7 @@ func (r refuseModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (r refuseModel) View() tea.View {
-	st := newStyles()
+	st := newStyles(r.dark)
 	width := r.width
 	if width <= 0 {
 		// A session that never reported a size: the common default rather

@@ -302,16 +302,36 @@ type styles struct {
 	// window is the page sitting in the box the bar opens into: bordered on
 	// three sides, deliberately not on the top, which is the tab's job.
 	window lipgloss.Style
+
+	// dark is which background these were picked against, so a frame drawn
+	// from them can use the same colour for the edges it draws itself.
+	dark bool
 }
 
-func newStyles() styles {
+// newStyles builds the palette, for a terminal whose background is known.
+//
+// Two sets, and it has to be two: a near-white number on a near-white terminal
+// is not a number. Every colour below is picked against one background or the
+// other, and a palette that only reads on one of them is half a palette - and
+// the half that vanishes is always the numbers, which are the last thing this
+// program should lose.
+//
+// Dark is the default because a program that has not been told has to be
+// readable and most terminals are dark; Bubble Tea sends
+// tea.BackgroundColorMsg within the first few frames and the palette is rebuilt
+// then. Per model, not per process: two sessions on two terminals with opposite
+// backgrounds are two sessions with opposite palettes.
+func newStyles(dark bool) styles {
+	if !dark {
+		return lightStyles()
+	}
 	return styles{
 		brand:      lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#34d399")),
-		brandDim:   lipgloss.NewStyle().Foreground(lipgloss.Color("#334155")),
-		label:      lipgloss.NewStyle().Foreground(lipgloss.Color("#64748b")),
+		brandDim:   lipgloss.NewStyle().Foreground(lipgloss.Color("#94a3b8")),
+		label:      lipgloss.NewStyle().Foreground(lipgloss.Color("#94a3b8")),
 		value:      lipgloss.NewStyle().Foreground(lipgloss.Color("#e2e8f0")),
 		money:      lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#f8fafc")),
-		dim:        lipgloss.NewStyle().Foreground(lipgloss.Color("#64748b")),
+		dim:        lipgloss.NewStyle().Foreground(lipgloss.Color("#94a3b8")),
 		accent:     lipgloss.NewStyle().Foreground(lipgloss.Color("#38bdf8")),
 		warn:       lipgloss.NewStyle().Foreground(lipgloss.Color("#fbbf24")),
 		key:        lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#34d399")),
@@ -319,13 +339,46 @@ func newStyles() styles {
 		errText:    lipgloss.NewStyle().Foreground(lipgloss.Color("#f87171")),
 		okText:     lipgloss.NewStyle().Foreground(lipgloss.Color("#34d399")),
 		box:        lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#1e293b")).Padding(0, 1),
-		caret:      lipgloss.NewStyle().Bold(true).Reverse(true).Foreground(lipgloss.Color("#0f172a")).Background(lipgloss.Color("#38bdf8")),
-		homeIdle:   lipgloss.NewStyle().Foreground(lipgloss.Color("#64748b")),
+		homeIdle:   lipgloss.NewStyle().Foreground(lipgloss.Color("#94a3b8")),
 		homeActive: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#34d399")),
-		tabIdle:    lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color("#64748b")).Border(tabBorderWithBottom("\u2534", "\u2500", "\u2534"), true),
+		tabIdle:    lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color("#94a3b8")).Border(tabBorderWithBottom("\u2534", "\u2500", "\u2534"), true),
 		tabActive:  lipgloss.NewStyle().Padding(0, 1).Bold(true).Foreground(lipgloss.Color("#34d399")).Border(tabBorderWithBottom("\u2518", " ", "\u2514"), true),
-		window:     lipgloss.NewStyle().Border(lipgloss.NormalBorder(), true).UnsetBorderTop().BorderForeground(lipgloss.Color("#334155")),
-		idle:       lipgloss.NewStyle().Foreground(lipgloss.Color("#94a3b8")),
+		window:     lipgloss.NewStyle().Border(lipgloss.NormalBorder(), true).UnsetBorderTop().BorderForeground(lipgloss.Color("#475569")),
+		idle:       lipgloss.NewStyle().Foreground(lipgloss.Color("#cbd5e1")),
+		// The caret is reversed video on both backgrounds rather than a colour
+		// of its own: a block of inverted cells reads the same either way, and
+		// a caret that vanishes on one of them is not a caret.
+		caret: lipgloss.NewStyle().Bold(true).Reverse(true).Foreground(lipgloss.Color("#0f172a")).Background(lipgloss.Color("#38bdf8")),
+		dark:  dark,
+	}
+}
+
+// lightStyles is the same palette against a light terminal. Darker and less
+// saturated than the dark set for the same reason: on white, a colour that
+// reads as "dim" against black reads as "invisible".
+func lightStyles() styles {
+	return styles{
+		brand:      lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#047857")),
+		brandDim:   lipgloss.NewStyle().Foreground(lipgloss.Color("#64748b")),
+		label:      lipgloss.NewStyle().Foreground(lipgloss.Color("#475569")),
+		value:      lipgloss.NewStyle().Foreground(lipgloss.Color("#0f172a")),
+		money:      lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#0f172a")),
+		dim:        lipgloss.NewStyle().Foreground(lipgloss.Color("#64748b")),
+		accent:     lipgloss.NewStyle().Foreground(lipgloss.Color("#0369a1")),
+		warn:       lipgloss.NewStyle().Foreground(lipgloss.Color("#a16207")),
+		key:        lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#047857")),
+		title:      lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#0f172a")),
+		errText:    lipgloss.NewStyle().Foreground(lipgloss.Color("#b91c1c")),
+		okText:     lipgloss.NewStyle().Foreground(lipgloss.Color("#047857")),
+		box:        lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#cbd5e1")).Padding(0, 1),
+		homeIdle:   lipgloss.NewStyle().Foreground(lipgloss.Color("#64748b")),
+		homeActive: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#047857")),
+		tabIdle:    lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color("#64748b")).Border(tabBorderWithBottom("\u2534", "\u2500", "\u2534"), true),
+		tabActive:  lipgloss.NewStyle().Padding(0, 1).Bold(true).Foreground(lipgloss.Color("#047857")).Border(tabBorderWithBottom("\u2518", " ", "\u2514"), true),
+		window:     lipgloss.NewStyle().Border(lipgloss.NormalBorder(), true).UnsetBorderTop().BorderForeground(lipgloss.Color("#94a3b8")),
+		idle:       lipgloss.NewStyle().Foreground(lipgloss.Color("#475569")),
+		caret:      lipgloss.NewStyle().Bold(true).Reverse(true).Foreground(lipgloss.Color("#0f172a")).Background(lipgloss.Color("#38bdf8")),
+		dark:       false,
 	}
 }
 
@@ -589,6 +642,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// because a list that has not been built yet is a zero value, which
 		// the component panics on.
 		m.sizeHelp()
+		return m, nil
+
+	case tea.BackgroundColorMsg:
+		// The terminal says what it is once, early. Every colour in this
+		// program is picked against one background or the other, and a number
+		// drawn in near-white on a near-white terminal is not a number.
+		if dark := msg.IsDark(); dark != m.st.dark {
+			m.st = newStyles(dark)
+			m.paintFocus()
+		}
 		return m, nil
 
 	case keysListedMsg:
@@ -1511,7 +1574,7 @@ func (m model) carryBarEdge(bar string, barWidth int) string {
 	if run < 1 {
 		return bar
 	}
-	lines[barLines-1] += edge.Render(strings.Repeat("\u2500", run)) + edge.Render("\u2510")
+	lines[barLines-1] += edge(m.st).Render(strings.Repeat("\u2500", run)) + edge(m.st).Render("\u2510")
 	return strings.Join(lines, "\n")
 }
 

@@ -658,6 +658,46 @@ fold. A hint that claims a page scrolls on a terminal where it does not is worse
 than no hint, because the person presses `j` and then wonders why nothing
 happened.
 
+## The palette follows the terminal's background
+
+There are two palettes and Bubble Tea picks between them: `tea.BackgroundColorMsg`
+arrives within the first few frames, and `newStyles(dark bool)` rebuilds from
+there. Dark is the default until it is told otherwise, because a program nobody
+has told anything has to be readable.
+
+Two sets because one does not read on both. Every colour is picked against one
+background or the other, and a palette that only reads on one of them is half a
+palette - and **the half that vanishes is always the numbers**, which are the
+last thing this program should lose. `money` was near-white (`#f8fafc`), which
+on a light terminal is not a number at all; the same run on a dark one showed
+`$12.50` perfectly.
+
+The wordmark was the other half of it. Its lower five lines were `#334155`,
+which is 1.8:1 on a dark background - so "the ascii art does not say anything"
+was a contrast failure wearing a legibility failure's clothes. It is `#94a3b8`
+now, and the light set's equivalent is dark enough to clear the same bar.
+
+`TestEveryColourReadsAgainstTheBackgroundItIsFor` checks every colour against
+both backdrops with the WCAG ratio: 4.5:1 for anything that is text, 1.6:1 for
+the frame's edges, which are not. **"Does this look right" is a question about
+the terminal the person is looking at**, so the answer is computed rather than
+eyeballed - the eyeballing is what found the bug, and it found it on the
+terminal that was fine.
+
+Two things are deliberately not per-session:
+
+- **The caret is reversed video on both**, not a colour of its own. A block of
+  inverted cells reads the same either way, and a caret that vanishes on one of
+  them is not a caret.
+- **The delegates' palette is the dark one.** They are handed to the list by
+  value and it calls Render long after the model that built them is gone, so
+  there is nothing to tell them about a terminal that answers afterwards. The
+  only thing they draw that has to read either way is the cursor marker, which
+  is the same on both.
+
+Per model rather than per process, because two sessions on two terminals with
+opposite backgrounds are two sessions with opposite palettes.
+
 ## What is not built
 
 The upstream is configured with one `--upstream` and one `--upstream-key`. With

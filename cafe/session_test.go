@@ -10,6 +10,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"image/color"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -406,7 +408,7 @@ func TestANamedUsernameOutranksTheKeyThatAuthenticated(t *testing.T) {
 // build.
 func TestTheBarSaysWhichServerThisIs(t *testing.T) {
 	m := model{
-		st: newStyles(), view: screenHome, width: 100, height: 40,
+		st: newStyles(true), view: screenHome, width: 100, height: 40,
 		deps: deps{Catalogue: DefaultCatalogue(), Proven: true, Version: "0.1.0"},
 	}
 	if got := m.address(); !strings.Contains(stripForTest(got), "router.cafe 0.1.0") {
@@ -417,13 +419,13 @@ func TestTheBarSaysWhichServerThisIs(t *testing.T) {
 	}
 	// Not on the help screen either: it says what this is, not what build of
 	// it, and the same line in two places is one of them going stale.
-	help := model{st: newStyles(), width: 100, height: 40, deps: deps{Version: "0.1.0"}}.renderHelp()
+	help := model{st: newStyles(true), width: 100, height: 40, deps: deps{Version: "0.1.0"}}.renderHelp()
 	if strings.Contains(stripForTest(help), "0.1.0") {
 		t.Error("the help screen still carries the version")
 	}
 
 	for _, none := range []string{"", "   ", "dev"} {
-		got := model{st: newStyles(), width: 100, height: 40, deps: deps{Version: none}}.address()
+		got := model{st: newStyles(true), width: 100, height: 40, deps: deps{Version: none}}.address()
 		if none != "" && strings.Contains(stripForTest(got), none) {
 			t.Errorf("an unversioned build (%q) printed a version", none)
 		}
@@ -715,7 +717,7 @@ func TestCyclingAccountsProvesTheOnesTheAgentHolds(t *testing.T) {
 	sock := serveAgent(t, []ed25519.PrivateKey{priv})
 
 	m := model{
-		st: newStyles(), view: screenHome, width: 100, height: 30,
+		st: newStyles(true), view: screenHome, width: 100, height: 30,
 		deps: deps{SockPath: sock, Ledger: testLedger(t), Catalogue: DefaultCatalogue(), Host: Domain},
 		candidates: []candidate{
 			{address: other}, // named on the command line, nothing proves it
@@ -789,7 +791,7 @@ func TestCyclingAccountsProvesTheOnesTheAgentHolds(t *testing.T) {
 // one tab on it: offering four pages it cannot use is a bar that lies about
 // where you can go.
 func TestASessionWithNothingToLookAtSaysWhatToDo(t *testing.T) {
-	m := model{st: newStyles(), view: screenHome, width: 100, height: 30,
+	m := model{st: newStyles(true), view: screenHome, width: 100, height: 30,
 		deps: deps{Ledger: testLedger(t), Catalogue: DefaultCatalogue(), Host: Domain}}
 	if !m.picking() {
 		t.Fatal("a session with no candidates is not picking")
@@ -934,7 +936,7 @@ func TestANamedAccountCannotChangeAnything(t *testing.T) {
 		Catalogue: DefaultCatalogue(),
 		Host:      Domain,
 	}
-	m := model{deps: d, st: newStyles(), view: screenHome, account: ledger.Account(d.Address), width: 100, height: 40}
+	m := model{deps: d, st: newStyles(true), view: screenHome, account: ledger.Account(d.Address), width: 100, height: 40}
 
 	// Minting refuses. The command it hands back carries the refusal, so what
 	// matters is what running it produces: a notice, never a key.
@@ -989,7 +991,7 @@ func TestCopyingAKeyOnlyWhileItIsOnScreen(t *testing.T) {
 	}
 	// focus is set because a list arrives focused; this test wants to leave
 	// the page in one press, not two.
-	m := model{deps: d, st: newStyles(), view: screenKeys, focus: true,
+	m := model{deps: d, st: newStyles(true), view: screenKeys, focus: true,
 		account: ledger.Account(d.Address), width: 100, height: 40}
 	m.syncLists()
 
@@ -1039,7 +1041,7 @@ func TestCopyingAKeyOnlyWhileItIsOnScreen(t *testing.T) {
 // The footer advertises y only when there is something to copy. A binding that
 // is always offered and usually refused is one people learn to ignore.
 func TestCopyIsOnlyOfferedWhenThereIsSomethingToCopy(t *testing.T) {
-	m := model{st: newStyles(), deps: deps{Catalogue: DefaultCatalogue()}, width: 100}
+	m := model{st: newStyles(true), deps: deps{Catalogue: DefaultCatalogue()}, width: 100}
 	if strings.Contains(m.footer(), "copy key") {
 		t.Error("y is offered with no key on screen")
 	}
@@ -1054,7 +1056,7 @@ func TestCopyIsOnlyOfferedWhenThereIsSomethingToCopy(t *testing.T) {
 // because hjkl is only ever wanted by something looking at a list. An amount
 // field arrives cold, which is the whole reason it was given focus.
 func TestTabWalksTheRingAndOnlyTakesTheAmountWhenAsked(t *testing.T) {
-	m := model{st: newStyles(), view: screenHome, deps: deps{Address: treasuryAddress, Catalogue: DefaultCatalogue(), Proven: true}, width: 100, height: 40}
+	m := model{st: newStyles(true), view: screenHome, deps: deps{Address: treasuryAddress, Catalogue: DefaultCatalogue(), Proven: true}, width: 100, height: 40}
 	m.syncLists()
 
 	// From the home screen, one tab lands on the deposit screen without
@@ -1110,7 +1112,7 @@ func TestTabWalksTheRingAndOnlyTakesTheAmountWhenAsked(t *testing.T) {
 // while the field has the caret, esc puts it down without leaving the screen.
 func TestEscapeBlursTheFieldRatherThanLeavingTheScreen(t *testing.T) {
 	m := model{
-		st: newStyles(), view: screenDeposit, focus: true, amount: "1.5",
+		st: newStyles(true), view: screenDeposit, focus: true, amount: "1.5",
 		deps: deps{Address: treasuryAddress, Catalogue: DefaultCatalogue()}, width: 100,
 	}
 	next, _ := m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
@@ -1137,7 +1139,7 @@ func TestEscapeBlursTheFieldRatherThanLeavingTheScreen(t *testing.T) {
 // A list arrives focused and an amount field does not, and that asymmetry is
 // the whole of the navigation model rather than an inconsistency.
 func TestArrivingAtAListFocusesItAndArrivingAtAFieldDoesNot(t *testing.T) {
-	m := model{st: newStyles(), deps: deps{Address: treasuryAddress, Catalogue: DefaultCatalogue(), Proven: true}, width: 100, height: 40}
+	m := model{st: newStyles(true), deps: deps{Address: treasuryAddress, Catalogue: DefaultCatalogue(), Proven: true}, width: 100, height: 40}
 	m.syncLists()
 
 	for _, tc := range []struct {
@@ -1166,7 +1168,7 @@ func TestArrivingAtAListFocusesItAndArrivingAtAFieldDoesNot(t *testing.T) {
 // The field has to look like the focus is in it. Colour alone is not enough on
 // a terminal with no colour at all, so the focused state also carries a cursor.
 func TestTheAmountFieldLooksDifferentWhenFocused(t *testing.T) {
-	m := model{st: newStyles(), view: screenDeposit, deps: deps{Catalogue: DefaultCatalogue()}, width: 100}
+	m := model{st: newStyles(true), view: screenDeposit, deps: deps{Catalogue: DefaultCatalogue()}, width: 100}
 	// Unfocused, the field is quiet and carries no cursor: a caret sitting in
 	// a field that is not taking keystrokes is a lie about where typing goes.
 	if got := m.amountField(); strings.Contains(got, "\u2588") {
@@ -1195,7 +1197,7 @@ func TestTheAmountFieldLooksDifferentWhenFocused(t *testing.T) {
 // that looks like it works and does nothing.
 func TestTheListCursorMoves(t *testing.T) {
 	m := model{
-		st: newStyles(), view: screenModels, focus: true,
+		st: newStyles(true), view: screenModels, focus: true,
 		deps: deps{Address: treasuryAddress, Catalogue: DefaultCatalogue(), Proven: true}, width: 100, height: 40,
 	}
 	m.syncLists()
@@ -1301,7 +1303,7 @@ func TestEnterMeansSomethingDifferentOnEachList(t *testing.T) {
 		Address: treasuryAddress, Ledger: ledger, Treasury: testTreasury(),
 		Catalogue: DefaultCatalogue(), Proven: true, Host: Domain,
 	}
-	m := model{st: newStyles(), view: screenModels, focus: true, deps: d, width: 100, height: 40}
+	m := model{st: newStyles(true), view: screenModels, focus: true, deps: d, width: 100, height: 40}
 	m.syncLists()
 
 	next, _ := m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
@@ -1324,7 +1326,7 @@ func TestRefreshingKeepsTheCursorOnTheSameKey(t *testing.T) {
 		Address: treasuryAddress, Ledger: ledger, Treasury: testTreasury(),
 		Catalogue: DefaultCatalogue(), Proven: true, Host: Domain,
 	}
-	m := model{st: newStyles(), view: screenKeys, deps: d, account: ledger.Account(treasuryAddress), width: 100, height: 40}
+	m := model{st: newStyles(true), view: screenKeys, deps: d, account: ledger.Account(treasuryAddress), width: 100, height: 40}
 	m.syncLists()
 
 	next, _ := m.onKey(tea.KeyPressMsg(tea.Key{Code: 'j', Text: "j"}))
@@ -1407,7 +1409,7 @@ func mustEd25519(t *testing.T) gossh.PublicKey {
 // else. The bar changes width with the names in it, so this cannot be a fixed
 // map: it has to come from the frame that was actually drawn.
 func TestClickingTheBarSelectsThePageUnderneath(t *testing.T) {
-	m := model{st: newStyles(), view: screenHome, deps: deps{Address: treasuryAddress, Catalogue: DefaultCatalogue(), Proven: true}, width: 100, height: 40}
+	m := model{st: newStyles(true), view: screenHome, deps: deps{Address: treasuryAddress, Catalogue: DefaultCatalogue(), Proven: true}, width: 100, height: 40}
 	m.syncLists()
 	_, where := m.frame()
 
@@ -1457,7 +1459,7 @@ func TestClickingTheBarSelectsThePageUnderneath(t *testing.T) {
 // decoration.
 func TestClickingTheWordmarkGoesHome(t *testing.T) {
 	m := model{
-		st: newStyles(), view: screenHome, width: 100, height: 40,
+		st: newStyles(true), view: screenHome, width: 100, height: 40,
 		deps: deps{Catalogue: DefaultCatalogue(), Proven: true, Address: treasuryAddress},
 	}
 	m.syncLists()
@@ -1495,7 +1497,7 @@ func TestClickingTheWordmarkGoesHome(t *testing.T) {
 // anything will answer to the next keystroke.
 func TestClickingARowMovesTheCursorAndFocusesTheList(t *testing.T) {
 	m := model{
-		st: newStyles(), view: screenModels,
+		st: newStyles(true), view: screenModels,
 		deps: deps{Address: treasuryAddress, Catalogue: DefaultCatalogue(), Proven: true}, width: 100, height: 40,
 	}
 	m.syncLists()
@@ -1561,7 +1563,7 @@ func TestClickingARowMovesTheCursorAndFocusesTheList(t *testing.T) {
 // another page is a row that is not there.
 func TestAClickOnNothingInParticularSelectsNothing(t *testing.T) {
 	m := model{
-		st: newStyles(), view: screenModels,
+		st: newStyles(true), view: screenModels,
 		deps: deps{Address: treasuryAddress, Catalogue: DefaultCatalogue(), Proven: true}, width: 100, height: 40,
 	}
 	m.syncLists()
@@ -1587,7 +1589,7 @@ func TestAClickOnNothingInParticularSelectsNothing(t *testing.T) {
 // another way of moving along a list.
 func TestClickingAnAccountSelectsIt(t *testing.T) {
 	m := model{
-		st: newStyles(), view: screenHome, width: 100, height: 30,
+		st: newStyles(true), view: screenHome, width: 100, height: 30,
 		deps:       deps{Ledger: testLedger(t), Catalogue: DefaultCatalogue(), Host: Domain},
 		candidates: []candidate{{address: "one"}, {address: "two"}, {address: "three"}},
 	}
@@ -1632,7 +1634,7 @@ func TestEveryScreenFillsItsWindow(t *testing.T) {
 		ring := model{deps: base, account: ledger.Account(address)}
 		for _, v := range ring.screenList() {
 			m := model{
-				st: newStyles(), view: v, deps: base,
+				st: newStyles(true), view: v, deps: base,
 				account: ledger.Account(address), width: w, height: h,
 			}
 			m.syncLists()
@@ -1640,7 +1642,7 @@ func TestEveryScreenFillsItsWindow(t *testing.T) {
 			screens["account/"+pageName(v)] = out
 		}
 		picker := base
-		pm := model{deps: picker, st: newStyles(), view: screenHome, width: w, height: h, help: newHelp()}
+		pm := model{deps: picker, st: newStyles(true), view: screenHome, width: w, height: h, help: newHelp()}
 		pm.syncLists()
 		screens["picker"] = pm.View().Content
 		screens["refusal"] = refuseModel{
@@ -1662,6 +1664,79 @@ func TestEveryScreenFillsItsWindow(t *testing.T) {
 	}
 }
 
+// Every colour in this program is picked against one background or the other,
+// and the one that vanishes is always the numbers - which are the last thing
+// this program should lose. So each is checked against the background it was
+// chosen for, rather than checked by eye on whichever terminal it happened to
+// be looked at on.
+func TestEveryColourReadsAgainstTheBackgroundItIsFor(t *testing.T) {
+	backdrop := func(hex string) color.Color { return lipgloss.Color(hex) }
+	for _, bg := range []struct {
+		name string
+		hex  string
+		bg   color.Color
+	}{
+		{name: "dark", hex: "#0b0f19"},
+		{name: "light", hex: "#fdfdfd"},
+	} {
+		bg.bg = backdrop(bg.hex)
+		st := newStyles(bg.name == "dark")
+		// 4.5:1 is the WCAG AA threshold for body text. Anything below it is
+		// decoration at best, and the numbers are not decoration.
+		for _, swatch := range []struct {
+			what string
+			col  color.Color
+		}{
+			{"balance", st.money.GetForeground()},
+			{"account", st.value.GetForeground()},
+			{"title", st.title.GetForeground()},
+			{"label", st.label.GetForeground()},
+			{"key", st.key.GetForeground()},
+			{"accent", st.accent.GetForeground()},
+			{"warning", st.warn.GetForeground()},
+			{"error", st.errText.GetForeground()},
+			{"ok", st.okText.GetForeground()},
+			{"dim", st.dim.GetForeground()},
+			{"idle", st.idle.GetForeground()},
+			{"brand", st.brand.GetForeground()},
+			{"brandDim", st.brandDim.GetForeground()},
+			{"home idle", st.homeIdle.GetForeground()},
+			{"home active", st.homeActive.GetForeground()},
+		} {
+			if got := contrast(swatch.col, bg.bg); got < 4.5 {
+				t.Errorf("%s background: %s is %.1f:1, want at least 4.5:1", bg.name, swatch.what, got)
+			}
+		}
+		// The frame's own edges are allowed to be quiet - they are not text -
+		// but they have to be visible, or the frame is not a frame.
+		if got := contrast(st.window.GetBorderTopForeground(), bg.bg); got < 1.6 {
+			t.Errorf("%s background: the frame's edge is %.1f:1, want at least 1.6:1", bg.name, got)
+		}
+	}
+}
+
+// contrast is the WCAG ratio between two colours, which is the only honest way
+// to ask whether a colour reads: "does this look right" is a question about
+// the terminal the person is looking at.
+func contrast(a, b color.Color) float64 {
+	lum := func(c color.Color) float64 {
+		r, g, bl, _ := c.RGBA()
+		lin := func(v uint32) float64 {
+			f := float64(v) / 65535
+			if f <= 0.03928 {
+				return f / 12.92
+			}
+			return math.Pow((f+0.055)/1.055, 2.4)
+		}
+		return 0.2126*lin(r) + 0.7152*lin(g) + 0.0722*lin(bl)
+	}
+	hi, lo := lum(a), lum(b)
+	if hi < lo {
+		hi, lo = lo, hi
+	}
+	return (hi + 0.05) / (lo + 0.05)
+}
+
 // The refusal has no bar, and it has to agree with the account screen about
 // where the name and the address sit, or the same line is drawn by two
 // different rules and the difference is what makes one program look like two.
@@ -1670,7 +1745,7 @@ func TestTheScreenWithNoBarAgreesWithTheOnesThatHaveOne(t *testing.T) {
 		Catalogue: DefaultCatalogue(), Ledger: testLedger(t), Treasury: testTreasury(),
 	}
 	for _, w := range []int{100, 80, 60} {
-		m := model{st: newStyles(), view: screenHome, width: w, height: 30, deps: base}
+		m := model{st: newStyles(true), view: screenHome, width: w, height: 30, deps: base}
 		account := strings.Split(stripForTest(m.frameString()), "\n")[barTop+1]
 
 		for name, out := range map[string]string{
@@ -1697,7 +1772,7 @@ func TestTheScreenWithNoBarAgreesWithTheOnesThatHaveOne(t *testing.T) {
 // pickingView is what a session that has named no account draws: the same
 // window, with one tab on the bar and the question on its first page.
 func pickingView(base deps, w, h int) string {
-	m := model{deps: base, st: newStyles(), view: screenHome, width: w, height: h, help: newHelp()}
+	m := model{deps: base, st: newStyles(true), view: screenHome, width: w, height: h, help: newHelp()}
 	m.syncLists()
 	return m.View().Content
 }
@@ -1711,7 +1786,7 @@ func TestTheThreeScreensAreTheSameShape(t *testing.T) {
 	}
 	base := deps{Catalogue: DefaultCatalogue(), Ledger: ledger, Proven: true, Host: Domain}
 	m := model{
-		st: newStyles(), view: screenHome, deps: base,
+		st: newStyles(true), view: screenHome, deps: base,
 		account: ledger.Account(treasuryAddress), width: 100, height: 30,
 	}
 	m.syncLists()
@@ -1734,7 +1809,7 @@ func TestTheThreeScreensAreTheSameShape(t *testing.T) {
 func TestNOnTheKeysScreenMintsAKey(t *testing.T) {
 	ledger := testLedger(t)
 	m := model{
-		st: newStyles(), view: screenKeys, focus: true, width: 100, height: 40,
+		st: newStyles(true), view: screenKeys, focus: true, width: 100, height: 40,
 		deps: deps{
 			Address: treasuryAddress, Ledger: ledger, Treasury: testTreasury(),
 			Catalogue: DefaultCatalogue(), Proven: true, Host: Domain,
@@ -1765,7 +1840,7 @@ func TestNOnTheKeysScreenMintsAKey(t *testing.T) {
 func TestTheFocusRuleHoldsOnEveryWidget(t *testing.T) {
 	base := func(view screen, focus bool) model {
 		m := model{
-			st: newStyles(), view: view, focus: focus, width: 100, height: 40,
+			st: newStyles(true), view: view, focus: focus, width: 100, height: 40,
 			deps: deps{
 				Address: treasuryAddress, Ledger: testLedger(t), Treasury: testTreasury(),
 				Catalogue: DefaultCatalogue(), Proven: true, Host: Domain,
@@ -1814,7 +1889,7 @@ func TestTheFrameIsClosedAtAnySize(t *testing.T) {
 	}}
 	for _, size := range [][2]int{{100, 30}, {100, 24}, {80, 40}, {60, 20}, {100, 12}} {
 		m := model{
-			st: newStyles(), width: size[0], height: size[1],
+			st: newStyles(true), width: size[0], height: size[1],
 			deps: deps{Catalogue: DefaultCatalogue(), Proven: true, Address: treasuryAddress},
 		}
 		m.account = acct
@@ -1866,7 +1941,7 @@ func TestTheBarsEdgeSpansTheWholeWindow(t *testing.T) {
 	for _, size := range [][2]int{{100, 30}, {80, 24}, {140, 40}} {
 		for _, page := range screens {
 			m := model{
-				st: newStyles(), view: page.view, width: size[0], height: size[1],
+				st: newStyles(true), view: page.view, width: size[0], height: size[1],
 				deps: deps{Catalogue: DefaultCatalogue(), Proven: true, Version: "0.1.6"},
 			}
 			lines := strings.Split(stripForTest(m.frameString()), "\n")
@@ -1910,7 +1985,7 @@ func screenName(size [2]int, page struct {
 // a link that went wherever the balance tab went - two ways of saying the same
 // place, one of them looking like a tab and one of them not.
 func TestTheNameIsATabAndTheAddressIsSetIn(t *testing.T) {
-	m := model{st: newStyles(), view: screenHome, width: 100, height: 30,
+	m := model{st: newStyles(true), view: screenHome, width: 100, height: 30,
 		deps: deps{Address: treasuryAddress, Catalogue: DefaultCatalogue(), Proven: true, Version: "0.1.6"}}
 	m.syncLists()
 	labels := strings.Split(stripForTest(m.frameString()), "\n")[barTop+1]
@@ -1943,7 +2018,7 @@ func TestTheNameIsATabAndTheAddressIsSetIn(t *testing.T) {
 // being cut. What is cut is the bottom of a page, and on this page the bottom
 // is the version line and the last paragraph.
 func TestTheHelpScreenScrolls(t *testing.T) {
-	m := model{st: newStyles(), view: screenHelp, width: 100, height: 24,
+	m := model{st: newStyles(true), view: screenHelp, width: 100, height: 24,
 		deps: deps{Catalogue: DefaultCatalogue(), Proven: true, Version: "0.1.0"}}
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
 	m = next.(model)
@@ -1990,7 +2065,7 @@ func TestTheHelpScreenScrolls(t *testing.T) {
 // the keys screen is a revoke of somebody else's key.
 func TestAClickLandsOnTheRowThatWasDrawn(t *testing.T) {
 	m := model{
-		st: newStyles(), view: screenKeys, width: 100, height: 40,
+		st: newStyles(true), view: screenKeys, width: 100, height: 40,
 		deps: deps{Catalogue: DefaultCatalogue(), Proven: true, Address: treasuryAddress},
 	}
 	m.account = Account{Address: treasuryAddress, Keys: []Key{
