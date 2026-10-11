@@ -3,6 +3,7 @@ package cafe
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
@@ -135,9 +136,18 @@ func (i keyItem) FilterValue() string { return i.label }
 
 func (i keyItem) lines(st *styles, sel, focused bool) (string, int) {
 	lead, trail, marker := rowStyles(st, sel, focused)
+	// Two lines, and the second one starts under the first one's text rather
+	// than three columns further in. A two-line row whose lines do not line up
+	// is not a two-line row, it is two things on top of each other.
+	//
+	// Measured with lipgloss.Width and not len: the marker is a styled string,
+	// and on the selected row it carries twenty bytes of escape with it, so
+	// len() would indent that row twenty columns further than the others and
+	// make the one that is selected the one that does not line up.
 	return marker + " " +
 		lead.Render("rc_live_"+i.label) + "\n" +
-		"     " + trail.Render(fit("made "+i.created+", last used "+i.touched, 68)), 2
+		strings.Repeat(" ", lipgloss.Width(marker)+1) +
+		trail.Render(fit("made "+i.created+", last used "+i.touched, 68)), 2
 }
 
 // rowDelegate draws the rows and knows nothing about what they mean, so both
@@ -186,13 +196,26 @@ func (d *rowDelegate) Render(w io.Writer, m list.Model, index int, it list.Item)
 	}
 	text, lines := row.lines(&navStyles, index == m.Index(), d.focused)
 	d.drawn = append(d.drawn, drawnRow{item: index, start: d.written, lines: lines})
-	fmt.Fprint(w, text+"\n")
+	// In by two, like everything else on a page. The component puts its rows
+	// against the wall of its own viewport, which puts them against the wall
+	// of the box while every line of prose around them is two columns in.
+	//
+	// Line by line rather than once for the whole row: a row is one or two
+	// lines and only the first is the marker, so indenting the string puts the
+	// second line two columns left of the text it belongs to.
+	for _, line := range strings.Split(text, "\n") {
+		fmt.Fprint(w, rowIndent+line+"\n")
+	}
 	// What the component does between rows, done here as well: it prints this
 	// row's text with its trailing newline and then one more for the gap, so
 	// counting the gap here is counting the component's own rule rather than
 	// guessing at it.
 	d.written += lines + 1 + d.Spacing()
 }
+
+// rowIndent is how far in from the box a list's rows sit, which is two: the
+// same two every line of prose on a page is set in by.
+const rowIndent = "  "
 
 // maxRowHeight is the tallest row the delegate will be asked to draw. The
 // component asks its delegate once for a height and gives every row that

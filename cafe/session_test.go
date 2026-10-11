@@ -1,6 +1,7 @@
 package cafe
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -1741,6 +1742,31 @@ func TestAnEmptyListDoesNotSayItIsEmptyTwice(t *testing.T) {
 	got := stripForTest(m.frameString())
 	if n := strings.Count(got, "No keys"); n != 1 {
 		t.Errorf("an empty key list says \"No keys\" %d times, want once", n)
+	}
+}
+
+// A two-line row whose two lines do not line up is two things on top of each
+// other. Which line does not is the interesting part: it is the selected one,
+// because the marker on a selected row is a styled string and len() on one of
+// those is twenty bytes of escape rather than one column, so the row you are
+// looking at is the row that is twenty columns out.
+func TestTheTwoLinesOfAKeyRowLineUp(t *testing.T) {
+	acct := Account{Keys: []Key{{Label: "aaaa1111", Created: time.Now(), Touched: time.Now()}}}
+	var buf bytes.Buffer
+	l := keysList(acct, 90, true)
+	l.Select(0)
+	d := &rowDelegate{focused: true}
+	d.Render(&buf, l, 0, l.Items()[0])
+
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("a key row is %d lines, want 2", len(lines))
+	}
+	plain := func(l string) string { return stripForTest(l) }
+	first := strings.Index(plain(lines[0]), "rc_live_")
+	second := len(plain(lines[1])) - len(strings.TrimLeft(plain(lines[1]), " "))
+	if first != second {
+		t.Errorf("the key starts at column %d and its dates at %d", first, second)
 	}
 }
 
