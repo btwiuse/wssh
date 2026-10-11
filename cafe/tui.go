@@ -53,6 +53,14 @@ type styles struct {
 	title    lipgloss.Style
 	errText  lipgloss.Style
 	okText   lipgloss.Style
+
+	// caret is the reverse-video style a focused element wears, and idle is
+	// the same element with the focus gone. Two styles rather than one toggled
+	// on and off, because an unfocused field has to stay readable rather than
+	// just stop being highlighted - it is still showing an amount somebody
+	// typed, and dimming it into the background would look like a bug.
+	caret lipgloss.Style
+	idle  lipgloss.Style
 }
 
 func newStyles() styles {
@@ -70,6 +78,8 @@ func newStyles() styles {
 		errText:  lipgloss.NewStyle().Foreground(lipgloss.Color("#f87171")),
 		okText:   lipgloss.NewStyle().Foreground(lipgloss.Color("#34d399")),
 		box:      lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#1e293b")).Padding(0, 1),
+		caret:    lipgloss.NewStyle().Bold(true).Reverse(true).Foreground(lipgloss.Color("#0f172a")).Background(lipgloss.Color("#38bdf8")),
+		idle:     lipgloss.NewStyle().Foreground(lipgloss.Color("#94a3b8")),
 	}
 }
 
@@ -143,6 +153,14 @@ type model struct {
 	// the job needs.
 	amount string
 
+	// focus is whether a text field is taking keystrokes. Off by default,
+	// and that is the whole point: a field that swallows every key while it
+	// is on screen takes the page shortcuts with it, so b, k and m stop
+	// working and the only way out of the screen becomes esc. Tab puts the
+	// caret in the field and takes it back out, and only a focused field
+	// consumes a printable key.
+	focus bool
+
 	// busy and notice are the two states a long operation passes through.
 	// busy is a sentence saying what is being waited on, because a deposit
 	// asks the client's own agent and a wallet prompt can take a person a
@@ -166,7 +184,7 @@ type model struct {
 // fresh goes at the same time as the notice that displays it, deliberately,
 // so that "y copies it" and "you can see it" can never disagree.
 func (m *model) to(view screen) {
-	m.view, m.notice, m.fresh = view, notice{}, ""
+	m.view, m.notice, m.fresh, m.focus = view, notice{}, "", false
 }
 
 type noticeKind int
@@ -309,8 +327,15 @@ func (m model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 
-	if m.view == screenDeposit {
+	// The deposit amount only takes keys while it is focused. Unfocused, this
+	// screen is an ordinary page and b, k, m and d all work, which is what
+	// makes esc a convenience here rather than the only exit it used to be.
+	if m.view == screenDeposit && m.focus {
 		return m.onDepositKey(msg)
+	}
+	if msg.String() == "tab" && m.view == screenDeposit {
+		m.focus = true
+		return m, nil
 	}
 
 	switch msg.String() {
@@ -411,9 +436,13 @@ func (m model) revokeKey(oneBased int) (tea.Model, tea.Cmd) {
 }
 
 func (m model) onDepositKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	// Reached only while the field is focused. Tab and esc both put it down
+	// rather than touching the amount, so putting the caret away and leaving
+	// the screen are two different presses with two different meanings - which
+	// they could not be when this handler caught every key on the page.
 	switch msg.String() {
-	case "esc":
-		m.view, m.amount, m.notice = screenHome, "", notice{}
+	case "esc", "tab":
+		m.focus = false
 		return m, nil
 	case "enter":
 		return m.startDeposit()
@@ -448,6 +477,10 @@ func (m model) startDeposit() (tea.Model, tea.Cmd) {
 	d := m.deps
 	m.busy = "waiting for a signature from your agent — approve it where it asks you to"
 	m.notice = notice{}
+	// Focus goes with the field. Leaving the caret in a field the session is
+	// now waiting on a signature for would let the next keystroke change an
+	// amount that is already committed to.
+	m.amount, m.focus = "", false
 	return m, func() tea.Msg {
 		receipt, err := Deposit(d.ctx(), d.Ledger, d.Treasury, d.Address, d.SockPath, lamports)
 		return depositFinishedMsg{receipt: receipt, err: err}
@@ -611,7 +644,7 @@ func (m model) renderDeposit() string {
 	b.WriteString("  " + m.st.label.Render("sending to") + "  " + m.st.value.Render(m.deps.Treasury.Address) + "\n")
 	b.WriteString("  " + m.st.label.Render("rate") + "        " + m.st.value.Render(
 		FormatUSD(m.deps.Treasury.SolPriceUSD)+" of credit per SOL") + "\n\n")
-	b.WriteString("  " + m.st.label.Render("amount") + "      " + m.st.money.Render(m.amount+" SOL") + "\n\n")
+	b.WriteString("  " + m.st.label.Render("amount") + "      " + m.amountField() + "\n\n")
 
 	if !m.deps.Proven {
 		b.WriteString("  " + m.st.warn.Render("This address was named, not proved, so a deposit cannot be signed.") + "\n")
@@ -625,10 +658,40 @@ func (m model) renderDeposit() string {
 		b.WriteString("  " + m.st.dim.Render("Your key stays on your machine. This server asks your agent to sign and") + "\n")
 		b.WriteString("  " + m.st.dim.Render("never sees it. The transfer is checked against what was asked for") + "\n")
 		b.WriteString("  " + m.st.dim.Render("before anything is broadcast.") + "\n")
-		b.WriteString("\n  " + m.st.key.Render("enter") + m.st.dim.Render(" to send    ") +
-			m.st.key.Render("esc") + m.st.dim.Render(" to go back"))
 	}
+	b.WriteString("\n  " + m.focusHint() + "\n")
 	return b.String()
+}
+
+// amountField is the amount as it appears on the deposit screen, highlighted
+// while it is taking keystrokes and quiet while it is not.
+//
+// The two states differ in more than colour: the focused one carries a block
+// cursor and a trailing space to sit in, so a field with a number in it and a
+// field with nothing in it are visibly the same width of thing rather than
+// appearing and disappearing.
+func (m model) amountField() string {
+	text := m.amount + " SOL"
+	if !m.focus {
+		return m.st.idle.Render(text)
+	}
+	return m.st.caret.Render(text + " \u2588")
+}
+
+// focusHint is the line under the deposit screen that says what the next
+// keystroke will do, which on a screen with an optional field is not a fixed
+// footer.
+func (m model) focusHint() string {
+	if m.focus {
+		return m.st.key.Render("enter") + m.st.dim.Render(" to send    ") +
+			m.st.key.Render("tab") + m.st.dim.Render(" to stop typing    ") +
+			m.st.key.Render("esc") + m.st.dim.Render(" to go back")
+	}
+	if m.amount == "" {
+		return m.st.key.Render("tab") + m.st.dim.Render(" to type an amount")
+	}
+	return m.st.key.Render("tab") + m.st.dim.Render(" to edit it    ") +
+		m.st.key.Render("esc") + m.st.dim.Render(" to go back")
 }
 
 func (m model) renderKeys() string {
@@ -677,6 +740,7 @@ func (m model) renderHelp() string {
 	b.WriteString("  " + m.st.label.Render("m") + m.st.dim.Render("  every route and what it costs") + "\n")
 	b.WriteString("  " + m.st.label.Render("r") + m.st.dim.Render("  re-read the balance") + "\n")
 	b.WriteString("  " + m.st.label.Render("y") + m.st.dim.Render("  copy a key just minted, using OSC 52") + "\n")
+	b.WriteString("  " + m.st.label.Render("tab") + m.st.dim.Render("  put the caret in the amount field on the deposit screen") + "\n")
 	b.WriteString("  " + m.st.label.Render("q") + m.st.dim.Render("  disconnect") + "\n\n")
 
 	b.WriteString("  " + m.st.title.Render("what this is not") + "\n\n")

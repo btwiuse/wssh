@@ -1032,3 +1032,132 @@ func TestCopyIsOnlyOfferedWhenThereIsSomethingToCopy(t *testing.T) {
 		t.Error("y is not offered with a key on screen")
 	}
 }
+
+// The deposit screen used to be a trap: every key on it went to the amount
+// field, so b, k and m did nothing and the only way out was esc. Focus is what
+// makes it an ordinary page again - and the half that matters is that a page
+// shortcut pressed with the field unfocused reaches the page, not the field.
+func TestPageShortcutsWorkOnTheDepositScreenUntilTheFieldIsFocused(t *testing.T) {
+	m := model{st: newStyles(), view: screenDeposit, deps: deps{Catalogue: DefaultCatalogue(), Proven: true}, width: 100}
+
+	// Unfocused, the shortcuts land where they always landed.
+	next, _ := m.onKey(tea.KeyPressMsg(tea.Key{Code: 'k', Text: "k"}))
+	if got := next.(model).view; got != screenKeys {
+		t.Errorf("k on the deposit screen went to %v, want the api keys screen", got)
+	}
+	next, _ = m.onKey(tea.KeyPressMsg(tea.Key{Code: 'm', Text: "m"}))
+	if got := next.(model).view; got != screenModels {
+		t.Errorf("m on the deposit screen went to %v", got)
+	}
+
+	// Tab puts the caret in the field, and then a digit types rather than
+	// switching pages.
+	next, _ = m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	focused := next.(model)
+	if !focused.focus {
+		t.Fatal("tab did not focus the amount field")
+	}
+	next, _ = focused.onKey(tea.KeyPressMsg(tea.Key{Code: '3', Text: "3"}))
+	typed := next.(model)
+	if typed.amount != "3" {
+		t.Errorf("typed %q into the field, want 3", typed.amount)
+	}
+	if typed.view != screenDeposit {
+		t.Errorf("typing left the deposit screen for %v", typed.view)
+	}
+
+	// Tab again takes it back out, and the shortcuts work again. This is the
+	// pair that means esc is no longer the only exit.
+	next, _ = typed.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	back := next.(model)
+	if back.focus {
+		t.Error("tab did not take the focus back out")
+	}
+	next, _ = back.onKey(tea.KeyPressMsg(tea.Key{Code: 'b', Text: "b"}))
+	if got := next.(model).view; got != screenHome {
+		t.Errorf("b with the field unfocused went to %v, want home", got)
+	}
+}
+
+// esc and tab have to mean different things now, or the fix is just a rename:
+// while the field has the caret, esc puts it down without leaving the screen.
+func TestEscapeBlursTheFieldRatherThanLeavingTheScreen(t *testing.T) {
+	m := model{
+		st: newStyles(), view: screenDeposit, focus: true, amount: "1.5",
+		deps: deps{Catalogue: DefaultCatalogue()}, width: 100,
+	}
+	next, _ := m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	got := next.(model)
+	if got.view != screenDeposit {
+		t.Errorf("escape left the deposit screen for %v", got.view)
+	}
+	if got.focus {
+		t.Error("escape left the field focused")
+	}
+	if got.amount != "1.5" {
+		t.Errorf("escape cleared the amount to %q", got.amount)
+	}
+
+	// Unfocused, esc is the page-level escape again.
+	next, _ = got.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	if v := next.(model).view; v != screenHome {
+		t.Errorf("escape with nothing focused went to %v, want home", v)
+	}
+}
+
+// Focus does not survive leaving the screen, or arriving back on it would put
+// the caret in a field nobody asked to type into.
+func TestLeavingAScreenDropsTheFocus(t *testing.T) {
+	m := model{
+		st: newStyles(), view: screenDeposit,
+		deps: deps{Catalogue: DefaultCatalogue(), Proven: true}, width: 100,
+	}
+	next, _ := m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	focused := next.(model)
+	if !focused.focus {
+		t.Fatal("tab did not focus the field")
+	}
+
+	// A focused field owns the keyboard, so leaving means putting it down
+	// first. This is the whole of the trap the focus was meant to remove: the
+	// way off the screen is still two presses, but the first one now means
+	// something other than "escape".
+	next, _ = focused.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	next, _ = next.(model).onKey(tea.KeyPressMsg(tea.Key{Code: 'b', Text: "b"}))
+	home := next.(model)
+	if home.focus || home.view != screenHome {
+		t.Fatalf("left the screen as %v focused=%v", home.view, home.focus)
+	}
+
+	next, _ = home.onKey(tea.KeyPressMsg(tea.Key{Code: 'd', Text: "d"}))
+	if next.(model).focus {
+		t.Error("coming back to the deposit screen found the field already focused")
+	}
+}
+
+// The field has to look like the focus is in it. Colour alone is not enough on
+// a terminal with no colour at all, so the focused state also carries a cursor.
+func TestTheAmountFieldLooksDifferentWhenFocused(t *testing.T) {
+	m := model{st: newStyles(), view: screenDeposit, deps: deps{Catalogue: DefaultCatalogue()}, width: 100}
+	// Unfocused, the field is quiet and carries no cursor: a caret sitting in
+	// a field that is not taking keystrokes is a lie about where typing goes.
+	if got := m.amountField(); strings.Contains(got, "\u2588") {
+		t.Errorf("an unfocused field shows a cursor: %q", got)
+	}
+
+	m.focus, m.amount = true, "1.5"
+	got := m.amountField()
+	if !strings.Contains(got, "1.5") {
+		t.Errorf("the focused field does not show what was typed: %q", got)
+	}
+	if !strings.Contains(got, "\u2588") {
+		t.Errorf("the focused field shows no cursor: %q", got)
+	}
+
+	// Both states carry the amount, so the field is visibly the same thing
+	// either way rather than appearing from nowhere when focused.
+	m.focus = false
+	if !strings.Contains(m.amountField(), "1.5") {
+		t.Errorf("unfocusing the field hid what was typed: %q", m.amountField())
+	}
+}
