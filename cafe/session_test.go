@@ -2679,3 +2679,26 @@ func pageName(v screen) string {
 	}
 	return "?"
 }
+
+// The busy line is drawn once.
+//
+// It was drawn twice, and the page that showed it worst was the one where a
+// person is waiting and reading: the deposit screen said "waiting for a
+// signature from your agent" on two separate lines, which reads as two things
+// being waited for. renderPage drew it and note() drew it again, and neither
+// of them was wrong on its own - which is the usual way this happens.
+//
+// Counting rather than containing: the failure mode is a repeat, so a test that
+// asks "is it there" passes on the frame that has it twice.
+func TestTheBusyLineIsDrawnOnce(t *testing.T) {
+	for _, view := range []screen{screenHome, screenDeposit, screenKeys, screenModels, screenFAQ} {
+		m := model{st: newStyles(true), deps: deps{Catalogue: DefaultCatalogue()},
+			view: view, width: 100, height: 40}
+		m.syncLists()
+		m.busy = "waiting for a signature from your agent"
+		frame := stripForTest(m.View().Content)
+		if n := strings.Count(frame, "waiting for a signature"); n != 1 {
+			t.Errorf("the %v page says it is waiting %d times, want once:\n%s", view, n, frame)
+		}
+	}
+}

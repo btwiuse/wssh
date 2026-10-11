@@ -1196,11 +1196,23 @@ func (m *model) renderPage() (string, int) {
 		listTop = countLines(b.String() + head)
 		b.WriteString(head + view + "\n" + tail)
 	}
-	if m.busy != "" {
-		b.WriteString("\n\n  " + m.st.warn.Render(m.busy) + "\n")
-	}
+	b.WriteString(m.busyBlock())
 	b.WriteString(m.note())
 	return b.String(), listTop
+}
+
+// busyBlock is what a page shows while the program is doing something: two
+// blank lines and the line itself, above the notice.
+//
+// One function for drawing it and for making room for it. They were separate
+// pieces of string once, which is exactly how the line came to be drawn twice -
+// and then, once that was fixed, trimmed away on the pages whose list fills
+// the box, because nothing was counting it any more.
+func (m model) busyBlock() string {
+	if m.busy == "" {
+		return ""
+	}
+	return "\n\n  " + m.st.warn.Render(m.busy) + "\n"
 }
 
 // banner is the line a page carries above it when the session is only looking
@@ -1217,13 +1229,15 @@ func (m model) banner() string {
 // Counted by the list sizing as well as drawn by the page, for the reason
 // above: a notice that wraps to two lines is two lines out of the room the
 // list had.
+//
+// It used to lead with the busy line as well, and the page drew that line
+// separately above it, so a page waiting on an agent said so twice. What the
+// program is currently doing belongs to the page and is drawn above this; only
+// the last thing that happened belongs here.
 func (m model) note() string {
 	var b strings.Builder
-	if m.busy != "" {
-		b.WriteString("\n\n  " + m.st.warn.Render(m.busy) + "\n")
-	}
 	if m.notice.kind == noticeNone {
-		return b.String()
+		return ""
 	}
 	b.WriteString("\n")
 	switch m.notice.kind {
@@ -1263,7 +1277,7 @@ func (m model) pageRoom() int {
 // afterwards is not an option and counting the blanks between them is the
 // guess this function exists to avoid.
 func (m *model) fitted(l list.Model, perRow int, head, tail string) (list.Model, string, []drawnRow) {
-	room := m.roomFor(head, tail, countLines(m.note()))
+	room := m.roomFor(head, tail, countLines(m.note())+countLines(m.busyBlock()))
 	// The delegate starts as if it had already written the lines the
 	// component puts above the first row, so what it records is a line on the
 	// screen rather than a line inside the component.
@@ -1742,8 +1756,14 @@ func (m model) footer() string {
 func (m model) renderEmpty() string {
 	st := m.st
 	var b strings.Builder
+	// Empty while something is happening, because renderPage already draws the
+	// busy line under this. It used to draw it as well, which is how the home
+	// page said it was waiting for a signature twice on two separate lines.
+	// While busy this page is nothing but that line: an explanation of why you
+	// cannot sign, printed underneath a sentence saying a signature is what is
+	// being waited for, is a contradiction.
 	if m.busy != "" {
-		return m.wrap(st.warn.Render(m.busy), st.warn) + "\n"
+		return ""
 	}
 	if m.deps.Local {
 		b.WriteString("  " + st.title.Render("No ssh-agent, so nothing here can sign.") + "\n")
