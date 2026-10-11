@@ -357,7 +357,7 @@ func (l *Ledger) MintKey(address, label string) (string, error) {
 	return key, nil
 }
 
-// Hint is how a key is shown in a listing: rc_abcd…wxyz.
+// Hint is how a key is shown in a listing: rc_abcd...wxyz.
 //
 // Shaped like the key rather than like a label, because `rc_live_` in front of
 // four characters says "here is a key" without saying *which*, and the prefix

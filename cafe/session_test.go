@@ -1785,6 +1785,19 @@ func TestTheExportedKeyLooksLikeTheListedOne(t *testing.T) {
 	if !strings.Contains(page, "export OPENAI_API_KEY=rc_abcd...wxyz") {
 		t.Errorf("the export line is not in the shape the list uses: %q", page)
 	}
+
+	// Every dot on the screen, in either place, is one of a run of three. A
+	// key read as "rc_abcd......wxyz" is a key somebody cannot type back in.
+	drawn := stripForTest(m.frameString())
+	re := regexp.MustCompile(`\.{2,}`)
+	for _, run := range re.FindAllString(drawn, -1) {
+		if len(run) != 3 {
+			t.Errorf("a run of %d dots on the home page: %q", len(run), run)
+		}
+	}
+	if strings.Contains(drawn, "\u2026") {
+		t.Error("the key is abbreviated with an ellipsis character rather than three dots")
+	}
 }
 
 // A key is abbreviated with three dots. It is not a string this program is
