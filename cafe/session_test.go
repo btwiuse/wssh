@@ -1771,6 +1771,27 @@ func TestTheTwoLinesOfAKeyRowLineUp(t *testing.T) {
 	}
 }
 
+// A key is abbreviated with one ellipsis character, not three dots. `…` is a
+// single cell in a terminal and `...` is three, so a key shown with dots is
+// three columns wider than the abbreviation it stands for - and everything else
+// in this program that shortens a string already says it the other way.
+func TestAKeyIsAbbreviatedWithOneEllipsis(t *testing.T) {
+	k := Key{Label: "wxyz", Prefix: "abcd"}
+	if got, want := k.Hint(), "rc_abcd\u2026wxyz"; got != want {
+		t.Errorf("a key shows as %q, want %q", got, want)
+	}
+	// A key minted before the prefix existed falls back rather than showing a
+	// second run of dots where the prefix would be.
+	if got, want := (Key{Label: "3333"}).Hint(), "rc_\u20263333"; got != want {
+		t.Errorf("a key with no prefix shows as %q, want %q", got, want)
+	}
+	for _, bad := range []string{"..", "..."} {
+		if strings.Contains(k.Hint(), bad) {
+			t.Errorf("a key shows %q: %q", bad, k.Hint())
+		}
+	}
+}
+
 // Every line of the frame is drawn in one colour, and that is checked on the
 // bytes that actually leave rather than on the styles that were meant to
 // produce them - because a style is an intention and a frame is a thing on a
@@ -2318,7 +2339,7 @@ func TestAClickLandsOnTheRowThatWasDrawn(t *testing.T) {
 	for row, label := range []string{"aaaa", "bbbb", "cccc"} {
 		found := -1
 		for i, line := range lines {
-			if strings.Contains(line, "..."+label) {
+			if strings.Contains(line, "\u2026"+label) {
 				found = i
 				break
 			}

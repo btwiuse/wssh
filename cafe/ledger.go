@@ -357,17 +357,23 @@ func (l *Ledger) MintKey(address, label string) (string, error) {
 	return key, nil
 }
 
-// Hint is how a key is shown in a listing: rc_abcd...wxyz.
+// Hint is how a key is shown in a listing: rc_abcd…wxyz.
 //
 // Shaped like the key rather than like a label, because `rc_live_` in front of
 // four characters says "here is a key" without saying *which*, and the prefix
 // is eight characters of the whole thing - four more than before, which still
 // narrows nothing and does let somebody find their own key in a list.
+//
+// One ellipsis character rather than three dots, for the same reason
+// shortAddress and fit use one: `…` is a column and a half in a proportional
+// font and a single cell in a terminal, where `...` is three of them. A key
+// shown as an abbreviation ought to be as wide as the abbreviation it stands
+// for, and everything else this program truncates already says it that way.
 func (k Key) Hint() string {
 	if k.Prefix == "" {
-		return "rc_..." + k.Label
+		return "rc_…" + k.Label
 	}
-	return "rc_" + k.Prefix + "..." + k.Label
+	return "rc_" + k.Prefix + "…" + k.Label
 }
 
 // prefixFor is the first four characters of a key, for Hint.

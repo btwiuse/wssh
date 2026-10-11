@@ -876,8 +876,12 @@ because they are proper nouns and because a list of lowercase words reads as a
 list of commands, which is the one thing they stopped being when the letters
 went away.
 
-A key is shown as **`rc_abcd...wxyz`** everywhere one is named - the list, the
-home page, and the notice that says which key was just revoked. - the shape of the key rather than the
+A key is shown as **`rc_abcd…wxyz`** everywhere one is named - the list, the home
+page, and the notice that says which key was just revoked. **One ellipsis
+character, not three dots**: `…` is a single cell in a terminal and `...` is
+three, so a key shown with dots is three columns wider than the abbreviation it
+stands for - and `shortAddress`, `shortSig` and `fit` have always said it the
+other way. - the shape of the key rather than the
 shape of a label. `rc_live_` in front of four characters says "here is a key"
 without saying *which*, and the eight are eight characters of a 192-bit secret,
 which narrows nothing. `Key.Prefix` is the first four, `Key.Label` the last
@@ -885,7 +889,7 @@ four, and `Key.Hint()` puts them together; a key minted before `Prefix` existed
 falls back to `rc_...wxyz` rather than pretending to a prefix it does not have.
 
 **A key minted before `Prefix` existed cannot show one**, and falls back to
-`rc_...wxyz`. The digest is a hash of the key, not the key, so the first four
+`rc_…wxyz`. The digest is a hash of the key, not the key, so the first four
 cannot be recovered from a ledger that only has it - the fallback is the honest
 shape for those, not a guess at one.
 
