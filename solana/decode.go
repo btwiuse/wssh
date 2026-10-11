@@ -84,6 +84,22 @@ type DecodedInstruction struct {
 	Data      []byte
 }
 
+// DecodeSigned reads a whole signed transaction and returns the message its
+// signatures cover.
+//
+// DecodeMessage takes the message because that is the thing being read most of
+// the time, and the signature region in front of it is not part of it. This is
+// the other door in: a transaction that has been through an agent and is about
+// to be broadcast still has that region, and skipping it is what fee.go's
+// FeePayer already has to do to find the first account key.
+func DecodeSigned(signed []byte) (Message, error) {
+	message, err := afterSignatures(signed)
+	if err != nil {
+		return Message{}, fmt.Errorf("read the signatures in front of the message: %w", err)
+	}
+	return DecodeMessage(message)
+}
+
 // DecodeMessage reads a versioned transaction message.
 //
 // The layout is what build.go writes and what golden_test.go holds: version,
@@ -144,11 +160,24 @@ func DecodeMessage(data []byte) (Message, error) {
 
 	// The four groups the header counts, in the order Solana lays them out.
 	// Everything a person approves on - which accounts sign, which ones can
-	// be changed - falls out of these four numbers and the key order.
+	// be changed - falls out of these three numbers and the key order.
+	//
+	// The writable non-signers are the one group the header does not state.
+	// It states how many sign, how many of those are read-only, and how many
+	// of the rest are read-only; everything left over is writable, so the
+	// count is derived here. Reading the third count as the writable group
+	// instead puts every read-only account - which for a transfer includes
+	// the System Program itself - in the "this can change" column of an
+	// approval someone is about to sign.
 	msg.Accounts = make([]Account, count)
 	writableSigners := required
 	readonlySigners := readonlySigned
-	writableOthers := readonlyUnsigned
+	writableOthers := count - required - readonlySigned - readonlyUnsigned
+	if writableOthers < 0 {
+		return msg, fmt.Errorf(
+			"the header counts %d signers and %d read-only accounts, which is more than the %d keys",
+			required+readonlySigned, readonlyUnsigned, count)
+	}
 	for i, key := range keys {
 		switch {
 		case i < writableSigners:

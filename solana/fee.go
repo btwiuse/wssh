@@ -1,6 +1,7 @@
 package solana
 
 import (
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 
@@ -59,6 +60,41 @@ func FeePayer(signed []byte) (string, error) {
 		return "", errors.New("the signed transaction carries no fee payer")
 	}
 	return siws.Base58Encode(rest[:32]), nil
+}
+
+// VerifySigned checks that a signed transaction really was signed by pub.
+//
+// The signature region in front of the message is what an agent produced, and
+// an agent is on the other end of a connection this side does not control. So
+// the bytes are checked against the key rather than believed: ed25519.Verify
+// over the exact message the signature covers, which is the whole of the wire
+// format minus the signature count and the signature slot itself.
+//
+// Only the first signature is checked, and that is not a shortcut. A single-key
+// agent fills the one signature slot a built transaction leaves, so there is
+// nothing after the first; solana/agentsign.go is explicit that it refuses
+// rather than returning a transaction short by whole signatures.
+func VerifySigned(signed []byte, pub ed25519.PublicKey) error {
+	count, n, err := readCompactU16(signed)
+	if err != nil {
+		return fmt.Errorf("the signature count is not readable: %w", err)
+	}
+	if count != 1 {
+		return fmt.Errorf("the transaction carries %d signatures; exactly one is expected", count)
+	}
+	rest := signed[n:]
+	if len(rest) < ed25519.SignatureSize {
+		return errors.New("the transaction ends inside its signature")
+	}
+	signature := rest[:ed25519.SignatureSize]
+	message := rest[ed25519.SignatureSize:]
+	if len(pub) != ed25519.PublicKeySize {
+		return fmt.Errorf("the key to check against is %d bytes, not %d", len(pub), ed25519.PublicKeySize)
+	}
+	if !ed25519.Verify(pub, message, signature) {
+		return errors.New("the signature is not by that key over this message")
+	}
+	return nil
 }
 
 // afterSignatures skips the signature section and returns the message that

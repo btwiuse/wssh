@@ -1,6 +1,7 @@
 package solana
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"strings"
@@ -34,18 +35,22 @@ func TestDecodeMessageReadsTheGoldenBytes(t *testing.T) {
 	if want := "B1P9Y4gHoGaSX9FS6nUeAb5Jx3ATjNPGmc7YE4jfEQUZ"; msg.Blockhash != want {
 		t.Errorf("blockhash is %q, want %q", msg.Blockhash, want)
 	}
-	// The header's four groups, read off the key order. The byte called
-	// numReadonlyUnsignedAccounts counts accounts that are neither
-	// signers nor read-only, so it is the writable non-signers: this
-	// message has one writable signer and one writable non-signer.
+	// The header's four groups, read off the key order. The header says one
+	// required signer, none read-only among the signers, and one read-only
+	// among the rest; with two keys that leaves the payer writable and the
+	// program read-only, which is what a program id always is.
+	//
+	// This is worth spelling out because the reader used to take the third
+	// header count for the writable group, which made every read-only
+	// account look like one a transaction could change.
 	if len(msg.Accounts) != 2 {
 		t.Fatalf("got %d accounts, want 2", len(msg.Accounts))
 	}
 	if !msg.Accounts[0].Signer || !msg.Accounts[0].Writable {
 		t.Errorf("the fee payer is %+v, want a writable signer", msg.Accounts[0])
 	}
-	if msg.Accounts[1].Signer || !msg.Accounts[1].Writable {
-		t.Errorf("the program account is %+v, want a writable non-signer", msg.Accounts[1])
+	if msg.Accounts[1].Signer || msg.Accounts[1].Writable {
+		t.Errorf("the program account is %+v, want a read-only non-signer", msg.Accounts[1])
 	}
 	if msg.LookupTables != 0 {
 		t.Errorf("lookup tables is %d, want 0", msg.LookupTables)
@@ -227,8 +232,11 @@ func TestWhichAccountsTheTransactionMayWrite(t *testing.T) {
 		t.Fatalf("generate: %v", err)
 	}
 	address := siws.Base58Encode(pub)
-	// Header 1 0 0 with two keys: one writable signer, one read-only.
-	message := []byte{0x80, 1, 0, 0}
+	// Header 1 0 1 with two keys: one writable signer, and one read-only
+	// account, which is what the third byte states. The writable non-signers
+	// are whatever is left over, so with two keys and one signer there are
+	// none - and the reader has to work that out rather than read it.
+	message := []byte{0x80, 1, 0, 1}
 	message = appendCompactU16ForTest(message, 2)
 	raw, err := siws.Base58Decode(address)
 	if err != nil {
@@ -492,5 +500,51 @@ func TestTheSummaryIsYaml(t *testing.T) {
 	}
 	if strings.Contains(got, "wants to sign") {
 		t.Errorf("the summary is prose rather than YAML:\n%s", got)
+	}
+}
+
+// The writable non-signers are the one group the header does not state, and
+// getting them wrong turns a read-only program id into something an approval
+// dialog says the transaction can change. This pins the case that matters: a
+// System transfer, where the two writable accounts are the source and the
+// destination and the program is not one of them.
+//
+// It is measured against bytes this repository's own builder produced and a
+// golden test has already matched against a real library, so a reader that
+// drifts from the writer fails here too.
+func TestATransferNamesItsWritableAccounts(t *testing.T) {
+	payer := siws.Base58Encode(bytes.Repeat([]byte{1}, 32))
+	destination := siws.Base58Encode(bytes.Repeat([]byte{2}, 32))
+	blockhash := siws.Base58Encode(bytes.Repeat([]byte{3}, 32))
+
+	instructions, err := NewTransfer(TransferInstruction{Lamports: 1_000, To: destination})
+	if err != nil {
+		t.Fatalf("NewTransfer: %v", err)
+	}
+	unsigned, err := BuildTransaction(agentkey.SolanaTxRequest{
+		Blockhash:    blockhash,
+		Signer:       payer,
+		Instructions: instructions,
+	})
+	if err != nil {
+		t.Fatalf("BuildTransaction: %v", err)
+	}
+	msg, err := DecodeSigned(unsigned)
+	if err != nil {
+		t.Fatalf("DecodeSigned: %v", err)
+	}
+
+	writable := msg.accountsTouched()
+	if len(writable) != 2 {
+		t.Fatalf("the transfer can change %d accounts (%v), want the source and the destination", len(writable), writable)
+	}
+	if writable[0].Address != payer || writable[1].Address != destination {
+		t.Errorf("the writable accounts are %v, want [%s %s]", writable, payer, destination)
+	}
+
+	for _, acct := range msg.Accounts {
+		if acct.Address == SystemProgramID && acct.Writable {
+			t.Error("the System Program is reported as writable; it never is")
+		}
 	}
 }

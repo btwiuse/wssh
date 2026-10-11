@@ -27,12 +27,20 @@ import (
 // hand-written message that put it last was rejected by the cluster as an
 // invalid discriminator, and this one simulates.
 //
-// The account keys are in the order they were first mentioned, the fee payer
-// first. Solana requires every signer before any account that does not sign,
-// so with one signer that means: the payer, then whatever the instructions
-// name. An instruction that asks for a signer this path cannot supply is
-// refused rather than approximated - a transaction missing one of its
-// signatures is one the cluster rejects with nothing that points here.
+// The account keys go in the four groups Solana requires, in order: writable
+// signers, read-only signers, writable accounts, read-only accounts. The
+// instruction indices are remapped when that happens, because an index means
+// a position in the key list and the list is what moved.
+//
+// That ordering is not a convention. A message whose keys are not grouped this
+// way is rejected before it runs, and the header is what says how the keys
+// were grouped - so the counts and the order have to agree with each other or
+// a read-only account reads as writable in an approval somebody is about to
+// sign.
+//
+// An instruction that asks for a signer this path cannot supply is refused
+// rather than approximated: a transaction missing one of its signatures is one
+// the cluster rejects with nothing that points here.
 func BuildTransaction(req agentkey.SolanaTxRequest) ([]byte, error) {
 	if req.Signer == "" {
 		return nil, errors.New("no signer: this path signs with a key it holds, so it has to be named")
@@ -66,7 +74,10 @@ func BuildTransaction(req agentkey.SolanaTxRequest) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("instruction %d: %w", i, err)
 		}
-		progIdx := keys.intern(program)
+		// A program id is never writable and never signs, whatever the
+		// request says about it: that is a property of what a program is,
+		// not of the instruction.
+		progIdx := keys.internAs(program, false, false)
 
 		accounts := make([]uint16, 0, len(ix.Accounts)+1)
 		if sourceIsFeePayer(ix) {
@@ -90,7 +101,7 @@ func BuildTransaction(req agentkey.SolanaTxRequest) ([]byte, error) {
 						"available is the fee payer's: use a wallet for this",
 					i, j, a.Address)
 			}
-			accounts = append(accounts, keys.intern(raw))
+			accounts = append(accounts, keys.internAs(raw, a.IsSigner, a.IsWritable))
 		}
 
 		data, err := siws.Base58Decode(ix.DataBase58)
@@ -100,27 +111,31 @@ func BuildTransaction(req agentkey.SolanaTxRequest) ([]byte, error) {
 		ixs = append(ixs, compiled{program: progIdx, keys: accounts, data: data})
 	}
 
-	// One signer - the payer - and nothing else. Every other account is
-	// unsigned and goes in the third group, which is what the byte named
-	// numReadonlyUnsignedAccounts actually counts: accounts that are
-	// neither signers nor read-only, and therefore writable. The name reads
-	// the other way round, which is how this was once described backwards.
-	//
-	// This matches what a Solana library produces for the same request, and
-	// that is the constraint: the golden fixture is bytes the cluster
-	// accepted, so deviating from it would trade a working encoder for a
-	// tidier one.
-	unsignedCount := len(keys.list) - 1
-	if len(keys.list) > 1<<8 || unsignedCount > 1<<8 {
-		return nil, fmt.Errorf("a transaction naming %d accounts is more than the header can say", len(keys.list))
+	// Sort the keys into the four groups and move every instruction index
+	// with them. Stable, so two accounts in the same group keep the order
+	// they were first mentioned in - which is what put the payer first and
+	// is the only thing the golden fixture pins.
+	order, header, err := keys.group()
+	if err != nil {
+		return nil, err
+	}
+	for i := range ixs {
+		ixs[i].program = order[ixs[i].program]
+		for j, k := range ixs[i].keys {
+			ixs[i].keys[j] = order[k]
+		}
+	}
+	ordered := make([][]byte, 0, len(keys.list))
+	for _, old := range order {
+		ordered = append(ordered, keys.list[old])
 	}
 
-	msg := []byte{0x80}  // version 0; the high bit marks the message as versioned
-	msg = append(msg, 1) // one required signature: the payer
-	msg = append(msg, 0) // no readonly signers
-	msg = append(msg, byte(unsignedCount))
-	msg = appendCompactU16(msg, len(keys.list))
-	for _, k := range keys.list {
+	msg := []byte{0x80} // version 0; the high bit marks the message as versioned
+	msg = append(msg, header.required)
+	msg = append(msg, header.readonlySigned)
+	msg = append(msg, header.readonlyUnsigned)
+	msg = appendCompactU16(msg, len(ordered))
+	for _, k := range ordered {
 		msg = append(msg, k...)
 	}
 	msg = append(msg, blockhash...)
@@ -183,28 +198,110 @@ func sourceIsFeePayer(ix agentkey.SolanaInstruction) bool {
 	return known && needed > len(ix.Accounts)
 }
 
-// keyTable interns account keys so the same one is named once, with the fee
-// payer always first: it is the signer, and Solana wants signers before
-// everything else.
+// keyTable interns account keys so the same one is named once, with the roles
+// it was first seen with.
 type keyTable struct {
 	list  [][]byte
+	roles []keyRole
 	index map[string]uint16
+}
+
+// keyRole is what a key is in a message. Solana has exactly four kinds and
+// they are the groups the keys have to be sorted into.
+type keyRole struct {
+	signer   bool
+	writable bool
+}
+
+// group is the three-byte header, once the keys have been sorted.
+type groupHeader struct {
+	required         byte
+	readonlySigned   byte
+	readonlyUnsigned byte
 }
 
 func newKeyTable(payer []byte) *keyTable {
 	t := &keyTable{index: map[string]uint16{}}
-	t.intern(payer)
+	// The payer signs and pays, so it is a writable signer. That is Solana's
+	// requirement rather than a convenience: the fee payer must be a required
+	// signer, and a signer that is not writable cannot be the fee payer.
+	t.internAs(payer, true, true)
 	return t
 }
 
-func (t *keyTable) intern(key []byte) uint16 {
+// internAs adds a key, or returns the index it already has.
+//
+// Roles only ever get added, never taken away: an account named writable by
+// one instruction and read-only by another is writable, and taking the last
+// word seen would understate what the transaction can change.
+func (t *keyTable) internAs(key []byte, signer, writable bool) uint16 {
 	if i, ok := t.index[string(key)]; ok {
+		t.roles[i].signer = t.roles[i].signer || signer
+		t.roles[i].writable = t.roles[i].writable || writable
 		return i
 	}
 	i := uint16(len(t.list))
 	t.list = append(t.list, key)
+	t.roles = append(t.roles, keyRole{signer: signer, writable: writable})
 	t.index[string(key)] = i
 	return i
+}
+
+// group sorts the keys into Solana's four groups and reports the header that
+// describes the result. The returned slice maps an old index to a new one, so
+// every instruction index can be rewritten through it.
+//
+// The four groups, in the order Solana requires them: writable signers,
+// read-only signers, writable accounts, read-only accounts. Sorting is stable,
+// so the order keys were first mentioned in survives within a group; that is
+// what keeps the fee payer at index 0 and the golden fixture byte for byte.
+func (t *keyTable) group() ([]uint16, groupHeader, error) {
+	n := len(t.list)
+	if n > 1<<8 {
+		return nil, groupHeader{}, fmt.Errorf(
+			"a transaction naming %d accounts is more than the header can say", n)
+	}
+	order := make([]uint16, 0, n)
+	for rank := range 4 {
+		for i, role := range t.roles {
+			if groupOf(role) == rank {
+				order = append(order, uint16(i))
+			}
+		}
+	}
+
+	remap := make([]uint16, n)
+	for new, old := range order {
+		remap[old] = uint16(new)
+	}
+	var header groupHeader
+	for _, i := range order {
+		role := t.roles[i]
+		switch groupOf(role) {
+		case 0:
+			header.required++
+		case 1:
+			header.readonlySigned++
+		case 3:
+			header.readonlyUnsigned++
+		}
+	}
+	return remap, header, nil
+}
+
+// groupOf is the sort rank of a key: writable signers first, then read-only
+// signers, then writable accounts, then read-only accounts.
+func groupOf(role keyRole) int {
+	switch {
+	case role.signer && role.writable:
+		return 0
+	case role.signer:
+		return 1
+	case role.writable:
+		return 2
+	default:
+		return 3
+	}
 }
 
 // appendCompactU16 writes Solana's compact-u16: seven bits per byte, low
