@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -42,5 +44,44 @@ func TestTheReleaseSlugIsThisRepository(t *testing.T) {
 	owner, repo, ok := strings.Cut(releaseSlug, "/")
 	if !ok || owner == "" || repo == "" {
 		t.Fatalf("release slug %q is not owner/repo, which is what selfupdate parses", releaseSlug)
+	}
+}
+
+// The asset a release offers is chosen on its platform suffix alone, and a
+// release carries three binaries whose names all end in that suffix. This is
+// the check that stops wssh being replaced by sol-keys - and it has to stand on
+// its own rather than rely on something upstream having filtered first, because
+// a checksum file carries the same prefix as the archive it sits next to.
+func TestOnlyTheWsshBinaryIsAccepted(t *testing.T) {
+	cases := map[string]bool{
+		"wssh_0.0.1_darwin_arm64.tar.gz":        true,
+		"wssh_0.0.1_linux_amd64.tar.gz":         true,
+		"wssh_0.0.1_windows_amd64.zip":          true,
+		"sol-tx_0.0.1_darwin_arm64.tar.gz":      false,
+		"sol-keys_0.0.1_darwin_arm64.tar.gz":    false,
+		"checksums.txt":                         false,
+		"wssh_0.0.1_darwin_arm64.tar.gz.sha256": false,
+		"wssh_0.0.1_darwin_arm64.tar.gz.pem":    false,
+	}
+	for name, want := range cases {
+		if got := isWsshAsset(name); got != want {
+			t.Errorf("isWsshAsset(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+// The prefix the command checks and the one the release config produces have
+// to be the same string. They are two files, which is exactly how they drift.
+func TestTheAssetPrefixIsWssh(t *testing.T) {
+	if assetPrefix != "wssh_" {
+		t.Errorf("asset prefix is %q, which the release config does not produce", assetPrefix)
+	}
+	// And the release config has to produce it.
+	config, err := os.ReadFile(filepath.Join("..", "..", ".goreleaser.yml"))
+	if err != nil {
+		t.Fatalf("read the release config: %v", err)
+	}
+	if !strings.Contains(string(config), "{{ .Binary }}_") {
+		t.Errorf("the release config does not name assets %s<version>_<os>_<arch>, which is what the upgrade looks for", assetPrefix)
 	}
 }

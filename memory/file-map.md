@@ -5,6 +5,8 @@ already exists for it.
 
 | Path | Role |
 |---|---|
+| `.goreleaser.yml` | Release config: three binaries, macOS and Linux on amd64 and arm64, named `{binary}_{version}_{os}_{arch}` and stamped with the version. The name is not cosmetic — `wssh upgrade` matches assets on the platform suffix and takes the first that fits, so all three end up matching and the command checks the binary's own prefix itself. |
+| `.github/workflows/release.yml` | Cuts a release when a `v` tag is pushed, which is the naming `wssh upgrade` parses. |
 | `Makefile` | Build entry point. `make wssh` is the target that builds a working binary; bare `make` lists targets. `make sol-tx` and `make sol-keys` build the other two binaries, `make bin` builds all three. The wasm dependency list comes from `go list -deps` for the js/wasm target: a hand-kept list silently left the wasm stale when `auth/agentkey` changed, and a stale wasm runs the browser's transaction builder from a build that no longer exists. |
 | `wssh.go`, `wssh_test.go` | `Server` (HTTP handler wrapping wish). Path/origin/auth tests. |
 | `auth/auth.go`, `auth/auth_test.go` | `auth.Config`, key files (re-read each attempt), password file (bcrypt or plaintext). |

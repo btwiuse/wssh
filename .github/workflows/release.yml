@@ -1,0 +1,42 @@
+name: release
+
+# A tag is what cuts a release. The tag has to be what wssh upgrade looks for:
+# go-selfupdate takes the semver out of the tag name, so `v0.1.0` works and
+# `0.1.0` does not, and a tag it cannot parse is skipped in silence.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The whole history, because the changelog is generated from it and a
+          # shallow clone leaves it empty.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # The archive has to carry the same Go release as the toolchain that
+      # compiled it: ssh.wasm and wasm_exec.js come as a pair and disagree
+      # about the runtime ABI otherwise, which fails as a confusing web error
+      # rather than a build error.
+      - name: Build the browser client
+        run: ./client/build.sh
+
+      - name: Release
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

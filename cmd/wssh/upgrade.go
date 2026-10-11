@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 
 	"github.com/creativeprojects/go-selfupdate"
 	"github.com/spf13/cobra"
@@ -15,6 +16,15 @@ import (
 // release assets from here, so the name has to be the repository the releases
 // are cut from and nothing else.
 const releaseSlug = "btwiuse/wssh"
+
+// assetPrefix is the name every wssh asset starts with.
+//
+// This exists because the same release also carries sol-tx and sol-keys, and
+// go-selfupdate picks the **first** asset whose name ends with
+// `<os>_<arch>.tar.gz`. All three do. Without this check a wssh upgrade can
+// download a sol-keys archive and write it over the wssh binary, and nothing
+// about that looks wrong until wssh stops starting.
+const assetPrefix = "wssh_"
 
 func newUpgradeCmd() *cobra.Command {
 	return &cobra.Command{
@@ -39,6 +49,28 @@ place, so a failed upgrade leaves the old one running.`,
 			return upgrade(context.Background(), version)
 		},
 	}
+}
+
+// archiveExtensions are the forms a release asset can take. A checksum file
+// next to an archive starts with the same prefix, so a prefix on its own is
+// not enough to say an asset is the binary.
+var archiveExtensions = []string{".tar.gz", ".tgz", ".gz", ".zip", ".xz", ".bz2"}
+
+// isWsshAsset reports whether a release asset is a wssh binary archive.
+//
+// Both halves matter, and on their own rather than because something upstream
+// happens to have filtered first: the prefix says which of the three binaries
+// this is, and the extension says it is the binary rather than its checksum.
+func isWsshAsset(name string) bool {
+	if !strings.HasPrefix(name, assetPrefix) {
+		return false
+	}
+	for _, ext := range archiveExtensions {
+		if strings.HasSuffix(name, ext) {
+			return true
+		}
+	}
+	return false
 }
 
 func upgrade(ctx context.Context, currentVersion string) error {
@@ -68,6 +100,16 @@ func upgrade(ctx context.Context, currentVersion string) error {
 
 	if latest.LessOrEqual(currentVersion) {
 		return fmt.Errorf("%s is already the latest release", currentVersion)
+	}
+
+	// The release carries all three binaries, and go-selfupdate matched this
+	// asset only on its platform suffix - which all three satisfy. Refusing
+	// here is the difference between an upgrade and an accident.
+	if !isWsshAsset(latest.AssetName) {
+		return fmt.Errorf(
+			"release %s offered %q, which is not the wssh binary; "+
+				"an upgrade will not replace wssh with something else",
+			latest.Version(), latest.AssetName)
 	}
 
 	exe, err := os.Executable()

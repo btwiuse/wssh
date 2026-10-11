@@ -1,0 +1,90 @@
+# Release configuration.
+#
+# Three binaries per platform, named `{binary}_{version}_{os}_{arch}`, because
+# that is what `wssh upgrade` looks for. It reads the release assets through
+# go-selfupdate, which matches on the platform suffix and takes the first asset
+# that fits - so the name has to carry the version, the platform and which of
+# the three binaries it is, and the upgrade command checks the last part itself
+# rather than trusting the order GitHub happens to return them in.
+#
+# The version and commit are stamped in. Without them a released binary reports
+# "dev" and `wssh upgrade` refuses to run, because there is nothing to compare
+# a release against.
+#
+# Only macOS and Linux on amd64 and arm64 for now. Adding a platform means
+# adding it to every build below, and one that nobody has a machine for is a
+# release that lies about where it runs.
+
+version: 2
+
+project_name: wssh
+
+before:
+  hooks:
+    - go mod download
+    # The browser client is a build artefact of the wssh binary, not a separate
+    # download: it is compiled into it and served from it. A release without it
+    # would ship a server whose front end dies on a 404, so it is built here
+    # rather than left to whoever cuts the release.
+    - ./client/build.sh
+
+builds:
+  - id: wssh
+    main: ./cmd/wssh
+    binary: wssh
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.version={{ .Version }} -X main.commit={{ .FullCommit }}
+
+  - id: sol-tx
+    main: ./cmd/sol-tx
+    binary: sol-tx
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.version={{ .Version }} -X main.commit={{ .FullCommit }}
+
+  - id: sol-keys
+    main: ./cmd/sol-keys
+    binary: sol-keys
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.version={{ .Version }} -X main.commit={{ .FullCommit }}
+
+archives:
+  - id: binaries
+    ids:
+      - wssh
+      - sol-tx
+      - sol-keys
+    formats: [tar.gz]
+    # One archive, one binary at the top level inside it: that is what
+    # selfupdate.UpdateTo looks for when it unpacks.
+    name_template: "{{ .Binary }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  prerelease: auto
+  footer: |
+    ---
+    Installed with `wssh upgrade`, or by hand from the asset for your platform.
+    Each archive holds a single binary.
