@@ -1691,15 +1691,12 @@ func TestTheWordmarkIsDrawnExactlyAsItIsWritten(t *testing.T) {
 			continue
 		}
 		inside := bodyWidth(width)
-		for i, line := range strings.Split(m.wordmark(), "\n") {
+		for i, line := range strings.Split(strings.TrimRight(m.wordmark(), "\n"), "\n") {
 			got := strings.TrimRight(stripForTest(line), " ")
-			if i == 0 || got == "" {
+			if got == "" {
 				continue
 			}
-			want := strings.Split(wordmark, "\n")[i-1]
-			// The mark is centred per line, which is what figlet's own output
-			// needs: its lines are different lengths and the space in front of
-			// the first one is part of the lettering.
+			want := strings.Split(wordmark, "\n")[i]
 			// The mark is padded out to one width before it is centred, so
 			// that is what is centred too - a drawing whose lines are all a
 			// different length would otherwise be shifted a column per line.

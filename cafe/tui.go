@@ -1823,25 +1823,31 @@ func (m *model) renderHome() string {
 	// somebody lands on. It is here rather than on every page because it is the
 	// thing this page is for, and because a sentence under a picture is what
 	// that combination is for.
-	b.WriteString("  " + m.st.dim.Render("A little café for every AI model, in your terminal.") + "\n")
+	//
+	// Centred under the cup rather than set in like everything else, because
+	// it belongs to the cup and not to the page: the cup is centred, its
+	// caption is centred, and the account below is the first thing that is
+	// just text.
+	b.WriteString("\n" + lipgloss.PlaceHorizontal(bodyWidth(m.width), lipgloss.Center,
+		m.st.dim.Render("A little café for every AI model, in your terminal.")) + "\n\n")
 	b.WriteString(m.renderAccount())
 	b.WriteString(m.field("balance", m.st.money.Render(FormatUSD(acct.Balance))))
 	b.WriteString(m.field("paid in", FormatUSD(acct.Deposits)))
 	b.WriteString(m.field("spent", FormatUSD(acct.Spent)))
 
 	if !m.deps.Proven {
-		b.WriteString("\n\n  " + m.st.dim.Render("keys are only shown to whoever holds the account's key") + "\n")
+		b.WriteString("\n  " + m.st.dim.Render("keys are only shown to whoever holds the account's key") + "\n")
 	} else if len(acct.Keys) == 0 {
-		b.WriteString("\n\n  " + m.st.warn.Render("no API key yet") + "\n")
+		b.WriteString("\n  " + m.st.warn.Render("no API key yet") + "\n")
 	} else {
-		b.WriteString("\n\n  " + m.st.title.Render("api keys") + "\n")
+		b.WriteString("\n  " + m.st.title.Render("API keys:") + "\n")
 		for _, k := range acct.Keys {
 			b.WriteString("  " + m.st.accent.Render(k.Hint()) +
 				m.st.dim.Render("   last used "+ago(k.Touched)) + "\n")
 		}
 	}
 
-	b.WriteString("\n  " + m.st.title.Render("use it") + "\n")
+	b.WriteString("\n  " + m.st.title.Render("To use:") + "\n")
 	b.WriteString("  " + m.st.dim.Render("export OPENAI_BASE_URL=https://"+m.endpointHost()+"/v1") + "\n")
 	b.WriteString("  " + m.st.dim.Render("export OPENAI_API_KEY=rc_live_…") + "\n")
 
@@ -2008,7 +2014,6 @@ func (m *model) wordmark() string {
 	}
 
 	var b strings.Builder
-	b.WriteString("\n")
 	for i, line := range lines {
 		// Padded out to one width before it is centred. The drawing's lines
 		// are all a different length - it was made by hand where they were
@@ -2026,11 +2031,10 @@ func (m *model) wordmark() string {
 		}
 		b.WriteString(lipgloss.PlaceHorizontal(inside, lipgloss.Center, style.Render(line)) + "\n")
 	}
-	b.WriteString("\n")
 
-	// The page's line one is the bar's three, so the blank above the mark is
-	// the fourth of the screen and the mark runs from the fifth down.
-	top := barLines + 1
+	// The mark is the first thing on the page and the page starts on the line
+	// after the bar's bottom edge, so that is where the mark starts.
+	top := barLines
 	m.mark = box{
 		x0: 1 + (inside-widest)/2, x0y: top,
 		x1: 1 + (inside-widest)/2 + widest, y1: top + len(lines) - 1,
