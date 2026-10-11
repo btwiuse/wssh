@@ -251,6 +251,7 @@ func serve(opts *serveOptions) error {
 		Treasury:       opts.Treasury,
 		Catalogue:      cafe.DefaultCatalogue(),
 		AllowAnonymous: opts.AllowAnonymous,
+		Version:        version,
 	})
 	if err != nil {
 		return err //nolint:wrapcheck

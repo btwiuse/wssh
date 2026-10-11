@@ -71,6 +71,11 @@ type Options struct {
 	// is told how to get that and given nothing else. See anonymous.go.
 	AllowAnonymous bool
 
+	// Version is what the help screen says this server is. Empty means the
+	// server was built without one and the line is left off, rather than
+	// printing the word the ldflags would have replaced.
+	Version string
+
 	// Logger receives session-level detail. Nil means the charm default.
 	Logger *log.Logger
 }
@@ -188,6 +193,7 @@ func (s *Server) newModel(sess ssh.Session) tea.Model {
 				Treasury:  s.opts.Treasury,
 				Catalogue: s.opts.Catalogue,
 				Host:      Domain,
+				Version:   s.opts.Version,
 			},
 			st:     newStyles(),
 			width:  80,
@@ -214,6 +220,7 @@ func (s *Server) newModel(sess ssh.Session) tea.Model {
 			Treasury:  s.opts.Treasury,
 			Catalogue: s.opts.Catalogue,
 			Host:      Domain,
+			Version:   s.opts.Version,
 		},
 		st:      newStyles(),
 		view:    screenHome,

@@ -392,6 +392,42 @@ func TestANamedUsernameOutranksTheKeyThatAuthenticated(t *testing.T) {
 	}
 }
 
+// The help screen says which server this is. It is the screen somebody goes
+// to when they need to know, and the answer has to come from the server
+// rather than from the binary the client happens to have.
+//
+// A build with no version ldflags must say nothing at all: a blank line, or a
+// bare "dev", reads as a bug rather than as an unversioned build.
+func TestTheHelpScreenSaysWhichServerThisIs(t *testing.T) {
+	m := model{st: newStyles(), width: 100, deps: deps{Version: "0.1.0"}}
+	if got := m.renderHelp(); !strings.Contains(got, "server version 0.1.0") {
+		t.Errorf("the help screen does not say the version:\n%s", got)
+	}
+
+	for _, none := range []string{"", "   ", "dev"} {
+		got := model{st: newStyles(), width: 100, deps: deps{Version: none}}.renderHelp()
+		if strings.Contains(got, "server version") {
+			t.Errorf("an unversioned build (%q) printed a version line", none)
+		}
+	}
+}
+
+// The version has to survive the trip from Options to the model, which is
+// the same deps plumbing every other session fact rides.
+func TestVersionReachesTheAccountScreenFromOptions(t *testing.T) {
+	srv, err := New(Options{
+		Ledger:   testLedger(t),
+		Treasury: testTreasury(),
+		Version:  "9.9.9",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if srv.opts.Version != "9.9.9" {
+		t.Errorf("the version did not survive: %q", srv.opts.Version)
+	}
+}
+
 func TestNewRefusesAnUnusableTreasury(t *testing.T) {
 	ledger, err := OpenLedger("")
 	if err != nil {

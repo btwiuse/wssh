@@ -103,6 +103,12 @@ type deps struct {
 	// pasted into.
 	Host string
 
+	// Version is what the help screen says this server is. Empty means the
+	// line is left off rather than printed blank: a binary built without the
+	// version ldflags has no version, and an empty one looks like something
+	// failed to load.
+	Version string
+
 	// Ctx is the session's context, so a deposit stops when the client hangs
 	// up rather than holding a goroutine until its own deadline.
 	Ctx context.Context
@@ -680,6 +686,14 @@ func (m model) renderHelp() string {
 	b.WriteString("  " + m.st.dim.Render("Your private key never leaves your machine. This server asks the agent") + "\n")
 	b.WriteString("  " + m.st.dim.Render("you forwarded with ssh -A, and checks the transaction it gets back.") + "\n")
 	b.WriteString("  " + m.st.dim.Render("The same, more carefully, is at "+Domain+".") + "\n")
+
+	// The version, because this screen is where somebody goes to work out what
+	// they are talking to - and the answer comes from the server, not from the
+	// binary they happen to have. Left off entirely when there is none: a blank
+	// or bare "dev" line reads as a bug, where no line reads as a build.
+	if v := strings.TrimSpace(m.deps.Version); v != "" && v != "dev" {
+		b.WriteString("\n  " + m.st.dim.Render("server version "+v) + "\n")
+	}
 	return b.String()
 }
 
