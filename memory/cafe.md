@@ -672,17 +672,35 @@ last thing this program should lose. `money` was near-white (`#f8fafc`), which
 on a light terminal is not a number at all; the same run on a dark one showed
 `$12.50` perfectly.
 
-The wordmark was the other half of it. Its lower five lines were `#334155`,
-which is 1.8:1 on a dark background - so "the ascii art does not say anything"
-was a contrast failure wearing a legibility failure's clothes. It is `#94a3b8`
-now, and the light set's equivalent is dark enough to clear the same bar.
+**Dark is the primary palette and the default** - it is the one that was tuned
+by eye, and it is what a program nobody has told anything draws.
+
+The two greys that changed in it were not changed for the light background.
+Measured against every dark terminal anybody actually uses:
+
+| | `#0b0f19` | `#1e1e2e` | `#282a36` | light `#fdfdfd` |
+|---|---|---|---|---|
+| `brandDim` was `#334155` | 1.9:1 | 1.6:1 | 1.4:1 | 10.2:1 |
+| `brandDim` is `#94a3b8` | 7.5:1 | 6.4:1 | 5.6:1 | 2.5:1 |
+| `label`/`dim` was `#64748b` | 4.0:1 | 3.5:1 | 3.0:1 | 4.7:1 |
+| `money` is `#f8fafc` | 18.3:1 | 15.7:1 | 13.6:1 | **1.0:1** |
+
+So "the ascii art does not say anything" was a contrast failure on **any** dark
+terminal, not one that only shows up on somebody's: `#334155` is below 2:1
+everywhere it is dark. The wordmark is `#94a3b8` now, and the light set's
+equivalent is dark enough to clear the same bar. `money` on light was 1.0:1 -
+a number drawn in exactly the colour of the page it is on.
 
 `TestEveryColourReadsAgainstTheBackgroundItIsFor` checks every colour against
-both backdrops with the WCAG ratio: 4.5:1 for anything that is text, 1.6:1 for
-the frame's edges, which are not. **"Does this look right" is a question about
-the terminal the person is looking at**, so the answer is computed rather than
-eyeballed - the eyeballing is what found the bug, and it found it on the
-terminal that was fine.
+**five** backdrops - three real dark terminals and two light ones - with the
+WCAG ratio: 4.5:1 for anything that is text, 1.6:1 for the frame's edges,
+which are not. Several of each, because "reads on dark" is a claim about a
+range of terminals rather than about one, and the palette was tuned against
+whatever was in front of the person looking at it.
+
+**"Does this look right" is a question about the terminal the person is looking
+at**, so the answer is computed rather than eyeballed - and the eyeballing is
+what found the bug, on the terminal that was fine.
 
 Two things are deliberately not per-session:
 

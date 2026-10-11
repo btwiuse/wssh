@@ -1670,17 +1670,24 @@ func TestEveryScreenFillsItsWindow(t *testing.T) {
 // chosen for, rather than checked by eye on whichever terminal it happened to
 // be looked at on.
 func TestEveryColourReadsAgainstTheBackgroundItIsFor(t *testing.T) {
-	backdrop := func(hex string) color.Color { return lipgloss.Color(hex) }
-	for _, bg := range []struct {
+	// Several of each, because "reads on dark" is a claim about a range of
+	// terminals rather than about one: the palette was tuned by eye against
+	// whatever was in front of it, and an eye in front of a light terminal is
+	// how a near-white number ends up on a white one.
+	backdrops := []struct {
 		name string
 		hex  string
-		bg   color.Color
+		dark bool
 	}{
-		{name: "dark", hex: "#0b0f19"},
-		{name: "light", hex: "#fdfdfd"},
-	} {
-		bg.bg = backdrop(bg.hex)
-		st := newStyles(bg.name == "dark")
+		{"very dark", "#0b0f19", true},
+		{"dracula", "#1e1e2e", true},
+		{"one dark", "#282a36", true},
+		{"near white", "#fdfdfd", false},
+		{"white", "#ffffff", false},
+	}
+
+	for _, bg := range backdrops {
+		st := newStyles(bg.dark)
 		// 4.5:1 is the WCAG AA threshold for body text. Anything below it is
 		// decoration at best, and the numbers are not decoration.
 		for _, swatch := range []struct {
@@ -1703,14 +1710,14 @@ func TestEveryColourReadsAgainstTheBackgroundItIsFor(t *testing.T) {
 			{"home idle", st.homeIdle.GetForeground()},
 			{"home active", st.homeActive.GetForeground()},
 		} {
-			if got := contrast(swatch.col, bg.bg); got < 4.5 {
-				t.Errorf("%s background: %s is %.1f:1, want at least 4.5:1", bg.name, swatch.what, got)
+			if got := contrast(swatch.col, lipgloss.Color(bg.hex)); got < 4.5 {
+				t.Errorf("%s background %s: %s is %.1f:1, want at least 4.5:1", paletteName(bg.dark), bg.name, swatch.what, got)
 			}
 		}
 		// The frame's own edges are allowed to be quiet - they are not text -
 		// but they have to be visible, or the frame is not a frame.
-		if got := contrast(st.window.GetBorderTopForeground(), bg.bg); got < 1.6 {
-			t.Errorf("%s background: the frame's edge is %.1f:1, want at least 1.6:1", bg.name, got)
+		if got := contrast(st.window.GetBorderTopForeground(), lipgloss.Color(bg.hex)); got < 1.6 {
+			t.Errorf("%s background %s: the frame's edge is %.1f:1, want at least 1.6:1", paletteName(bg.dark), bg.name, got)
 		}
 	}
 }
@@ -1718,6 +1725,14 @@ func TestEveryColourReadsAgainstTheBackgroundItIsFor(t *testing.T) {
 // contrast is the WCAG ratio between two colours, which is the only honest way
 // to ask whether a colour reads: "does this look right" is a question about
 // the terminal the person is looking at.
+// paletteName is which palette a backdrop is measured against.
+func paletteName(dark bool) string {
+	if dark {
+		return "dark"
+	}
+	return "light"
+}
+
 func contrast(a, b color.Color) float64 {
 	lum := func(c color.Color) float64 {
 		r, g, bl, _ := c.RGBA()
