@@ -892,13 +892,16 @@ four, and `Key.Hint()` puts them together; a key minted before `Prefix` existed
 falls back to `rc_...wxyz` rather than pretending to a prefix it does not have.
 
 **A key minted before `Prefix` existed cannot show one**, and falls back to
-`rc_…wxyz`. The digest is a hash of the key, not the key, so the first four
+`rc_...wxyz`. The digest is a hash of the key, not the key, so the first four
 cannot be recovered from a ledger that only has it - the fallback is the honest
 shape for those, not a guess at one.
 
-`proven` next to an account said how the account was established rather than
-what that gets you, and had to be explained to somebody reading the screen. It
-is **`yours`** now.
+**There is no marker on the account line saying whether the account was
+proved.** It was there as `proven`, and then as `yours`, and both had to be
+explained to somebody reading the screen. A marker that has to be explained is
+not a marker: whether an account can be spent from is a difference every action
+already refuses to make on its own, and the read-only banner says it when it
+is the only thing that is true.
 
 The only place the full key is ever printed is the notice on the one screen
 where it is minted.

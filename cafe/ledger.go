@@ -364,16 +364,16 @@ func (l *Ledger) MintKey(address, label string) (string, error) {
 // is eight characters of the whole thing - four more than before, which still
 // narrows nothing and does let somebody find their own key in a list.
 //
-// One ellipsis character rather than three dots, for the same reason
-// shortAddress and fit use one: `…` is a column and a half in a proportional
-// font and a single cell in a terminal, where `...` is three of them. A key
-// shown as an abbreviation ought to be as wide as the abbreviation it stands
-// for, and everything else this program truncates already says it that way.
+// Three dots rather than the one ellipsis character `shortAddress` uses: a key
+// is not a string this program is truncating, it is an abbreviation somebody is
+// going to read character by character, and `rc_abcd...wxyz` says the same
+// thing as `rc_abcd…wxyz` in a font where the ellipsis is not three times
+// narrower than it is here.
 func (k Key) Hint() string {
 	if k.Prefix == "" {
-		return "rc_…" + k.Label
+		return "rc_..." + k.Label
 	}
-	return "rc_" + k.Prefix + "…" + k.Label
+	return "rc_" + k.Prefix + "..." + k.Label
 }
 
 // prefixFor is the first four characters of a key, for Hint.

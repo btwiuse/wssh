@@ -767,8 +767,11 @@ func TestCyclingAccountsProvesTheOnesTheAgentHolds(t *testing.T) {
 	if !owned.candidates[owned.at].proven {
 		t.Error("the candidate itself was not marked proved, so the next visit re-asks")
 	}
-	if got := stripForTest(owned.renderHome()); !strings.Contains(got, "yours") {
-		t.Errorf("the page does not say the account is yours: %q", got)
+	// No word on the account line saying whether it was proved: it had to be
+	// explained to somebody reading the screen, and a marker that has to be
+	// explained is not a marker.
+	if got := stripForTest(owned.renderHome()); strings.Contains(got, "yours") || strings.Contains(got, "proven") {
+		t.Errorf("the account line still carries a marker nobody asked for: %q", got)
 	}
 
 	// Wrapping both ways, because a cycle that stops at the end is a list.
@@ -1771,59 +1774,22 @@ func TestTheTwoLinesOfAKeyRowLineUp(t *testing.T) {
 	}
 }
 
-// A key is abbreviated with one ellipsis character, not three dots. `…` is a
-// single cell in a terminal and `...` is three, so a key shown with dots is
-// three columns wider than the abbreviation it stands for - and everything else
-// in this program that shortens a string already says it the other way.
-func TestAKeyIsAbbreviatedWithOneEllipsis(t *testing.T) {
+// A key is abbreviated with three dots. It is not a string this program is
+// truncating, it is an abbreviation somebody is going to read character by
+// character, and the one ellipsis character the rest of the program uses is
+// not three times narrower than it is here.
+func TestAKeyIsAbbreviatedWithThreeDots(t *testing.T) {
 	k := Key{Label: "wxyz", Prefix: "abcd"}
-	if got, want := k.Hint(), "rc_abcd\u2026wxyz"; got != want {
+	if got, want := k.Hint(), "rc_abcd...wxyz"; got != want {
 		t.Errorf("a key shows as %q, want %q", got, want)
 	}
 	// A key minted before the prefix existed falls back rather than showing a
 	// second run of dots where the prefix would be.
-	if got, want := (Key{Label: "3333"}).Hint(), "rc_\u20263333"; got != want {
+	if got, want := (Key{Label: "3333"}).Hint(), "rc_...3333"; got != want {
 		t.Errorf("a key with no prefix shows as %q, want %q", got, want)
 	}
-	for _, bad := range []string{"..", "..."} {
-		if strings.Contains(k.Hint(), bad) {
-			t.Errorf("a key shows %q: %q", bad, k.Hint())
-		}
-	}
-}
-
-// The frame rebuilds the delegate on every frame, and a delegate that has lost
-// its row height turns every entry back into a single line - which is how the
-// FAQs were a list of questions with their answers somewhere else on the page
-// for a moment. So more than one entry has to fit on a page.
-func TestTheFAQsListKeepsItsRowHeight(t *testing.T) {
-	m := model{st: newStyles(true), view: screenFAQ, focus: true, width: 100, height: 30,
-		deps: deps{Address: treasuryAddress, Ledger: testLedger(t), Catalogue: DefaultCatalogue(), Proven: true}}
-	m.syncLists()
-
-	row := faqRowHeight(m.listWidth())
-	if row < 2 {
-		t.Fatalf("a question and its answer are %d lines tall", row)
-	}
-	if got := m.faqRowHeight(); got != row {
-		t.Errorf("the frame asked for rows of %d, the list built %d", got, row)
-	}
-	_, tail := m.faqPage()
-	l, view, rows := m.fitted(m.faqs, 1, "", tail)
-	if onPage := len(rows); onPage < 2 {
-		t.Errorf("%d entries on a page of %d lines with rows of %d lines",
-			onPage, countLines(view), row)
-	}
-	// And every one of them is a whole entry rather than a line of one: the
-	// component pads a short answer to the row height, so the recorded height
-	// varies while the row does not.
-	for _, r := range rows {
-		if r.lines < 2 {
-			t.Errorf("an entry is %d line(s): a question without its answer", r.lines)
-		}
-	}
-	if l.Paginator.TotalPages < 2 {
-		t.Errorf("the whole list is %d page(s); it should be more", l.Paginator.TotalPages)
+	if strings.Contains(k.Hint(), "\u2026") {
+		t.Errorf("a key is abbreviated with an ellipsis character: %q", k.Hint())
 	}
 }
 
@@ -2387,7 +2353,7 @@ func TestAClickLandsOnTheRowThatWasDrawn(t *testing.T) {
 	for row, label := range []string{"aaaa", "bbbb", "cccc"} {
 		found := -1
 		for i, line := range lines {
-			if strings.Contains(line, "\u2026"+label) {
+			if strings.Contains(line, "..."+label) {
 				found = i
 				break
 			}

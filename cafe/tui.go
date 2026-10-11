@@ -1777,21 +1777,16 @@ func (m model) renderAccount() string {
 	}
 	out := lead + m.st.value.Render(whole)
 
-	// Whether this one can be spent from is said here rather than as a banner
-	// on every page: it is the difference between a balance you may spend and
-	// one you may only read, and it belongs next to the number.
+	// The agent's comment, and nothing else.
 	//
-	// "yours" rather than "proven", because "proven" says how the account was
-	// established and "yours" says what that gets you - and the first version
-	// of this had to be explained to somebody reading the screen.
+	// This line used to carry a word saying whether the account was proved -
+	// first "proven", then "yours", on the grounds that "yours" says what that
+	// gets you rather than how the account was established. Both had to be
+	// explained to somebody reading the screen, and a marker that has to be
+	// explained is not a marker. Whether it can be spent from is a difference
+	// every action already refuses to make on its own, and the read-only
+	// banner says it when it is the only thing that is true.
 	detail := strings.TrimSpace(c.comment)
-	if c.proven {
-		if detail == "" {
-			detail = "yours"
-		} else {
-			detail += "  " + m.st.okText.Render("yours")
-		}
-	}
 	if detail == "" {
 		return out + "\n"
 	}
