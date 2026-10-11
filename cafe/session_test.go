@@ -1136,12 +1136,19 @@ func TestTheKeyIsAboveTheListAndNotInANotice(t *testing.T) {
 	}
 }
 
-// OSC 52 is a request the terminal may refuse, and the one thing left when it
-// does is the mouse. A program holding mouse reporting takes the terminal's own
-// text selection with it, so a page whose whole job is handing over a string
-// that cannot be printed twice has to give it back for as long as that string
-// is on the screen.
-func TestTheMouseIsHandedBackWhileAKeyIsOnScreen(t *testing.T) {
+// A key on screen must not cost the page its clicks.
+//
+// It did, once. Mouse reporting was handed back on the api keys page while a
+// fresh key was up, so that a terminal refusing the clipboard escape sequence
+// could have the key selected by hand - and a terminal that is not reporting
+// the mouse reports nothing at all, so every tab and every row went dead on
+// exactly the page a person is most likely to be clicking away from. Worse
+// than dead: the key is cleared by leaving the page, so the one thing you could
+// not do was get off the page.
+//
+// So this holds the mouse on, and checks it end to end rather than by reading
+// the mode: a click on a tab has to leave the page with a key on screen.
+func TestClicksStillWorkWhileAKeyIsOnScreen(t *testing.T) {
 	ledger := testLedger(t)
 	d := deps{
 		Address:   treasuryAddress,
@@ -1154,22 +1161,50 @@ func TestTheMouseIsHandedBackWhileAKeyIsOnScreen(t *testing.T) {
 	m := model{deps: d, st: newStyles(true), view: screenKeys, focus: true,
 		account: ledger.Account(d.Address), width: 100, height: 40}
 	m.syncLists()
-	if got := m.View().MouseMode; got != tea.MouseModeCellMotion {
-		t.Fatalf("with no key on screen the mouse is %v, want cell motion so clicks work", got)
-	}
 
 	next, cmd := m.onKey(tea.KeyPressMsg(tea.Key{Code: 'n', Text: "n"}))
 	m = next.(model)
 	next, _ = m.Update(cmd())
 	m = next.(model)
-	if got := m.View().MouseMode; got != tea.MouseModeNone {
-		t.Errorf("with a key on screen the mouse is %v, want none, so the key can be selected by hand", got)
+	if m.fresh == "" {
+		t.Fatal("no key on screen; the rest of this proves nothing")
 	}
 
-	next, _ = m.onKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
-	m = next.(model)
 	if got := m.View().MouseMode; got != tea.MouseModeCellMotion {
-		t.Errorf("after leaving the page the mouse is %v, want cell motion back", got)
+		t.Fatalf("with a key on screen the mouse is %v, want cell motion so clicks still work", got)
+	}
+
+	// And the click itself, through the handler the frame hands the program,
+	// at the middle of the tab the frame itself recorded rather than at a
+	// coordinate typed in here. The bar moves with the names in it and the list
+	// moves with the terminal, so a hardcoded position is one this test has to
+	// keep repairing - and parsing the drawn line to find it is worse, because
+	// the box drawing is three bytes a character and a byte offset is not a
+	// column. The frame already knows where every tab landed; ask it.
+	_, where := m.frame()
+	var hit box
+	found := false
+	for _, t := range where.tabs {
+		if t.view == screenModels {
+			hit, found = t.area, true
+		}
+	}
+	if !found {
+		t.Fatal("the frame recorded no models tab to click")
+	}
+	x := (hit.x0 + hit.x1) / 2
+	y := hit.x0y
+	if got, ok := where.link(x, y); !ok || got != screenModels {
+		t.Fatalf("the middle of the models tab, (%d,%d), resolves to %v (ok=%v)", x, y, got, ok)
+	}
+
+	cmd = clickTo(where)(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	if cmd == nil {
+		t.Fatal("a click on a tab with a key on screen produced nothing")
+	}
+	next, _ = m.Update(cmd())
+	if got := next.(model).view; got != screenModels {
+		t.Errorf("the click left the session on %v, want the models page", got)
 	}
 }
 

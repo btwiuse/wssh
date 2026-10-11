@@ -588,18 +588,17 @@ func (m model) View() tea.View {
 	// movement reported. Over ssh this is the difference between a program
 	// that responds and one that floods the connection.
 	//
-	// It also costs the terminal its own text selection, because a terminal
-	// that has given mouse reporting to a program does not select text on a
-	// drag. That is the right trade on every page except the one carrying a
-	// key that exists exactly once: there, `y` is a request the terminal may
-	// refuse - tmux refuses unless it is told otherwise - and the only thing
-	// left is selecting the key by hand. So the mouse is handed back for
-	// exactly as long as a key is on the screen, and taken back afterwards.
-	if m.fresh != "" {
-		v.MouseMode = tea.MouseModeNone
-	} else {
-		v.MouseMode = tea.MouseModeCellMotion
-	}
+	// Always on, including on the page holding a key that exists once. It was
+	// briefly handed back there, so that a terminal refusing the clipboard
+	// escape sequence could have the key selected by hand - and that took the
+	// clicks with it, because a terminal not reporting the mouse reports
+	// nothing at all. The page then had no way out: the key is cleared by
+	// leaving the page, and leaving the page is what the click would have done.
+	// Trading every tab and every row on that page for a fallback that only one
+	// terminal needs is the wrong way round. `y` is the route, and the key is
+	// printed plain so that whatever does allow a selection - shift-drag, or a
+	// terminal that asks - still gets the characters and nothing else.
+	v.MouseMode = tea.MouseModeCellMotion
 	v.OnMouse = clickTo(where)
 	return v
 }
