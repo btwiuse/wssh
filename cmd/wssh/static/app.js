@@ -862,10 +862,15 @@ only signatures come back, and every signature asks you first."
               Something in this session wants a signature from a key in this page.
               The key itself has not left the browser.
             </p>
-            <p class="text-xs font-mono text-slate-200 break-all bg-slate-950
-                      border border-slate-700 rounded px-2 py-1 mb-3">
-              ${signature.summary}
-            </p>
+            <!--
+              A preformatted block, not a paragraph: the summary is YAML and
+              a paragraph collapses its newlines into one line, which takes
+              away the only structure it has. break-all stays for the long
+              addresses, which would otherwise overflow the box sideways.
+            -->
+            <pre class="text-xs font-mono text-slate-200 break-all whitespace-pre-wrap
+                         bg-slate-950 border border-slate-700 rounded px-2 py-1 mb-3
+                         overflow-x-auto">${signature.summary}</pre>
             <div class="flex justify-end gap-2">
               <button class="px-3 py-1 text-xs rounded bg-slate-700 hover:bg-slate-600"
                       onClick=${() => answerSignature('no')}>refuse</button>

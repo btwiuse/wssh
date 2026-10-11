@@ -245,93 +245,104 @@ func readInstruction(data []byte, keys []string, at int) (DecodedInstruction, in
 	return ix, used, nil
 }
 
-// Summarise describes a signature in words, decoding it when it is a
-// transaction.
+// Summarise describes a signature as YAML.
 //
-// The three outcomes are deliberate and none of them is "show a hex string":
+// It is YAML rather than prose for two reasons. A person approving a signature
+// reads it as structure - what pays, what may change, what it calls - and
+// indentation carries that where a paragraph cannot. And it is stable: what a
+// person approved can be pasted somewhere and compared, which a sentence
+// written for the moment cannot.
 //
-//   - A message that decodes: what it pays with, what it calls, and what the
-//     data says.
-//   - Something that opens like a message and does not decode: said so, with
-//     the reason. Falling through to a hex dump here would let a malformed
-//     transaction pass for an ordinary blob of some other kind.
-//   - Anything else: not a transaction, and said so. Most signatures this sees
-//     are SSH wire protocol - a host key, a userauth request - and there is no
-//     transaction to decode, so the useful thing to say is that.
+// Every case has the same shape, so a reader never has to guess. A transaction
+// carries its facts. Anything else carries a note saying what it is, because
+// the most useful thing to say about a signature that is not a transaction is
+// that it is not one.
+//
+// Nothing here falls back to a hex dump for a transaction. A person asked to
+// approve bytes they cannot read has been asked nothing.
 func Summarise(name string, data []byte) string {
+	var out strings.Builder
+	fmt.Fprintf(&out, "signature:\n  key: %s\n", name)
+
 	if LooksLikeMessage(data) {
 		msg, err := DecodeMessage(data)
 		if err != nil {
-			return fmt.Sprintf(
-				"%s wants to sign something that looks like a Solana transaction but could not be read: %v.\n"+
-					"Nothing was signed. Refuse this unless you know why it is unreadable.",
-				name, err)
+			fmt.Fprintf(&out,
+				"  kind: unreadable-solana-transaction\n  reason: %q\n", err.Error())
+			out.WriteString("  warning: this could not be read, and nothing about it should be approved\n")
+			return strings.TrimRight(out.String(), "\n")
 		}
-		return fmt.Sprintf("%s wants to sign this Solana transaction:\n%s", name, msg.Summary())
+		msg.writeYAML(&out)
+		return strings.TrimRight(out.String(), "\n")
 	}
 
+	fmt.Fprintf(&out, "  kind: not-a-solana-transaction\n  size_bytes: %d\n", len(data))
 	if text := printable(data); text != "" {
-		return fmt.Sprintf("%s wants to sign %d bytes: %s", name, len(data), text)
+		fmt.Fprintf(&out, "  data: %q\n", text)
+	} else {
+		fmt.Fprintf(&out, "  data: %s\n", hexPreview(data))
 	}
-	return fmt.Sprintf(
-		"%s wants to sign %d bytes. This is not a Solana transaction.\n%s",
-		name, len(data), hexPreview(data))
+	return strings.TrimRight(out.String(), "\n")
 }
 
-// Summary is the transaction in words.
-//
-// The order is the order a person decides in: what pays, what may be changed,
-// what it calls, and only then the bytes. Hex goes last and only where there
-// is nothing else to say - a data field nobody can name is shown as data, not
-// as something to decode, because guessing at an encoding is how an approval
-// dialog starts describing the wrong thing.
-func (m Message) Summary() string {
-	var out strings.Builder
+// writeYAML is the transaction, in the order a person decides in: who pays,
+// what may change, what it calls, and only then bytes.
+func (m Message) writeYAML(out *strings.Builder) {
+	out.WriteString("  kind: solana-transaction\n")
+	fmt.Fprintf(out, "  fee_payer: %s\n", m.FeePayer)
+	fmt.Fprintf(out, "  blockhash: %s\n", m.Blockhash)
 
-	fmt.Fprintf(&out, "  fee payer    %s\n", m.FeePayer)
-	fmt.Fprintf(&out, "  blockhash    %s\n", m.Blockhash)
-
-	if touched := m.accountsTouched(); len(touched) > 0 {
-		out.WriteString("  may change\n")
-		for _, a := range touched {
-			fmt.Fprintf(&out, "    %s\n", a.Address)
+	out.WriteString("  accounts:\n")
+	for _, a := range m.Accounts {
+		role := "read_only"
+		switch {
+		case a.Signer && a.Writable:
+			role = "signs+may_write"
+		case a.Signer:
+			role = "signs"
+		case a.Writable:
+			role = "may_write"
 		}
-	}
-	// One signer is the fee payer and is already named; more than one means
-	// somebody other than the payer has to sign, which is its own fact.
-	if signers := m.signers(); len(signers) > 1 {
-		names := make([]string, 0, len(signers)-1)
-		for _, a := range signers[1:] {
-			names = append(names, a.Address)
-		}
-		fmt.Fprintf(&out, "  also signs   %s\n", strings.Join(names, ", "))
+		fmt.Fprintf(out, "    - address: %s\n      role: %s\n", a.Address, role)
 	}
 
-	for i, ix := range m.Instructions {
-		fmt.Fprintf(&out, "  %d. %s\n", i+1, describeProgram(ix.ProgramID))
+	if short := m.shortInstructions(); len(short) > 0 {
+		out.WriteString("  warning: this transaction cannot be carried out\n")
+		for _, why := range short {
+			fmt.Fprintf(out, "    - %s\n", why)
+		}
+	}
+
+	out.WriteString("  instructions:\n")
+	for _, ix := range m.Instructions {
+		fmt.Fprintf(out, "    - program: %s\n", describeProgram(ix.ProgramID))
+		fmt.Fprintf(out, "      program_id: %s\n", ix.ProgramID)
+		for _, account := range ix.Accounts {
+			fmt.Fprintf(out, "      account: %s\n", account)
+		}
 		switch {
 		case describeInstruction(ix) != "":
-			fmt.Fprintf(&out, "     %s\n", describeInstruction(ix))
+			fmt.Fprintf(out, "      does: %q\n", describeInstruction(ix))
 		case printable(ix.Data) != "":
-			// Text the instruction carries. For a memo this is the
-			// whole point of the transaction, and showing it as hex
-			// would leave the one thing worth reading out of the one
-			// thing a person cannot read.
-			fmt.Fprintf(&out, "     data %q\n", printable(ix.Data))
+			// Text the instruction carries. For a memo this is the whole
+			// point of the transaction, and showing it as hex would leave the
+			// one thing worth reading out of the one thing a person cannot
+			// read.
+			fmt.Fprintf(out, "      data: %q\n", printable(ix.Data))
 		default:
-			fmt.Fprintf(&out, "     data %s\n", hexPreview(ix.Data))
+			fmt.Fprintf(out, "      data: %s\n", hexPreview(ix.Data))
 		}
 	}
 
 	if m.LookupTables > 0 {
-		// Said plainly rather than left out: those names live on chain,
-		// and a list that silently omitted them would be a shorter list
-		// than the transaction touches.
-		fmt.Fprintf(&out,
-			"  note: this transaction uses %d address lookup table(s), so some account names are not shown. "+
-				"Resolving one needs an RPC node.\n", m.LookupTables)
+		// Said plainly rather than left out: those names live on chain, and
+		// a list that silently omitted them would be shorter than the list
+		// the transaction touches.
+		fmt.Fprintf(out, "  lookup_tables: %d\n", m.LookupTables)
+		out.WriteString(
+			"  warning: some account names live in address lookup tables and are not shown; " +
+				"resolving one needs an RPC node\n")
 	}
-	return strings.TrimRight(out.String(), "\n")
 }
 
 // accountsTouched is every account the transaction may write to, which is the
@@ -382,21 +393,56 @@ func describeInstruction(ix DecodedInstruction) string {
 		return ix.Accounts[1]
 	}
 
+	// A System instruction's accounts are fixed by the program, so an
+	// instruction that names fewer of them than it needs cannot be carried
+	// out. Saying "transfers N lamports to ?" would be describing a
+	// transaction that cannot exist, so nothing is described and the
+	// shortfall is reported at the top instead, where a warning belongs.
 	switch kind {
 	case 0:
 		if len(ix.Accounts) >= 2 {
 			return fmt.Sprintf("creates account %s with %d lamports", ix.Accounts[1], amount())
 		}
 	case 2:
-		return fmt.Sprintf("transfers %d lamports to %s", amount(), destination())
+		if len(ix.Accounts) >= 2 {
+			return fmt.Sprintf("transfers %d lamports to %s", amount(), destination())
+		}
 	case 3:
 		if len(ix.Accounts) >= 2 {
 			return fmt.Sprintf("creates account %s with %d lamports, from a seed", ix.Accounts[1], amount())
 		}
 	case 11:
-		return fmt.Sprintf("transfers %d lamports to %s, from an account with a seed", amount(), destination())
+		if len(ix.Accounts) >= 2 {
+			return fmt.Sprintf("transfers %d lamports to %s, from an account with a seed", amount(), destination())
+		}
 	}
 	return ""
+}
+
+// shortInstructions are the instructions whose shape cannot be carried out,
+// by name rather than by description: a System transfer with one account is
+// not a transfer, and rendering it as one would be the worst thing this file
+// could do.
+func (m Message) shortInstructions() []string {
+	var out []string
+	for i, ix := range m.Instructions {
+		if ix.ProgramID != SystemProgramID || len(ix.Data) < 4 {
+			continue
+		}
+		needs := 0
+		switch binary.LittleEndian.Uint32(ix.Data[:4]) {
+		case 0, 3: // CreateAccount, CreateAccountWithSeed
+			needs = 2
+		case 2, 11: // Transfer, TransferWithSeed
+			needs = 2
+		}
+		if needs > 0 && len(ix.Accounts) < needs {
+			out = append(out, fmt.Sprintf(
+				"instruction %d calls the System program but names %d of the 2 accounts it needs",
+				i+1, len(ix.Accounts)))
+		}
+	}
+	return out
 }
 
 // describeProgram names a program, because a base58 id is not something a

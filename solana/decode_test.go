@@ -107,7 +107,7 @@ func TestSummariseNamesTheTransaction(t *testing.T) {
 			t.Errorf("the summary does not mention %q:\n%s", want, got)
 		}
 	}
-	if strings.Contains(got, "not a Solana transaction") {
+	if strings.Contains(got, "not-a-solana-transaction") {
 		t.Errorf("a transaction was described as not one:\n%s", got)
 	}
 	// No hex dump in the transaction case: the point is that a person can
@@ -124,10 +124,10 @@ func TestAnUnreadableTransactionSaysSo(t *testing.T) {
 	truncated := goldenMessage(t)[:20]
 	got := Summarise("key", truncated)
 
-	if !strings.Contains(got, "could not be read") {
+	if !strings.Contains(got, "kind: unreadable-solana-transaction") {
 		t.Errorf("an unreadable message is not reported as one:\n%s", got)
 	}
-	if strings.Contains(got, "not a Solana transaction") {
+	if strings.Contains(got, "not-a-solana-transaction") {
 		t.Errorf("something that opened like a transaction was called something else:\n%s", got)
 	}
 }
@@ -137,7 +137,7 @@ func TestAnUnreadableTransactionSaysSo(t *testing.T) {
 func TestSomethingThatIsNotATransactionSaysSo(t *testing.T) {
 	got := Summarise("key", []byte{0x00, 0x00, 0x00, 0x07, 's', 's', 'h', '-', 'e', 'd'})
 
-	if !strings.Contains(got, "not a Solana transaction") {
+	if !strings.Contains(got, "kind: not-a-solana-transaction") {
 		t.Errorf("the summary does not say what this is:\n%s", got)
 	}
 }
@@ -315,5 +315,109 @@ func appendCompactU16ForTest(dst []byte, n int) []byte {
 		if n == 0 {
 			return dst
 		}
+	}
+}
+
+// A System transfer that names one account is not a transfer. Rendering it as
+// one - "transfers N lamports to ?" - describes a transaction that cannot
+// exist, which is the one thing this reader must never do. Nothing is
+// described and the shortfall is said at the top instead.
+func TestATransferMissingItsSourceIsFlaggedNotDescribed(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	dest, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	payerAddr := siws.Base58Encode(pub)
+	// One account, which is what sol-tx's transfer currently asks for.
+	ix, err := NewTransfer(TransferInstruction{
+		Lamports: 1000000000,
+		To:       siws.Base58Encode(dest),
+	})
+	if err != nil {
+		t.Fatalf("transfer: %v", err)
+	}
+	unsigned, err := BuildTransaction(agentkey.SolanaTxRequest{
+		Blockhash:    "B1P9Y4gHoGaSX9FS6nUeAb5Jx3ATjNPGmc7YE4jfEQUZ",
+		Signer:       payerAddr,
+		Instructions: ix,
+	})
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	got := Summarise("key", messageOf(unsigned))
+	if strings.Contains(got, "?") {
+		t.Errorf("the summary guesses at a destination:\\n%s", got)
+	}
+	if !strings.Contains(got, "cannot be carried out") {
+		t.Errorf("the summary does not say the transaction is impossible:\\n%s", got)
+	}
+	if !strings.Contains(got, "1 of the 2 accounts") {
+		t.Errorf("the summary does not say what is missing:\\n%s", got)
+	}
+}
+
+// And the ordinary case, where the accounts are all there, is described and
+// carries no warning - so the warning means something when it appears.
+func TestAWholeTransferIsDescribedWithoutWarning(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	priv, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	payerAddr := siws.Base58Encode(pub)
+	destAddr := siws.Base58Encode(priv)
+
+	unsigned, err := BuildTransaction(agentkey.SolanaTxRequest{
+		Blockhash: "B1P9Y4gHoGaSX9FS6nUeAb5Jx3ATjNPGmc7YE4jfEQUZ",
+		Signer:    payerAddr,
+		Instructions: []agentkey.SolanaInstruction{{
+			ProgramID: SystemProgramID,
+			Accounts: []agentkey.SolanaAccount{
+				{Address: payerAddr, IsSigner: true, IsWritable: true},
+				{Address: destAddr, IsWritable: true},
+			},
+			DataBase58: "3Bxs3zzLZLuLQEYX",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	got := Summarise("key", messageOf(unsigned))
+	if strings.Contains(got, "cannot be carried out") {
+		t.Errorf("a whole transfer was called a broken one:\\n%s", got)
+	}
+	if !strings.Contains(got, "transfers 1000000000 lamports to "+destAddr) {
+		t.Errorf("the summary does not say what the transfer does:\\n%s", got)
+	}
+}
+
+// YAML rather than prose, because a person reads structure and because what
+// was approved has to survive being pasted somewhere and compared.
+func TestTheSummaryIsYaml(t *testing.T) {
+	got := Summarise("ssh-ed25519 SHA256:abc", goldenMessage(t))
+	for _, want := range []string{
+		"signature:",
+		"  key: ssh-ed25519 SHA256:abc",
+		"  kind: solana-transaction",
+		"  fee_payer:",
+		"  accounts:",
+		"      role: signs+may_write",
+		"  instructions:",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the summary is missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "wants to sign") {
+		t.Errorf("the summary is prose rather than YAML:\n%s", got)
 	}
 }
