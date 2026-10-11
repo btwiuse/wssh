@@ -1204,7 +1204,7 @@ func (m model) tabBar() (string, []span) {
 	// then nothing. The name is never one of them - it is the way back.
 	var address string
 	for _, candidate := range []string{m.address(), m.st.dim.Render(Domain), ""} {
-		if left+tabs+lipgloss.Width(candidate) <= m.width {
+		if left+tabs+lipgloss.Width(candidate) <= m.width-barMargin {
 			address = candidate
 			break
 		}
@@ -1213,7 +1213,8 @@ func (m model) tabBar() (string, []span) {
 	tail := max(0, m.width-left-tabs-1)
 	lines := []string{
 		strings.Repeat(" ", left) + rows[0] + strings.Repeat(" ", tail+1),
-		name + rows[1] + strings.Repeat(" ", max(0, m.width-left-tabs-lipgloss.Width(address))) + address,
+		name + rows[1] + strings.Repeat(" ", max(0, m.width-barMargin-left-tabs-lipgloss.Width(address))) +
+			address + strings.Repeat(" ", barMargin),
 		// The top edge of the box, all the way across: a corner at the left
 		// where it turns down into the box's own wall, the tabs' own bottom
 		// edge through the middle, and the corner at the right. Not a rule laid
@@ -1240,10 +1241,19 @@ func (m model) tabBar() (string, []span) {
 	return strings.Join(lines, "\n"), clickable
 }
 
-// barEdgeGap is the columns kept clear between the right of the tabs and the
-// right of the window. Without it the last tab and the address are the same
-// object with no gap in it, which reads as one run of text.
-const barEdgeGap = 2
+const (
+	// barEdgeGap is the columns kept clear between the right of the tabs and
+	// the address. Without it the last tab and the address are the same object
+	// with no gap in it, which reads as one run of text.
+	barEdgeGap = 2
+
+	// barMargin is how far in from the right edge the address sits. Flush
+	// against the edge is one way to be tidy, and the wrong one here: the name
+	// is set in two columns from the left, so the address set in two from the
+	// right is what makes the two ends of the line look like they were placed
+	// rather than one of them measured.
+	barMargin = 2
+)
 
 // address is the domain, and the version of the server beside it.
 //

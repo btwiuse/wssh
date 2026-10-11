@@ -407,8 +407,10 @@ belongs to a tab now, so the top edge turns down into the box's left wall there
 and opens with `┌`. The last tab's corner still needs no help, because the edge
 carries on past it rather than stopping where it stops.
 
-The address and the version sit on the bar's own line, right-aligned, and the
-version used to be at the bottom of the help screen instead - which put it on
+The address and the version sit on the bar's own line, set in **two columns
+from the right edge** - the same two the name is set in from the left, so the
+two ends of the line look placed rather than one of them measured. The version
+used to be at the bottom of the help screen instead - which put it on
 one screen of six and below the fold on exactly the terminals with least room.
 A build with no version ldflags prints no version: a bare `dev`, or a blank,
 reads as a bug rather than as an unversioned build.

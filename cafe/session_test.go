@@ -1887,15 +1887,18 @@ func screenName(size [2]int, page struct {
 // It used to be a piece of text to the left of the tabs as well, which made it
 // a link that went wherever the balance tab went - two ways of saying the same
 // place, one of them looking like a tab and one of them not.
-func TestTheNameIsATabAndTheAddressIsAtTheEdge(t *testing.T) {
+func TestTheNameIsATabAndTheAddressIsSetIn(t *testing.T) {
 	m := model{st: newStyles(), view: screenHome, width: 100, height: 30,
 		deps: deps{Catalogue: DefaultCatalogue(), Proven: true, Version: "0.1.6"}}
 	labels := strings.Split(stripForTest(m.frameString()), "\n")[barTop+1]
 	if !strings.HasPrefix(labels, "  RouterCafe  \u2502 balance \u2502") {
 		t.Errorf("the name is not the first tab, in plain text: %q", labels)
 	}
-	if !strings.HasSuffix(labels, "router.cafe 0.1.6") {
-		t.Errorf("the address is not against the right edge: %q", labels)
+	// Set in from the right edge by the same two columns the name is set in
+	// from the left, so the two ends of the line look placed rather than one
+	// of them measured.
+	if !strings.HasSuffix(labels, "router.cafe 0.1.6  ") {
+		t.Errorf("the address is not set in from the right edge: %q", labels)
 	}
 	// And the logo is on the page it belongs to rather than on balance, which
 	// is the page beside it.
