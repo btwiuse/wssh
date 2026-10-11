@@ -32,7 +32,7 @@ func TestAssetsAreThereAndIncludeTheWasm(t *testing.T) {
 func TestHandlerTemplatesTheSessionPath(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	webui.Handler(webui.Assets(), "/sessions").ServeHTTP(rec, req)
+	webui.Handler(webui.Assets(), "/sessions", "").ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("got %d", rec.Code)
@@ -52,7 +52,7 @@ func TestHandlerTemplatesTheSessionPath(t *testing.T) {
 func TestOtherFilesAreServedUntouched(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/app.js", nil)
-	webui.Handler(webui.Assets(), "/sessions").ServeHTTP(rec, req)
+	webui.Handler(webui.Assets(), "/sessions", "").ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("got %d", rec.Code)
@@ -70,7 +70,7 @@ func TestOtherFilesAreServedUntouched(t *testing.T) {
 func TestHandlerDoesNotCache(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	webui.Handler(webui.Assets(), "/ws").ServeHTTP(rec, req)
+	webui.Handler(webui.Assets(), "/ws", "").ServeHTTP(rec, req)
 	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
 		t.Errorf("Cache-Control is %q, want no-store", got)
 	}
@@ -81,7 +81,7 @@ func TestHandlerDoesNotCache(t *testing.T) {
 func TestHandlerDefaultsTheSessionPath(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/index.html", nil)
-	webui.Handler(webui.Assets(), "").ServeHTTP(rec, req)
+	webui.Handler(webui.Assets(), "", "").ServeHTTP(rec, req)
 	if strings.Contains(rec.Body.String(), webui.SessionPathPlaceholder) {
 		t.Error("an empty session path left the placeholder in the page")
 	}
@@ -95,4 +95,29 @@ func firstLines(s string, n int) string {
 	return strings.Join(lines, " | ")
 }
 
-var _ http.Handler = webui.Handler(nil, "")
+// A binary serving this front end can put its own mark on the tab. Without
+// that, every product built on these files wears wssh's prompt, which is
+// wrong for anything that is not wssh.
+func TestHandlerTakesAFavicon(t *testing.T) {
+	rec := httptest.NewRecorder()
+	webui.Handler(webui.Assets(), "/ws", "/favicon.ico").ServeHTTP(rec,
+		httptest.NewRequest(http.MethodGet, "/", nil))
+	body := rec.Body.String()
+	if strings.Contains(body, webui.FaviconPlaceholder) {
+		t.Error("the favicon placeholder reached the page")
+	}
+	if !strings.Contains(body, `href="/favicon.ico"`) {
+		t.Errorf("the page does not carry the icon it was given: %q", firstLines(body, 20))
+	}
+
+	// And wssh's own still comes out when nothing is given, so the default
+	// lives in one place rather than in the page.
+	rec = httptest.NewRecorder()
+	webui.Handler(webui.Assets(), "/ws", "").ServeHTTP(rec,
+		httptest.NewRequest(http.MethodGet, "/", nil))
+	if !strings.Contains(rec.Body.String(), "image/svg+xml") {
+		t.Error("an empty favicon did not fall back to wssh's own")
+	}
+}
+
+var _ http.Handler = webui.Handler(nil, "", "")

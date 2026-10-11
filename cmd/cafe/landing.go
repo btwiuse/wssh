@@ -26,6 +26,18 @@ import (
 //go:embed all:static
 var landing embed.FS
 
+// FaviconURL is the icon both of RouterCafe's pages wear: the landing page,
+// and the terminal at /app through the placeholder the front end carries.
+//
+// Served from memory out of the same embed as the page, so a tab does not have
+// to make a second request to find out what this host looks like.
+const FaviconURL = "/favicon.ico"
+
+// AppleTouchURL is the larger one, for a browser that puts the icon on a home
+// screen rather than in a tab. Both are optional to a browser and cheap to
+// carry: the icon is a few kilobytes and is served with a long max-age.
+const AppleTouchURL = "/favicon-256.png"
+
 // LandingMissing reports whether the landing page failed to embed.
 //
 // A go:embed of a directory that does not exist is a compile error, so this is

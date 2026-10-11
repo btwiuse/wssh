@@ -21,7 +21,10 @@ import (
 // behind this path and a UI behind the ssh one would mean the browser was the
 // way in, and the whole design here is that there is no way in.
 func appHandler(assets fs.FS, opts *serveOptions) http.Handler {
-	terminal := webui.Handler(assets, opts.SessionPath)
+	// RouterCafe's own mark rather than wssh's. The page is wssh's, but the
+	// tab it opens in belongs to the product somebody reached router.cafe
+	// for, and a green shell prompt is not that.
+	terminal := webui.Handler(assets, opts.SessionPath, FaviconURL)
 	prefix := strings.TrimSuffix(opts.AppPath, "/")
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

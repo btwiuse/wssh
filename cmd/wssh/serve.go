@@ -250,7 +250,7 @@ func serve(opts serveOptions) error {
 	}
 
 	if opts.Assets != nil {
-		mux.Handle("/", webui.Handler(opts.Assets, opts.SessionPath))
+		mux.Handle("/", webui.Handler(opts.Assets, opts.SessionPath, ""))
 	}
 
 	startRelays(opts.Relays, mux)
